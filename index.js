@@ -20,6 +20,7 @@ const defaultSettings = Object.freeze({
     sizePreset: 'portrait',  // portrait | landscape | square
     builderProfile: '',      // Connection Manager profile id ('' = main API)
     maxSceneChars: 6000,
+    stripPatterns: '<details>[\\s\\S]*?</details>\n\\{[A-Z_]+\\}[\\s\\S]*?\\{/[A-Z_]+\\}\n<!--[\\s\\S]*?-->',
     forcedTags: 'masterpiece, best quality, absurdres, detailed background',
     negativePrompt: 'lowres, worst quality, bad quality, bad anatomy, bad hands, extra digits, jpeg artifacts, signature, username, logo, watermark, artist name',
     extraRules: '',
@@ -106,7 +107,7 @@ function resolveStyle() {
 
 function notifyError(err) {
     console.error('[SceneSnap]', err);
-    try { toastr.error(String(err?.message || err).slice(0, 300), 'SceneSnap'); } catch { /* noop */ }
+    try { toastr.error(String(err?.message || err).slice(0, 300), 'SceneSnap', { timeOut: 10000 }); } catch { /* noop */ }
 }
 
 async function urlToBase64(url) {
@@ -209,6 +210,20 @@ async function buildScenePrompt(mesId) {
     if (!message) throw new Error(`Message #${mesId} not found`);
 
     let scene = String(message.mes || '');
+
+    // Strip stat/tracker blocks (configurable, one regex per line) so the tail of the
+    // message is the final prose beat, not metadata.
+    for (const line of String(settings.stripPatterns || '').split('\n')) {
+        const pattern = line.trim();
+        if (!pattern) continue;
+        try {
+            scene = scene.replace(new RegExp(pattern, 'gi'), '');
+        } catch (e) {
+            console.warn('[SceneSnap] invalid strip pattern skipped:', pattern, e);
+        }
+    }
+    scene = scene.replace(/\n{3,}/g, '\n\n').trim();
+
     const max = Math.max(1000, Number(settings.maxSceneChars) || 6000);
     if (scene.length > max) {
         // Keep the top (headers/trackers) and the tail (final beat of the scene).
@@ -226,7 +241,13 @@ async function buildScenePrompt(mesId) {
         `SCENE (illustrate its final moment):\n${scene}`,
     ].filter(Boolean).join('\n\n');
 
-    const raw = await callLLM(system, user, 500);
+    let raw;
+    try {
+        raw = await callLLM(system, user, 500);
+    } catch (firstErr) {
+        console.warn('[SceneSnap] builder attempt 1 failed, retrying once:', firstErr);
+        raw = await callLLM(system, user, 500);
+    }
     return { positive: sanitizeBuilderOutput(raw, style), style };
 }
 
@@ -578,6 +599,8 @@ function settingsHtml() {
                 <textarea id="snapshot_negative" class="text_pole textarea_compact" rows="2"></textarea>
                 <label for="snapshot_extra_rules">Extra builder rules (optional)</label>
                 <textarea id="snapshot_extra_rules" class="text_pole textarea_compact" rows="2" placeholder="e.g. Only ever depict up to 2 characters"></textarea>
+                <label for="snapshot_strip">Strip from scene before building (regex, one per line)</label>
+                <textarea id="snapshot_strip" class="text_pole textarea_compact" rows="3"></textarea>
 
                 <hr>
                 <label>Character cast (appearance sheets, one per line: <code>Name: tags</code>)</label>
@@ -636,6 +659,7 @@ function syncUI() {
     $('#snapshot_forced').val(settings.forcedTags);
     $('#snapshot_negative').val(settings.negativePrompt);
     $('#snapshot_extra_rules').val(settings.extraRules);
+    $('#snapshot_strip').val(settings.stripPatterns);
     $('#snapshot_runware_key').val(settings.runwareKey);
     $('#snapshot_runware_model').val(settings.runwareModel);
     $('#snapshot_runware_steps').val(settings.runwareSteps);
@@ -674,6 +698,7 @@ function bindSettings() {
     $('#snapshot_forced').on('input', function () { settings.forcedTags = this.value; saveSettingsDebounced(); });
     $('#snapshot_negative').on('input', function () { settings.negativePrompt = this.value; saveSettingsDebounced(); });
     $('#snapshot_extra_rules').on('input', function () { settings.extraRules = this.value; saveSettingsDebounced(); });
+    $('#snapshot_strip').on('input', function () { settings.stripPatterns = this.value; saveSettingsDebounced(); });
 
     $('#snapshot_runware_key').on('input', function () { settings.runwareKey = this.value; saveSettingsDebounced(); });
     $('#snapshot_runware_model').on('input', function () { settings.runwareModel = this.value; saveSettingsDebounced(); });
