@@ -1,0 +1,11 @@
+{
+    "display_name": "SceneSnap (Scene Illustrator)",
+    "loading_order": 100,
+    "requires": [],
+    "optional": [],
+    "js": "index.js",
+    "css": "style.css",
+    "author": "Bruce",
+    "version": "0.1.1",
+    "homePage": "https://github.com/brucestarkallen/St-image-gen-"
+}

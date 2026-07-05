@@ -1,0 +1,38 @@
+#snapshot_settings label {
+    display: block;
+    margin-top: 8px;
+    font-size: 0.85em;
+    opacity: 0.85;
+}
+
+#snapshot_settings .checkbox_label {
+    display: flex;
+    margin-top: 4px;
+}
+
+#snapshot_settings hr {
+    margin: 10px 0 4px 0;
+    opacity: 0.3;
+}
+
+#snapshot_settings .snapshot_backend_block {
+    padding: 6px 8px;
+    margin-top: 4px;
+    border-left: 2px solid var(--SmartThemeQuoteColor, #888);
+    display: none;
+}
+
+#snapshot_settings .flex-container {
+    gap: 8px;
+    margin-top: 6px;
+}
+
+#snapshot_settings small {
+    display: block;
+    margin-top: 8px;
+    opacity: 0.6;
+}
+
+.snapshot_mes_btn.fa-fade {
+    cursor: progress;
+}
