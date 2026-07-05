@@ -9,6 +9,7 @@ import {
 } from '../../../../script.js';
 import { extension_settings, getContext } from '../../../extensions.js';
 import { getBase64Async, saveBase64AsFile } from '../../../utils.js';
+import { callGenericPopup, POPUP_TYPE } from '../../../popup.js';
 
 const MODULE = 'sceneSnap';
 
@@ -47,6 +48,17 @@ const SIZE_PRESETS = {
     wide: { width: 1344, height: 768 },
     square: { width: 1024, height: 1024 },
 };
+
+// Applied automatically while the user hasn't customized the matching field.
+const BACKEND_QUALITY = {
+    novelai: 'very aesthetic, masterpiece, no text, detailed background',
+    pollinations: 'highly detailed, cinematic lighting, rich detailed background',
+};
+const BACKEND_NEGATIVE = {
+    novelai: 'blurry, lowres, error, worst quality, bad quality, jpeg artifacts, very displeasing, chromatic aberration, multiple views, logo, watermark, film grain, scan artifacts',
+};
+
+let lastDebug = null;
 
 const TAG_SYSTEM_PROMPT = `You are an image prompt engineer for a Danbooru-tag anime model (Illustrious / NoobAI / NovelAI family). Convert the final moment of a roleplay scene into ONE image prompt.
 
@@ -244,8 +256,20 @@ function parsePanels(raw, style, maxPanels) {
     return [sanitizeBuilderOutput(cleaned, style)];
 }
 
+function effectiveForcedTags() {
+    const cur = String(settings.forcedTags || '').trim();
+    if (cur === defaultSettings.forcedTags.trim() && BACKEND_QUALITY[settings.backend]) return BACKEND_QUALITY[settings.backend];
+    return cur;
+}
+
+function effectiveNegative() {
+    const cur = String(settings.negativePrompt || '').trim();
+    if (cur === defaultSettings.negativePrompt.trim() && BACKEND_NEGATIVE[settings.backend]) return BACKEND_NEGATIVE[settings.backend];
+    return cur;
+}
+
 function composePositive(built, style) {
-    const forced = String(settings.forcedTags || '').trim();
+    const forced = effectiveForcedTags();
     if (!forced) return built;
     if (style === 'natural') return `${built} ${forced.split(',').map(s => s.trim()).filter(Boolean).join(', ')}.`.trim();
     const have = new Set(built.toLowerCase().split(',').map(s => s.trim()).filter(Boolean));
@@ -292,6 +316,9 @@ async function buildScenePrompt(mesId) {
 
     const maxPanels = Math.min(6, Math.max(1, Number(settings.maxPanels) || 1));
     let fullSystem = system;
+    if (settings.backend === 'novelai' && style === 'tags') {
+        fullSystem += '\n\nTARGET MODEL: NovelAI Diffusion V4.5 — blend Danbooru tags with a few short natural phrases used as tags (e.g. "moonlit stone alley at night", "crowded arena under harsh sun"); count tags and sheet-verbatim appearance rules still apply.';
+    }
     if (maxPanels > 1) {
         fullSystem += `\n\nSEQUENCE MODE (active):\nDecide how many panels (1 to ${maxPanels}) the scene's climax genuinely needs — one panel per DISTINCT visual beat, chronological order, ending on the final beat. Use 1 panel when one moment carries the scene. Characters keep identical appearance tags in every panel.\nOUTPUT (replaces the single-line requirement above): strict JSON only — no reasoning, no commentary, no markdown: {"panels":[{"prompt":"<one prompt following all rules above>"}]}`;
     }
@@ -305,7 +332,7 @@ async function buildScenePrompt(mesId) {
         raw = await callLLM(fullSystem, user, maxTokens);
     }
     console.log('[SceneSnap] raw builder output:', String(raw).slice(0, 600));
-    return { prompts: parsePanels(raw, style, maxPanels), style };
+    return { prompts: parsePanels(raw, style, maxPanels), style, raw: String(raw) };
 }
 
 // ------------------------------------------------------------------ backends
@@ -493,9 +520,10 @@ async function illustrateMessage(mesId, { force = false } = {}) {
             }
         }
 
-        const { prompts, style } = await buildScenePrompt(mesId);
+        const { prompts, style, raw } = await buildScenePrompt(mesId);
         const finals = prompts.map(p => composePositive(p, style));
-        const negative = String(settings.negativePrompt || '').trim();
+        const negative = effectiveNegative();
+        lastDebug = { time: new Date().toLocaleTimeString(), backend: settings.backend, style, raw, prompts: finals, negative, error: null };
         console.log(`[SceneSnap] ${finals.length} panel(s) (${style}):`, finals);
 
         const panelImages = [];
@@ -538,6 +566,8 @@ async function illustrateMessage(mesId, { force = false } = {}) {
         if ($mes.length) appendMediaToMessage(msg, $mes, 'keep');
         await ctx2.saveChat();
     } catch (err) {
+        if (lastDebug) lastDebug.error = String(err?.message || err);
+        else lastDebug = { time: new Date().toLocaleTimeString(), backend: settings.backend, style: resolveStyle(), raw: '(builder did not run)', prompts: [], negative: effectiveNegative(), error: String(err?.message || err) };
         notifyError(err);
     } finally {
         inFlight.delete(mesId);
@@ -796,10 +826,10 @@ function settingsHtml() {
                 <small class="snapshot_hint">Anime checkpoints (Runware/NovelAI) want Danbooru tags; FLUX (Pollinations) wants sentences. Auto picks correctly — only override if you know why.</small>
                 <label for="snapshot_forced">Always-append quality tags</label>
                 <textarea id="snapshot_forced" class="text_pole textarea_compact" rows="2"></textarea>
-                <small class="snapshot_hint">Appended to the end of every prompt. Prefilled with the standard Illustrious/NoobAI quality block.</small>
+                <small class="snapshot_hint">Appended to the end of every prompt. While left at default, it auto-adapts to the backend (Illustrious block for Runware, NAI V4.5 block for NovelAI, cinematic block for Pollinations). Edit it and your version is used everywhere.</small>
                 <label for="snapshot_negative">Negative prompt</label>
                 <textarea id="snapshot_negative" class="text_pole textarea_compact" rows="2"></textarea>
-                <small class="snapshot_hint">What the image model should avoid. FLUX mostly ignores this; tag models use it heavily.</small>
+                <small class="snapshot_hint">What the image model should avoid. While left at default, it auto-adapts to the backend (NAI gets the V4.5-tuned block). FLUX mostly ignores negatives; tag models use them heavily.</small>
                 <label for="snapshot_extra_rules">Extra builder rules (optional)</label>
                 <textarea id="snapshot_extra_rules" class="text_pole textarea_compact" rows="2" placeholder="e.g. Only ever depict up to 2 characters"></textarea>
                 <small class="snapshot_hint">Your standing instructions for the prompt builder, applied to every image.</small>
@@ -820,9 +850,10 @@ function settingsHtml() {
                     <div id="snapshot_cast_build" class="menu_button">Auto-build cast from chat</div>
                     <div id="snapshot_test" class="menu_button">Test backend</div>
                     <div id="snapshot_test_builder" class="menu_button">Test builder</div>
+                    <div id="snapshot_debug" class="menu_button">Show last generation</div>
                     <div id="snapshot_reset" class="menu_button">Reset defaults</div>
                 </div>
-                <small class="snapshot_hint">Auto-build: reads story memory first (Summaryception canon notepad + summary snippets, Author's Note), then recent chat, and appends new characters (review the result). Test backend: generates one small image and reports the time. Test builder: runs the prompt-builder LLM on a sample scene and shows its output or the exact error — use it to check a profile before blaming the image model. Reset: restores tuned defaults — keeps API key, Runware model, casts, extra rules, builder profile, and backend.</small>
+                <small class="snapshot_hint">Auto-build: reads story memory first (Summaryception canon notepad + summary snippets, Author's Note), then recent chat, and appends new characters (review the result). Test backend: generates one small image and reports the time. Test builder: runs the prompt-builder LLM on a sample scene and shows its output or the exact error. Show last generation: the raw builder output, final prompt(s), negative, and any error from the most recent image — the first thing to check when a result looks wrong. (Full streaming logs need the browser console, e.g. Eruda on mobile.) Reset: restores tuned defaults — keeps API key, Runware model, casts, extra rules, builder profile, and backend.</small>
                 <small class="snapshot_hint">Per message: the panorama icon regenerates the image only — the text is never touched; each attempt joins a swipeable gallery. /snap does the same for the last AI message.</small>
             </div>
         </div>
@@ -957,6 +988,21 @@ function bindSettings() {
     });
     $('#snapshot_cast_build').on('click', () => autoBuildCast({ silent: false }));
 
+    $('#snapshot_debug').on('click', () => {
+        if (!lastDebug) { toastr.info('No generation yet this session', 'SceneSnap'); return; }
+        const esc = s => String(s ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;');
+        const html = `<div style="text-align:left;max-height:70vh;overflow:auto">
+            <h4>SceneSnap — last generation</h4>
+            <b>${esc(lastDebug.time)} · ${esc(lastDebug.backend)} · ${esc(lastDebug.style)}${lastDebug.error ? ' · <span style="color:#e66">FAILED</span>' : ''}</b>
+            ${lastDebug.error ? `<h5>Error</h5><pre style="white-space:pre-wrap;color:#e66">${esc(lastDebug.error)}</pre>` : ''}
+            <h5>Final prompt(s) sent to the image model</h5><pre style="white-space:pre-wrap">${esc((lastDebug.prompts || []).join('\n\n--- panel ---\n\n')) || '(none)'}</pre>
+            <h5>Negative</h5><pre style="white-space:pre-wrap">${esc(lastDebug.negative)}</pre>
+            <h5>Raw builder output</h5><pre style="white-space:pre-wrap">${esc(lastDebug.raw)}</pre>
+        </div>`;
+        callGenericPopup(html, POPUP_TYPE.TEXT, '', { wide: true, large: true, allowVerticalScrolling: true });
+    });
+
+
     $('#snapshot_test_builder').on('click', async function () {
         const $btn = $(this);
         $btn.addClass('disabled');
@@ -985,7 +1031,7 @@ function bindSettings() {
                 ? '1girl, silver hair, long hair, blue eyes, smile, portrait, simple background, masterpiece, best quality'
                 : 'Anime illustration. A close-up portrait of a smiling girl with long silver hair and blue eyes against a simple soft background.';
             const t0 = Date.now();
-            const result = await generateWithBackend(positive, String(settings.negativePrompt || ''));
+            const result = await generateWithBackend(positive, effectiveNegative());
             if (!result?.data) throw new Error('Backend returned no image');
             toastr.success(`Backend OK — image generated in ${((Date.now() - t0) / 1000).toFixed(1)}s`, 'SceneSnap');
         } catch (err) {
