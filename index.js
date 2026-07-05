@@ -62,6 +62,7 @@ RULES:
 - 20 to 35 tags total. Fewer precise tags beat tag spam.
 - Do not use character names as tags; use their appearance tags from the sheets instead.
 - Never include tags for characters who are only mentioned, remembered, or off-screen.
+- Keep every character's age and relative size consistent with their sheet; never render anyone as a child unless the sheet explicitly says so.
 - Never include story text, dialogue, or quotation marks.`;
 
 const NATURAL_SYSTEM_PROMPT = `You write image prompts for a natural-language image model (FLUX family). Convert the final moment of a roleplay scene into ONE image prompt.
@@ -82,7 +83,7 @@ Output one line per NEW named character, in exactly this format and nothing else
 Name: girl|boy|woman|man, hair length + hair color, eye color, 2-5 distinctive physical tags, default outfit tags
 Example:
 Akane: girl, long black hair, ponytail, brown eyes, athletic build, school uniform, red ribbon
-Rules: visual traits only (no personality), max 12 tags per character, Danbooru-style tags, prefer information from character tracker blocks when present, skip characters already listed in EXISTING SHEET. If there are no new characters, output NONE.`;
+Rules: visual traits only — never personality, locations, positions, or current actions. Max 12 tags per character, Danbooru-style tags, prefer information from character tracker blocks when present, skip characters already listed in EXISTING SHEET. ALWAYS include the story's protagonist/viewpoint character — the player's character counts as a character. If a required character's appearance is never described, still output their line as: Name: gender, (appearance unknown — fill in). If there are no new characters at all, output NONE.`;
 
 let settings = {};
 const inFlight = new Set();
@@ -218,8 +219,17 @@ function parsePanels(raw, style, maxPanels) {
                     .filter(Boolean)
                     .slice(0, maxPanels);
                 if (prompts.length) return prompts;
-            } catch { /* fall through to single */ }
+            } catch { /* fall through to regex recovery */ }
         }
+        // Truncated/dirty JSON: recover every completed "prompt":"..." value.
+        const recovered = [];
+        const rx = /"prompt"\s*:\s*"((?:[^"\\]|\\.)*)"/g;
+        let hit;
+        while ((hit = rx.exec(cleaned)) !== null) {
+            const text = softSanitize(hit[1].replace(/\\"/g, '"').replace(/\\n/g, ' '), style);
+            if (text) recovered.push(text);
+        }
+        if (recovered.length) return recovered.slice(0, maxPanels);
     }
     return [sanitizeBuilderOutput(cleaned, style)];
 }
@@ -270,13 +280,13 @@ async function buildScenePrompt(mesId) {
         `SCENE (illustrate its final moment):\n${scene}`,
     ].filter(Boolean).join('\n\n');
 
-    const maxPanels = Math.min(4, Math.max(1, Number(settings.maxPanels) || 1));
+    const maxPanels = Math.min(6, Math.max(1, Number(settings.maxPanels) || 1));
     let fullSystem = system;
     if (maxPanels > 1) {
-        fullSystem += `\n\nSEQUENCE MODE (active):\nDecide how many panels (1 to ${maxPanels}) the scene's climax genuinely needs — one panel per DISTINCT visual beat, chronological order, ending on the final beat. Use 1 panel when one moment carries the scene. Characters keep identical appearance tags in every panel.\nOUTPUT (replaces the single-line requirement above): strict JSON only, no other text: {"panels":[{"prompt":"<one prompt following all rules above>"}]}`;
+        fullSystem += `\n\nSEQUENCE MODE (active):\nDecide how many panels (1 to ${maxPanels}) the scene's climax genuinely needs — one panel per DISTINCT visual beat, chronological order, ending on the final beat. Use 1 panel when one moment carries the scene. Characters keep identical appearance tags in every panel.\nOUTPUT (replaces the single-line requirement above): strict JSON only — no reasoning, no commentary, no markdown: {"panels":[{"prompt":"<one prompt following all rules above>"}]}`;
     }
 
-    const maxTokens = maxPanels > 1 ? 1200 : 500;
+    const maxTokens = maxPanels > 1 ? Math.min(2800, 300 + 450 * maxPanels) : 500;
     let raw;
     try {
         raw = await callLLM(fullSystem, user, maxTokens);
@@ -416,23 +426,21 @@ async function stitchPanels(base64List, format) {
         img.onerror = () => reject(new Error('A panel image failed to load for stitching'));
         img.src = `data:image/${mime};base64,${b64}`;
     })));
-    const n = imgs.length;
-    const gutter = 12;
-    const cols = n === 4 ? 2 : n;
-    const rows = n === 4 ? 2 : 1;
-    const w = imgs[0].width;
-    const h = imgs[0].height;
+    // Vertical webtoon stack: reads top-to-bottom, mobile-native, works for any panel count.
+    const gutter = 16;
+    const w = Math.max(...imgs.map(i => i.width));
+    const scaled = imgs.map(i => ({ img: i, h: Math.round(i.height * (w / i.width)) }));
     const canvas = document.createElement('canvas');
-    canvas.width = cols * w + (cols + 1) * gutter;
-    canvas.height = rows * h + (rows + 1) * gutter;
+    canvas.width = w + gutter * 2;
+    canvas.height = scaled.reduce((sum, s) => sum + s.h, 0) + gutter * (imgs.length + 1);
     const cx = canvas.getContext('2d');
     cx.fillStyle = '#ffffff';
     cx.fillRect(0, 0, canvas.width, canvas.height);
-    imgs.forEach((img, i) => {
-        const c = i % cols;
-        const r = Math.floor(i / cols);
-        cx.drawImage(img, gutter + c * (w + gutter), gutter + r * (h + gutter), w, h);
-    });
+    let y = gutter;
+    for (const s of scaled) {
+        cx.drawImage(s.img, gutter, y, w, s.h);
+        y += s.h + gutter;
+    }
     const blob = await new Promise(resolve => canvas.toBlob(resolve, 'image/jpeg', 0.92));
     if (!blob) throw new Error('Comic strip stitching failed');
     const dataUrl = await getBase64Async(blob);
@@ -618,6 +626,20 @@ function collectStoryMemory() {
     return parts.join('\n\n');
 }
 
+function mergeCastLines(existing, incoming) {
+    const seen = new Set();
+    const out = [];
+    for (const raw of `${existing}\n${incoming}`.split('\n')) {
+        const line = raw.trim();
+        if (!line) continue;
+        const name = line.split(':')[0].trim().toLowerCase();
+        if (!name || seen.has(name)) continue;
+        seen.add(name);
+        out.push(line);
+    }
+    return out.join('\n');
+}
+
 const castBootstrapAttempted = new Set();
 
 // ------------------------------------------------------------------ cast auto-build
@@ -639,6 +661,7 @@ async function autoBuildCast({ silent = false } = {}) {
     $btn.addClass('disabled');
     try {
         const user = [
+            `PLAYER CHARACTER HINT: the human player's persona is named "${ctx.name1 || 'User'}" — the protagonist may appear under this or another in-story name; include the protagonist either way.`,
             `EXISTING SHEET (skip these characters):\n${getActiveCastSheet() || '(empty)'}`,
             memory ? `STORY MEMORY:\n${memory}` : '',
             excerpt ? `RECENT CHAT EXCERPT:\n${excerpt}` : '',
@@ -655,7 +678,7 @@ async function autoBuildCast({ silent = false } = {}) {
             return false;
         }
         const cast = getActiveCastName();
-        settings.casts[cast] = `${String(settings.casts[cast] || '').trim()}\n${cleaned}`.trim();
+        settings.casts[cast] = mergeCastLines(String(settings.casts[cast] || ''), cleaned);
         saveSettingsDebounced();
         $('#snapshot_cast_sheet').val(settings.casts[cast]);
         toastr.success(silent ? 'Cast sheet auto-built from story memory — review it in settings' : 'Cast sheet updated — review and edit it', 'SceneSnap');
@@ -745,8 +768,8 @@ function settingsHtml() {
                 <small class="snapshot_hint">Portrait is the anime-checkpoint standard and stays inside NovelAI's free-gen size budget.</small>
 
                 <label for="snapshot_panels">Max panels (comic sequence)</label>
-                <input id="snapshot_panels" type="number" min="1" max="4" class="text_pole">
-                <small class="snapshot_hint">1 = single frame. 2–4 = the builder decides per scene how many panels the climax needs and they get stitched into one comic strip (2–3 side by side, 4 in a grid). Each panel is a full generation — free on NAI Opus, pennies on Runware, but N× the wait.</small>
+                <input id="snapshot_panels" type="number" min="1" max="6" class="text_pole">
+                <small class="snapshot_hint">1 = single frame. 2–6 = the builder decides per scene how many panels the climax needs, stitched top-to-bottom into one vertical strip (webtoon style). Each panel is a full generation — free on NAI Opus, pennies on Runware, but N× the wait. The console logs how many panels the builder chose.</small>
 
                 <hr>
                 <label for="snapshot_profile">Prompt builder LLM (Connection Manager profile)</label>
@@ -869,7 +892,7 @@ function bindSettings() {
     $('#snapshot_backend').on('change', function () { settings.backend = this.value; toggleBackendBlocks(); saveSettingsDebounced(); });
     $('#snapshot_size').on('change', function () { settings.sizePreset = this.value; saveSettingsDebounced(); });
     $('#snapshot_style').on('change', function () { settings.promptStyle = this.value; saveSettingsDebounced(); });
-    $('#snapshot_panels').on('input', function () { settings.maxPanels = Math.min(4, Math.max(1, Number(this.value) || 1)); saveSettingsDebounced(); });
+    $('#snapshot_panels').on('input', function () { settings.maxPanels = Math.min(6, Math.max(1, Number(this.value) || 1)); saveSettingsDebounced(); });
     $('#snapshot_profile').on('change', function () { settings.builderProfile = this.value; saveSettingsDebounced(); });
     $('#snapshot_forced').on('input', function () { settings.forcedTags = this.value; saveSettingsDebounced(); });
     $('#snapshot_negative').on('input', function () { settings.negativePrompt = this.value; saveSettingsDebounced(); });
