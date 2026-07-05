@@ -15,6 +15,7 @@ const MODULE = 'sceneSnap';
 const defaultSettings = Object.freeze({
     enabled: true,
     auto: true,
+    autoCast: true,
     backend: 'pollinations', // pollinations | runware | novelai
     promptStyle: 'auto',     // auto | tags | natural
     sizePreset: 'portrait',  // portrait | landscape | square
@@ -75,7 +76,8 @@ PROCESS:
 
 RULES: no character names, no dialogue, no story text, one moment only.`;
 
-const CAST_SYSTEM_PROMPT = `You extract character appearance sheets for an anime image model from a roleplay chat.
+const CAST_SYSTEM_PROMPT = `You extract character appearance sheets for an anime image model from a roleplay story.
+STORY MEMORY (established canon, summary snippets, author's note) is your PRIMARY source for appearances — it accumulates the whole story. Use the recent chat excerpt only for characters memory has not captured yet.
 Output one line per NEW named character, in exactly this format and nothing else:
 Name: girl|boy|woman|man, hair length + hair color, eye color, 2-5 distinctive physical tags, default outfit tags
 Example:
@@ -463,6 +465,15 @@ async function illustrateMessage(mesId, { force = false } = {}) {
     setButtonBusy(mesId, true);
 
     try {
+        if (settings.autoCast && !getActiveCastSheet()) {
+            const ctx0 = getContext();
+            const bootKey = `${ctx0.chatId ?? 'chat'}:${getActiveCastName()}`;
+            if (!castBootstrapAttempted.has(bootKey)) {
+                castBootstrapAttempted.add(bootKey);
+                await autoBuildCast({ silent: true });
+            }
+        }
+
         const { prompts, style } = await buildScenePrompt(mesId);
         const finals = prompts.map(p => composePositive(p, style));
         const negative = String(settings.negativePrompt || '').trim();
@@ -560,25 +571,79 @@ function onChatChanged() {
     }, 500);
 }
 
+// ------------------------------------------------------------------ story memory probes
+
+/**
+ * Gathers long-term story memory from known memory extensions, gracefully
+ * skipping anything that is not installed. Currently probed:
+ * - Summaryception (and personal forks): chatMetadata.summaryception -> notepad + layered snippets
+ * - Author's Note: chatMetadata.note_prompt (often carries plot-essential canon)
+ * - ST built-in Summarize: chatMetadata.memory
+ */
+function collectStoryMemory() {
+    const ctx = getContext();
+    const md = ctx.chatMetadata || {};
+    const parts = [];
+
+    try {
+        const sc = md.summaryception;
+        if (sc && typeof sc === 'object') {
+            if (typeof sc.notepad === 'string' && sc.notepad.trim()) {
+                parts.push(`[CANON NOTEPAD]\n${sc.notepad.trim()}`);
+            }
+            if (Array.isArray(sc.layers)) {
+                const snippets = [];
+                for (let i = sc.layers.length - 1; i >= 0; i--) { // deepest layer first
+                    for (const sn of (Array.isArray(sc.layers[i]) ? sc.layers[i] : [])) {
+                        const text = typeof sn === 'string' ? sn : sn?.text;
+                        if (!text) continue;
+                        const detail = (sn && typeof sn === 'object' && sn.detail) ? ` | detail: ${sn.detail}` : '';
+                        snippets.push(`- ${String(text).trim()}${detail}`);
+                    }
+                }
+                if (snippets.length) parts.push(`[STORY SUMMARY SNIPPETS]\n${snippets.join('\n')}`);
+            }
+        }
+    } catch (e) {
+        console.warn('[SceneSnap] Summaryception probe failed', e);
+    }
+
+    if (typeof md.note_prompt === 'string' && md.note_prompt.trim()) {
+        parts.push(`[AUTHOR'S NOTE]\n${md.note_prompt.trim()}`);
+    }
+    if (typeof md.memory === 'string' && md.memory.trim()) {
+        parts.push(`[SUMMARY]\n${md.memory.trim()}`);
+    }
+
+    return parts.join('\n\n');
+}
+
+const castBootstrapAttempted = new Set();
+
 // ------------------------------------------------------------------ cast auto-build
 
-async function autoBuildCast() {
+async function autoBuildCast({ silent = false } = {}) {
     const ctx = getContext();
+    const memory = collectStoryMemory().slice(0, 14000);
     const excerpt = (ctx.chat || [])
         .filter(m => m && !m.is_system)
-        .slice(-24)
-        .map(m => `${m.name}: ${String(m.mes || '').slice(0, 1500)}`)
+        .slice(-12)
+        .map(m => `${m.name}: ${String(m.mes || '').slice(0, 1200)}`)
         .join('\n\n');
-    if (!excerpt) {
-        toastr.warning('Chat is empty', 'SceneSnap');
-        return;
+    if (!excerpt && !memory) {
+        if (!silent) toastr.warning('No story memory and no chat to scan', 'SceneSnap');
+        return false;
     }
 
     const $btn = $('#snapshot_cast_build');
     $btn.addClass('disabled');
     try {
-        const user = `EXISTING SHEET (skip these characters):\n${getActiveCastSheet() || '(empty)'}\n\nCHAT EXCERPT:\n${excerpt}`;
-        const raw = await callLLM(CAST_SYSTEM_PROMPT, user, 700);
+        const user = [
+            `EXISTING SHEET (skip these characters):\n${getActiveCastSheet() || '(empty)'}`,
+            memory ? `STORY MEMORY:\n${memory}` : '',
+            excerpt ? `RECENT CHAT EXCERPT:\n${excerpt}` : '',
+        ].filter(Boolean).join('\n\n');
+        const raw = await callLLM(CAST_SYSTEM_PROMPT, user, 900);
         const cleaned = String(raw)
             .replace(/<think>[\s\S]*?<\/think>/gi, '')
             .split('\n')
@@ -586,16 +651,22 @@ async function autoBuildCast() {
             .filter(l => /^[^:]{1,40}:\s?.+/.test(l) && !/^(existing|chat|sheet|example|name)\b/i.test(l))
             .join('\n');
         if (!cleaned || /^NONE$/i.test(cleaned.trim())) {
-            toastr.info('No new characters found', 'SceneSnap');
-            return;
+            if (!silent) toastr.info('No new characters found', 'SceneSnap');
+            return false;
         }
         const cast = getActiveCastName();
         settings.casts[cast] = `${String(settings.casts[cast] || '').trim()}\n${cleaned}`.trim();
         saveSettingsDebounced();
         $('#snapshot_cast_sheet').val(settings.casts[cast]);
-        toastr.success('Cast sheet updated — review and edit it', 'SceneSnap');
+        toastr.success(silent ? 'Cast sheet auto-built from story memory — review it in settings' : 'Cast sheet updated — review and edit it', 'SceneSnap');
+        return true;
     } catch (err) {
+        if (silent) {
+            console.warn('[SceneSnap] cast bootstrap failed, continuing without a sheet', err);
+            return false;
+        }
         notifyError(err);
+        return false;
     } finally {
         $btn.removeClass('disabled');
     }
@@ -616,6 +687,8 @@ function settingsHtml() {
                 <small class="snapshot_hint">Master switch for all SceneSnap features.</small>
                 <label class="checkbox_label"><input id="snapshot_auto" type="checkbox"><span>Auto-illustrate new AI messages</span></label>
                 <small class="snapshot_hint">Generates an image for every new AI reply. Runs after the text renders — never delays or blocks generation.</small>
+                <label class="checkbox_label"><input id="snapshot_autocast" type="checkbox"><span>Auto-build cast when empty</span></label>
+                <small class="snapshot_hint">If the active cast sheet is empty, the first illustration in a chat builds it automatically from story memory before generating. Continues without a sheet if that fails.</small>
 
                 <label for="snapshot_backend">Image backend</label>
                 <select id="snapshot_backend" class="text_pole">
@@ -713,7 +786,7 @@ function settingsHtml() {
                     <div id="snapshot_test" class="menu_button">Test backend</div>
                     <div id="snapshot_reset" class="menu_button">Reset defaults</div>
                 </div>
-                <small class="snapshot_hint">Auto-build: scans the last ~24 messages for new characters (review the result). Test: generates one small image and reports the time. Reset: restores tuned defaults — keeps API key, Runware model, casts, extra rules, builder profile, and backend.</small>
+                <small class="snapshot_hint">Auto-build: reads story memory first (Summaryception canon notepad + summary snippets, Author's Note), then recent chat, and appends new characters (review the result). Test: generates one small image and reports the time. Reset: restores tuned defaults — keeps API key, Runware model, casts, extra rules, builder profile, and backend.</small>
                 <small class="snapshot_hint">Per message: the panorama icon regenerates the image only — the text is never touched; each attempt joins a swipeable gallery. /snap does the same for the last AI message.</small>
             </div>
         </div>
@@ -752,6 +825,7 @@ function toggleBackendBlocks() {
 function syncUI() {
     $('#snapshot_enabled').prop('checked', settings.enabled);
     $('#snapshot_auto').prop('checked', settings.auto);
+    $('#snapshot_autocast').prop('checked', settings.autoCast);
     $('#snapshot_backend').val(settings.backend);
     $('#snapshot_size').val(settings.sizePreset);
     $('#snapshot_style').val(settings.promptStyle);
@@ -791,6 +865,7 @@ function resetToDefaults() {
 function bindSettings() {
     $('#snapshot_enabled').on('change', function () { settings.enabled = this.checked; saveSettingsDebounced(); });
     $('#snapshot_auto').on('change', function () { settings.auto = this.checked; saveSettingsDebounced(); });
+    $('#snapshot_autocast').on('change', function () { settings.autoCast = this.checked; saveSettingsDebounced(); });
     $('#snapshot_backend').on('change', function () { settings.backend = this.value; toggleBackendBlocks(); saveSettingsDebounced(); });
     $('#snapshot_size').on('change', function () { settings.sizePreset = this.value; saveSettingsDebounced(); });
     $('#snapshot_style').on('change', function () { settings.promptStyle = this.value; saveSettingsDebounced(); });
@@ -844,7 +919,7 @@ function bindSettings() {
         setActiveCastName('Default');
         refreshCastUI();
     });
-    $('#snapshot_cast_build').on('click', autoBuildCast);
+    $('#snapshot_cast_build').on('click', () => autoBuildCast({ silent: false }));
 
     $('#snapshot_test').on('click', async function () {
         const $btn = $(this);

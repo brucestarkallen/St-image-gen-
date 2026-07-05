@@ -58,7 +58,8 @@ Jovan: boy, short black hair, red eyes, tall, lean build, academy uniform
 Stella: girl, long crimson hair, red eyes, large breasts, hair ribbon, school uniform
 ```
 
-- **Auto-build cast from chat** scans the last ~24 messages (including tracker blocks) with the builder LLM and appends new characters. Always review the result.
+- **Auto-build cast** reads long-term story memory first — Summaryception's canon notepad and layered summary snippets (personal forks included), plus the Author's Note — then falls back to recent chat for characters memory hasn't captured yet. Always review the result.
+- **Auto-bootstrap**: with "Auto-build cast when empty" on, the first illustration in a chat builds the sheet automatically from story memory before generating, and degrades gracefully (continues sheetless) if it fails.
 - Casts are global; each chat remembers which cast is active — so one cast per story world, shared across all its chats.
 - Only characters *visible in the final frame* get pulled into a prompt.
 
