@@ -20,6 +20,7 @@ const defaultSettings = Object.freeze({
     sizePreset: 'portrait',  // portrait | landscape | square
     builderProfile: '',      // Connection Manager profile id ('' = main API)
     maxSceneChars: 6000,
+    maxPanels: 1,
     stripPatterns: '<details>[\\s\\S]*?</details>\n\\{[A-Z_]+\\}[\\s\\S]*?\\{/[A-Z_]+\\}\n<!--[\\s\\S]*?-->',
     forcedTags: 'masterpiece, best quality, absurdres, detailed background',
     negativePrompt: 'lowres, worst quality, bad quality, bad anatomy, bad hands, extra digits, jpeg artifacts, signature, username, logo, watermark, artist name',
@@ -195,6 +196,32 @@ function sanitizeBuilderOutput(text, style) {
     return t.slice(0, 1500);
 }
 
+function softSanitize(text, style) {
+    try { return sanitizeBuilderOutput(text, style); } catch { return ''; }
+}
+
+function parsePanels(raw, style, maxPanels) {
+    const cleaned = String(raw)
+        .replace(/<think>[\s\S]*?<\/think>/gi, '')
+        .replace(/```json\n?|```/gi, '')
+        .trim();
+    if (maxPanels > 1) {
+        const match = cleaned.match(/\{[\s\S]*\}/);
+        if (match) {
+            try {
+                const obj = JSON.parse(match[0]);
+                const arr = Array.isArray(obj?.panels) ? obj.panels : [];
+                const prompts = arr
+                    .map(p => softSanitize(String(p?.prompt ?? p ?? ''), style))
+                    .filter(Boolean)
+                    .slice(0, maxPanels);
+                if (prompts.length) return prompts;
+            } catch { /* fall through to single */ }
+        }
+    }
+    return [sanitizeBuilderOutput(cleaned, style)];
+}
+
 function composePositive(built, style) {
     const forced = String(settings.forcedTags || '').trim();
     if (!forced) return built;
@@ -241,14 +268,21 @@ async function buildScenePrompt(mesId) {
         `SCENE (illustrate its final moment):\n${scene}`,
     ].filter(Boolean).join('\n\n');
 
+    const maxPanels = Math.min(4, Math.max(1, Number(settings.maxPanels) || 1));
+    let fullSystem = system;
+    if (maxPanels > 1) {
+        fullSystem += `\n\nSEQUENCE MODE (active):\nDecide how many panels (1 to ${maxPanels}) the scene's climax genuinely needs — one panel per DISTINCT visual beat, chronological order, ending on the final beat. Use 1 panel when one moment carries the scene. Characters keep identical appearance tags in every panel.\nOUTPUT (replaces the single-line requirement above): strict JSON only, no other text: {"panels":[{"prompt":"<one prompt following all rules above>"}]}`;
+    }
+
+    const maxTokens = maxPanels > 1 ? 1200 : 500;
     let raw;
     try {
-        raw = await callLLM(system, user, 500);
+        raw = await callLLM(fullSystem, user, maxTokens);
     } catch (firstErr) {
         console.warn('[SceneSnap] builder attempt 1 failed, retrying once:', firstErr);
-        raw = await callLLM(system, user, 500);
+        raw = await callLLM(fullSystem, user, maxTokens);
     }
-    return { positive: sanitizeBuilderOutput(raw, style), style };
+    return { prompts: parsePanels(raw, style, maxPanels), style };
 }
 
 // ------------------------------------------------------------------ backends
@@ -372,6 +406,37 @@ async function generateWithBackend(positive, negative) {
     }
 }
 
+async function stitchPanels(base64List, format) {
+    const mime = format === 'png' ? 'png' : 'jpeg';
+    const imgs = await Promise.all(base64List.map(b64 => new Promise((resolve, reject) => {
+        const img = new Image();
+        img.onload = () => resolve(img);
+        img.onerror = () => reject(new Error('A panel image failed to load for stitching'));
+        img.src = `data:image/${mime};base64,${b64}`;
+    })));
+    const n = imgs.length;
+    const gutter = 12;
+    const cols = n === 4 ? 2 : n;
+    const rows = n === 4 ? 2 : 1;
+    const w = imgs[0].width;
+    const h = imgs[0].height;
+    const canvas = document.createElement('canvas');
+    canvas.width = cols * w + (cols + 1) * gutter;
+    canvas.height = rows * h + (rows + 1) * gutter;
+    const cx = canvas.getContext('2d');
+    cx.fillStyle = '#ffffff';
+    cx.fillRect(0, 0, canvas.width, canvas.height);
+    imgs.forEach((img, i) => {
+        const c = i % cols;
+        const r = Math.floor(i / cols);
+        cx.drawImage(img, gutter + c * (w + gutter), gutter + r * (h + gutter), w, h);
+    });
+    const blob = await new Promise(resolve => canvas.toBlob(resolve, 'image/jpeg', 0.92));
+    if (!blob) throw new Error('Comic strip stitching failed');
+    const dataUrl = await getBase64Async(blob);
+    return String(dataUrl).split(',')[1];
+}
+
 // ------------------------------------------------------------------ core flow
 
 function setButtonBusy(mesId, busy) {
@@ -398,13 +463,24 @@ async function illustrateMessage(mesId, { force = false } = {}) {
     setButtonBusy(mesId, true);
 
     try {
-        const { positive: built, style } = await buildScenePrompt(mesId);
-        const positive = composePositive(built, style);
+        const { prompts, style } = await buildScenePrompt(mesId);
+        const finals = prompts.map(p => composePositive(p, style));
         const negative = String(settings.negativePrompt || '').trim();
-        console.log(`[SceneSnap] prompt (${style}):`, positive);
+        console.log(`[SceneSnap] ${finals.length} panel(s) (${style}):`, finals);
 
-        const result = await generateWithBackend(positive, negative);
-        const base64 = result.isUrl ? await urlToBase64(result.data) : result.data;
+        const panelImages = [];
+        let panelFormat = 'png';
+        for (const prompt of finals) {
+            const result = await generateWithBackend(prompt, negative);
+            panelFormat = result.format || panelFormat;
+            panelImages.push(result.isUrl ? await urlToBase64(result.data) : result.data);
+        }
+
+        const positive = finals.join('  \u25ba  ');
+        const base64 = panelImages.length > 1
+            ? await stitchPanels(panelImages, panelFormat)
+            : panelImages[0];
+        const outputFormat = panelImages.length > 1 ? 'jpg' : panelFormat;
 
         // Re-fetch context: chat may have advanced while we generated.
         const ctx2 = getContext();
@@ -413,7 +489,7 @@ async function illustrateMessage(mesId, { force = false } = {}) {
 
         const subFolder = String(ctx2.name2 || 'SceneSnap');
         const fileName = `snap_${mesId}_${Date.now()}`;
-        const url = await saveBase64AsFile(base64, subFolder, fileName, result.format || 'png');
+        const url = await saveBase64AsFile(base64, subFolder, fileName, outputFormat);
 
         if (!msg.extra || typeof msg.extra !== 'object') msg.extra = {};
         if (!Array.isArray(msg.extra.media)) msg.extra.media = [];
@@ -595,6 +671,10 @@ function settingsHtml() {
                 </select>
                 <small class="snapshot_hint">Portrait is the anime-checkpoint standard and stays inside NovelAI's free-gen size budget.</small>
 
+                <label for="snapshot_panels">Max panels (comic sequence)</label>
+                <input id="snapshot_panels" type="number" min="1" max="4" class="text_pole">
+                <small class="snapshot_hint">1 = single frame. 2–4 = the builder decides per scene how many panels the climax needs and they get stitched into one comic strip (2–3 side by side, 4 in a grid). Each panel is a full generation — free on NAI Opus, pennies on Runware, but N× the wait.</small>
+
                 <hr>
                 <label for="snapshot_profile">Prompt builder LLM (Connection Manager profile)</label>
                 <select id="snapshot_profile" class="text_pole"></select>
@@ -675,6 +755,7 @@ function syncUI() {
     $('#snapshot_backend').val(settings.backend);
     $('#snapshot_size').val(settings.sizePreset);
     $('#snapshot_style').val(settings.promptStyle);
+    $('#snapshot_panels').val(settings.maxPanels);
     $('#snapshot_forced').val(settings.forcedTags);
     $('#snapshot_negative').val(settings.negativePrompt);
     $('#snapshot_extra_rules').val(settings.extraRules);
@@ -713,6 +794,7 @@ function bindSettings() {
     $('#snapshot_backend').on('change', function () { settings.backend = this.value; toggleBackendBlocks(); saveSettingsDebounced(); });
     $('#snapshot_size').on('change', function () { settings.sizePreset = this.value; saveSettingsDebounced(); });
     $('#snapshot_style').on('change', function () { settings.promptStyle = this.value; saveSettingsDebounced(); });
+    $('#snapshot_panels').on('input', function () { settings.maxPanels = Math.min(4, Math.max(1, Number(this.value) || 1)); saveSettingsDebounced(); });
     $('#snapshot_profile').on('change', function () { settings.builderProfile = this.value; saveSettingsDebounced(); });
     $('#snapshot_forced').on('input', function () { settings.forcedTags = this.value; saveSettingsDebounced(); });
     $('#snapshot_negative').on('input', function () { settings.negativePrompt = this.value; saveSettingsDebounced(); });

@@ -40,6 +40,15 @@ Generation runs after the message renders. It never delays text generation. The 
 
 Good starting checkpoints for Runware: any high-rated **Illustrious XL** or **NoobAI-XL** merge on Civitai. Community-recommended params are already the defaults (steps ~26, CFG 5, clip skip 2). Leave scheduler blank unless you know the model prefers `Euler a`.
 
+## Comic sequence mode
+
+Set **Max panels** to 2–4 and the builder decides *per scene* whether the climax is one frozen frame or a sequence of distinct beats (a liver shot → the fold → the collar grab), keeping character tags identical across panels. Panels are generated back-to-back and stitched into a single comic strip (2–3 side by side, 4 in a grid). Default is 1 — behavior unchanged unless you raise it.
+
+## NovelAI notes
+
+- Model: `nai-diffusion-4-5-full`. With NAI, consider quality tags `very aesthetic, masterpiece, no text` instead of the Illustrious block, and keep the negative prompt — NAI uses it well.
+- Ceiling: SillyTavern's server route sends only the base prompt to NAI and hardcodes the per-character fields (`char_captions`) to empty — so V4.5's true multi-character mode (separate prompt per character, zero trait bleed) is unreachable through stock ST. A ~3-line server patch forwards them; direct-API mode is a planned alternative.
+
 ## Cast sheets
 
 One line per character:
