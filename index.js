@@ -44,6 +44,7 @@ const defaultSettings = Object.freeze({
 const SIZE_PRESETS = {
     portrait: { width: 832, height: 1216 },
     landscape: { width: 1216, height: 832 },
+    wide: { width: 1344, height: 768 },
     square: { width: 1024, height: 1024 },
 };
 
@@ -51,31 +52,35 @@ const TAG_SYSTEM_PROMPT = `You are an image prompt engineer for a Danbooru-tag a
 
 OUTPUT: a single line of comma-separated Danbooru tags. No sentences, no quotes, no markdown, no explanations.
 
-PROCESS:
-1. Identify the FINAL visual beat of the scene — the last thing a camera would see. One frozen frame, never a montage.
-2. Decide who is physically visible in that frame. Start with count tags (1girl, 1boy, 2girls, 1boy 1girl, etc.).
-3. For each visible character, copy their appearance tags from CHARACTER SHEETS exactly. Never invent hair colors, eye colors, or features.
-4. Clothing: if the message contains a header or tracker stating the current timeline, location, or what characters are wearing right now, that information is authoritative and overrides sheet defaults.
-5. Add: facial expression, pose/action, interaction tags (eye contact, holding hands, hug, etc. when applicable), camera framing (close-up / portrait / upper body / cowboy shot / full body / from behind / from side / pov), background/location, time of day, lighting.
+BUILD ORDER:
+1. FRAME — identify the FINAL visual beat: the last thing a camera would see. One frozen instant, never a montage.
+2. COUNT — who is physically visible and central: 1boy, 2boys, 1boy 1girl, etc. Background crowds do not change the count tags.
+3. CHARACTERS — copy each visible character's appearance tags from CHARACTER SHEETS verbatim. The sheets are the ONLY source for hair, eyes, build, and default clothing. NEVER invent clothing, accessories, jewelry, or states of undress that neither the sheets nor the scene state.
+4. WARDROBE — if the message has a header/tracker stating current time, location, or worn clothing, it overrides sheet defaults.
+5. ACTION — expression, pose, and physical interaction tags (collar grab, knee strike, clenched teeth, punch...), plus impact/motion tags when fitting: motion blur, speed lines, foreshortening, dust cloud, flying debris.
+6. CAMERA — one dramatic framing tag: close-up / upper body / cowboy shot / full body / wide shot / from below / from behind / from side / dutch angle.
+7. WORLD — 5-10 environment tags, mandatory whenever the scene has a real location: place, architecture, background detail, crowd or audience if present (crowd, audience, stadium, cheering crowd), weather, time of day, lighting (dramatic lighting, backlighting, sunlight, lens flare, dappled light).
 
 RULES:
-- 20 to 35 tags total. Fewer precise tags beat tag spam.
-- Do not use character names as tags; use their appearance tags from the sheets instead.
-- Never include tags for characters who are only mentioned, remembered, or off-screen.
+- 25 to 45 tags total. A rich WORLD section is required, not optional.
+- No character names as tags; use sheet appearance tags instead.
+- Never tag characters who are only mentioned, remembered, or off-screen — a crowd is scenery, not characters.
 - Keep every character's age and relative size consistent with their sheet; never render anyone as a child unless the sheet explicitly says so.
-- Never include story text, dialogue, or quotation marks.`;
+- No story text, dialogue, or quotation marks.`;
 
 const NATURAL_SYSTEM_PROMPT = `You write image prompts for a natural-language image model (FLUX family). Convert the final moment of a roleplay scene into ONE image prompt.
 
-OUTPUT: 2-4 plain sentences describing a single frozen frame. Anime illustration style. No markdown, no quotes, no explanations.
+OUTPUT: 4-7 plain sentences describing a single frozen instant, starting with "Anime illustration." No markdown, no quotes, no explanations.
 
-PROCESS:
-1. Identify the FINAL visual beat of the scene — the last thing a camera would see.
-2. Describe only the characters physically visible in that frame, using their exact appearance details from CHARACTER SHEETS. Never invent hair colors, eye colors, or features.
-3. Clothing: if the message contains a header or tracker stating the current timeline, location, or what characters are wearing right now, that information is authoritative and overrides sheet defaults.
-4. Cover: expressions, pose/action, camera framing, setting, time of day, lighting. Begin with "Anime illustration."
+REQUIREMENTS:
+1. Depict the FINAL visual beat — the last thing a camera would see. One instant, never a montage.
+2. Describe only the characters physically visible in that instant, using their exact appearance details from CHARACTER SHEETS. The sheets are the ONLY source for hair, eyes, build, and default clothing — NEVER invent clothing, accessories, jewelry, or states of undress that neither the sheets nor the scene state.
+3. If the message has a header/tracker stating current time, location, or worn clothing, it overrides sheet defaults.
+4. Dedicate at least one full sentence to the environment: location, background detail, and any crowd or audience, with atmosphere (dust, weather, time of day).
+5. Name a dramatic camera angle (low angle, wide shot, close-up, over-the-shoulder...) and the lighting.
+6. Keep every character's age and relative size consistent with their sheet; never render anyone as a child unless the sheet explicitly says so.
 
-RULES: no character names, no dialogue, no story text, one moment only.`;
+RULES: no character names, no dialogue, no story text.`;
 
 const CAST_SYSTEM_PROMPT = `You extract character appearance sheets for an anime image model from a roleplay story.
 STORY MEMORY (established canon, summary snippets, author's note) is your PRIMARY source for appearances — it accumulates the whole story. Use the recent chat excerpt only for characters memory has not captured yet.
@@ -160,14 +165,19 @@ async function callLLM(system, user, maxTokens = 500) {
     if (profileId && ctx.ConnectionManagerRequestService) {
         const profiles = ctx.extensionSettings?.connectionManager?.profiles || [];
         if (profiles.some(p => p.id === profileId)) {
-            const res = await ctx.ConnectionManagerRequestService.sendRequest(
-                profileId,
-                [{ role: 'system', content: system }, { role: 'user', content: user }],
-                maxTokens,
-            );
-            const content = typeof res === 'string' ? res : res?.content;
-            if (!content || !String(content).trim()) throw new Error('Prompt builder (profile) returned an empty response');
-            return String(content);
+            try {
+                const res = await ctx.ConnectionManagerRequestService.sendRequest(
+                    profileId,
+                    [{ role: 'system', content: system }, { role: 'user', content: user }],
+                    maxTokens,
+                );
+                const content = typeof res === 'string' ? res : res?.content;
+                if (!content || !String(content).trim()) throw new Error('Prompt builder (profile) returned an empty response');
+                return String(content);
+            } catch (err) {
+                console.warn('[SceneSnap] builder profile failed, falling back to Main API:', err);
+                try { toastr.warning(`Builder profile failed (${String(err?.message || err).slice(0, 120)}) — using Main API this time`, 'SceneSnap', { timeOut: 8000 }); } catch { /* noop */ }
+            }
         }
     }
 
@@ -286,7 +296,7 @@ async function buildScenePrompt(mesId) {
         fullSystem += `\n\nSEQUENCE MODE (active):\nDecide how many panels (1 to ${maxPanels}) the scene's climax genuinely needs — one panel per DISTINCT visual beat, chronological order, ending on the final beat. Use 1 panel when one moment carries the scene. Characters keep identical appearance tags in every panel.\nOUTPUT (replaces the single-line requirement above): strict JSON only — no reasoning, no commentary, no markdown: {"panels":[{"prompt":"<one prompt following all rules above>"}]}`;
     }
 
-    const maxTokens = maxPanels > 1 ? Math.min(2800, 300 + 450 * maxPanels) : 500;
+    const maxTokens = maxPanels > 1 ? Math.min(3200, 400 + 550 * maxPanels) : 800;
     let raw;
     try {
         raw = await callLLM(fullSystem, user, maxTokens);
@@ -294,6 +304,7 @@ async function buildScenePrompt(mesId) {
         console.warn('[SceneSnap] builder attempt 1 failed, retrying once:', firstErr);
         raw = await callLLM(fullSystem, user, maxTokens);
     }
+    console.log('[SceneSnap] raw builder output:', String(raw).slice(0, 600));
     return { prompts: parsePanels(raw, style, maxPanels), style };
 }
 
@@ -763,9 +774,10 @@ function settingsHtml() {
                 <select id="snapshot_size" class="text_pole">
                     <option value="portrait">Portrait 832×1216</option>
                     <option value="landscape">Landscape 1216×832</option>
+                    <option value="wide">Wide 1344×768</option>
                     <option value="square">Square 1024×1024</option>
                 </select>
-                <small class="snapshot_hint">Portrait is the anime-checkpoint standard and stays inside NovelAI's free-gen size budget.</small>
+                <small class="snapshot_hint">Portrait is the anime standard; Landscape/Wide suit big environmental shots with crowds. All presets stay inside NovelAI's free-gen budget.</small>
 
                 <label for="snapshot_panels">Max panels (comic sequence)</label>
                 <input id="snapshot_panels" type="number" min="1" max="6" class="text_pole">
@@ -807,9 +819,10 @@ function settingsHtml() {
                 <div class="flex-container">
                     <div id="snapshot_cast_build" class="menu_button">Auto-build cast from chat</div>
                     <div id="snapshot_test" class="menu_button">Test backend</div>
+                    <div id="snapshot_test_builder" class="menu_button">Test builder</div>
                     <div id="snapshot_reset" class="menu_button">Reset defaults</div>
                 </div>
-                <small class="snapshot_hint">Auto-build: reads story memory first (Summaryception canon notepad + summary snippets, Author's Note), then recent chat, and appends new characters (review the result). Test: generates one small image and reports the time. Reset: restores tuned defaults — keeps API key, Runware model, casts, extra rules, builder profile, and backend.</small>
+                <small class="snapshot_hint">Auto-build: reads story memory first (Summaryception canon notepad + summary snippets, Author's Note), then recent chat, and appends new characters (review the result). Test backend: generates one small image and reports the time. Test builder: runs the prompt-builder LLM on a sample scene and shows its output or the exact error — use it to check a profile before blaming the image model. Reset: restores tuned defaults — keeps API key, Runware model, casts, extra rules, builder profile, and backend.</small>
                 <small class="snapshot_hint">Per message: the panorama icon regenerates the image only — the text is never touched; each attempt joins a swipeable gallery. /snap does the same for the last AI message.</small>
             </div>
         </div>
@@ -943,6 +956,25 @@ function bindSettings() {
         refreshCastUI();
     });
     $('#snapshot_cast_build').on('click', () => autoBuildCast({ silent: false }));
+
+    $('#snapshot_test_builder').on('click', async function () {
+        const $btn = $(this);
+        $btn.addClass('disabled');
+        try {
+            const style = resolveStyle();
+            const system = style === 'tags' ? TAG_SYSTEM_PROMPT : NATURAL_SYSTEM_PROMPT;
+            const user = 'CHARACTER SHEETS:\nMira: girl, short silver hair, blue eyes, school uniform\n\nSCENE (illustrate its final moment):\nMira sprinted across the courtyard as the bell rang, students crowding the walkways, and leapt to catch the falling book one-handed.';
+            const t0 = Date.now();
+            const raw = await callLLM(system, user, 400);
+            console.log('[SceneSnap] test builder output:', raw);
+            toastr.success(`Builder OK in ${((Date.now() - t0) / 1000).toFixed(1)}s: ${String(raw).trim().slice(0, 140)}...`, 'SceneSnap', { timeOut: 12000 });
+        } catch (err) {
+            notifyError(err);
+        } finally {
+            $btn.removeClass('disabled');
+        }
+    });
+
 
     $('#snapshot_test').on('click', async function () {
         const $btn = $(this);
