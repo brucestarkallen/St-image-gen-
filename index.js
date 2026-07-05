@@ -537,7 +537,9 @@ function settingsHtml() {
             </div>
             <div class="inline-drawer-content">
                 <label class="checkbox_label"><input id="snapshot_enabled" type="checkbox"><span>Enabled</span></label>
+                <small class="snapshot_hint">Master switch for all SceneSnap features.</small>
                 <label class="checkbox_label"><input id="snapshot_auto" type="checkbox"><span>Auto-illustrate new AI messages</span></label>
+                <small class="snapshot_hint">Generates an image for every new AI reply. Runs after the text renders — never delays or blocks generation.</small>
 
                 <label for="snapshot_backend">Image backend</label>
                 <select id="snapshot_backend" class="text_pole">
@@ -545,18 +547,23 @@ function settingsHtml() {
                     <option value="runware">Runware (Civitai anime checkpoints, tags)</option>
                     <option value="novelai">NovelAI (uses ST NovelAI key, tags)</option>
                 </select>
+                <small class="snapshot_hint">Which service renders the image. Pollinations = free zero-setup test rig. Runware = any Civitai anime checkpoint, fast + near-free (recommended). NovelAI = strongest anime model, needs your NAI key in API Connections.</small>
 
                 <div id="snapshot_runware_block" class="snapshot_backend_block">
                     <label for="snapshot_runware_key">Runware API key</label>
                     <input id="snapshot_runware_key" type="password" class="text_pole" placeholder="rw-..." autocomplete="off">
+                    <small class="snapshot_hint">From runware.ai dashboard → API Keys.</small>
                     <label for="snapshot_runware_model">Model (AIR from Civitai sidebar)</label>
                     <input id="snapshot_runware_model" type="text" class="text_pole" placeholder="civitai:XXXXXX@XXXXXXX">
+                    <small class="snapshot_hint">Which checkpoint to run — copy the AIR ID from the model page's right sidebar on civitai.com. Any Illustrious XL / NoobAI-XL merge works great.</small>
                     <div class="flex-container">
                         <div class="flex1"><label for="snapshot_runware_steps">Steps</label><input id="snapshot_runware_steps" type="number" min="1" max="60" class="text_pole"></div>
                         <div class="flex1"><label for="snapshot_runware_cfg">CFG</label><input id="snapshot_runware_cfg" type="number" min="1" max="15" step="0.5" class="text_pole"></div>
                     </div>
+                    <small class="snapshot_hint">Steps: detail vs speed, 20–30 is the sweet spot. CFG: prompt strictness, 3–6 for anime checkpoints — higher fries colors.</small>
                     <label for="snapshot_runware_scheduler">Scheduler (blank = model default)</label>
                     <input id="snapshot_runware_scheduler" type="text" class="text_pole" placeholder="e.g. Euler a">
+                    <small class="snapshot_hint">Sampling method. Leave blank unless the checkpoint page recommends one (usually Euler a).</small>
                 </div>
 
                 <div id="snapshot_novelai_block" class="snapshot_backend_block">
@@ -566,15 +573,18 @@ function settingsHtml() {
                         <option value="nai-diffusion-4-5-curated">NAI Diffusion V4.5 Curated</option>
                         <option value="nai-diffusion-3">NAI Diffusion V3</option>
                     </select>
+                    <small class="snapshot_hint">V4.5 Full = strongest, best multi-character. Curated = cleaner training data.</small>
                     <div class="flex-container">
                         <div class="flex1"><label for="snapshot_nai_steps">Steps (≤28)</label><input id="snapshot_nai_steps" type="number" min="1" max="28" class="text_pole"></div>
                         <div class="flex1"><label for="snapshot_nai_scale">Scale</label><input id="snapshot_nai_scale" type="number" min="1" max="10" step="0.5" class="text_pole"></div>
                     </div>
+                    <small class="snapshot_hint">Steps capped at 28 — the free-generation limit on Opus. Scale = prompt adherence, ~5 for V4.5.</small>
                 </div>
 
                 <div id="snapshot_pollinations_block" class="snapshot_backend_block">
                     <label for="snapshot_poll_model">Pollinations model</label>
                     <input id="snapshot_poll_model" type="text" class="text_pole" placeholder="flux">
+                    <small class="snapshot_hint">"flux" = default free model. "turbo" = faster, lower quality.</small>
                 </div>
 
                 <label for="snapshot_size">Image size</label>
@@ -583,27 +593,35 @@ function settingsHtml() {
                     <option value="landscape">Landscape 1216×832</option>
                     <option value="square">Square 1024×1024</option>
                 </select>
+                <small class="snapshot_hint">Portrait is the anime-checkpoint standard and stays inside NovelAI's free-gen size budget.</small>
 
                 <hr>
                 <label for="snapshot_profile">Prompt builder LLM (Connection Manager profile)</label>
                 <select id="snapshot_profile" class="text_pole"></select>
+                <small class="snapshot_hint">The text model that converts the scene into an image prompt. Pick a FAST profile — this decides most of your image latency. Main API fallback works but sends your whole chat context (slow on big stories).</small>
                 <label for="snapshot_style">Prompt style</label>
                 <select id="snapshot_style" class="text_pole">
                     <option value="auto">Auto (match backend)</option>
                     <option value="tags">Danbooru tags</option>
                     <option value="natural">Natural language</option>
                 </select>
+                <small class="snapshot_hint">Anime checkpoints (Runware/NovelAI) want Danbooru tags; FLUX (Pollinations) wants sentences. Auto picks correctly — only override if you know why.</small>
                 <label for="snapshot_forced">Always-append quality tags</label>
                 <textarea id="snapshot_forced" class="text_pole textarea_compact" rows="2"></textarea>
+                <small class="snapshot_hint">Appended to the end of every prompt. Prefilled with the standard Illustrious/NoobAI quality block.</small>
                 <label for="snapshot_negative">Negative prompt</label>
                 <textarea id="snapshot_negative" class="text_pole textarea_compact" rows="2"></textarea>
+                <small class="snapshot_hint">What the image model should avoid. FLUX mostly ignores this; tag models use it heavily.</small>
                 <label for="snapshot_extra_rules">Extra builder rules (optional)</label>
                 <textarea id="snapshot_extra_rules" class="text_pole textarea_compact" rows="2" placeholder="e.g. Only ever depict up to 2 characters"></textarea>
+                <small class="snapshot_hint">Your standing instructions for the prompt builder, applied to every image.</small>
                 <label for="snapshot_strip">Strip from scene before building (regex, one per line)</label>
                 <textarea id="snapshot_strip" class="text_pole textarea_compact" rows="3"></textarea>
+                <small class="snapshot_hint">Removed from the message before prompt building. Defaults cover &lt;details&gt; blocks, {ALLCAPS}…{/ALLCAPS} tracker blocks, and HTML comments — so stat trackers never displace the final scene beat.</small>
 
                 <hr>
                 <label>Character cast (appearance sheets, one per line: <code>Name: tags</code>)</label>
+                <small class="snapshot_hint">Locked appearance tags per character = no more hair/eye/outfit drift between images. Casts are global; each chat remembers which cast is active — one cast per story world.</small>
                 <div class="flex-container">
                     <select id="snapshot_cast_select" class="text_pole flex1"></select>
                     <div id="snapshot_cast_new" class="menu_button menu_button_icon fa-solid fa-plus" title="New cast"></div>
@@ -615,7 +633,8 @@ function settingsHtml() {
                     <div id="snapshot_test" class="menu_button">Test backend</div>
                     <div id="snapshot_reset" class="menu_button">Reset defaults</div>
                 </div>
-                <small>The active cast is remembered per chat. /snap illustrates the last AI message.</small>
+                <small class="snapshot_hint">Auto-build: scans the last ~24 messages for new characters (review the result). Test: generates one small image and reports the time. Reset: restores tuned defaults — keeps API key, Runware model, casts, extra rules, builder profile, and backend.</small>
+                <small class="snapshot_hint">Per message: the panorama icon regenerates the image only — the text is never touched; each attempt joins a swipeable gallery. /snap does the same for the last AI message.</small>
             </div>
         </div>
     </div>`;

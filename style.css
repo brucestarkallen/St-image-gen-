@@ -36,3 +36,11 @@
 .snapshot_mes_btn.fa-fade {
     cursor: progress;
 }
+
+#snapshot_settings .snapshot_hint {
+    display: block;
+    font-size: 0.72em;
+    line-height: 1.35;
+    opacity: 0.55;
+    margin: 1px 0 3px 0;
+}
