@@ -38,6 +38,8 @@ const defaultSettings = Object.freeze({
     naiModel: 'nai-diffusion-4-5-full',
     naiSteps: 28,
     naiScale: 5,
+    naiToken: '',
+    naiMultiChar: true,
     // Pollinations
     pollModel: 'flux',
 });
@@ -93,6 +95,24 @@ REQUIREMENTS:
 6. Keep every character's age and relative size consistent with their sheet; never render anyone as a child unless the sheet explicitly says so.
 
 RULES: no character names, no dialogue, no story text.`;
+
+const MULTICHAR_SYSTEM_PROMPT = `You are an image prompt engineer for NovelAI Diffusion V4.5, which supports separate prompts per character. Convert the final moment of a roleplay scene into a structured multi-character image spec.
+
+OUTPUT: strict JSON only — no reasoning, no markdown, no commentary:
+{"base":"<scene prompt>","characters":[{"tags":"<one character's prompt>"}]}
+
+HOW TO FILL IT:
+- "base" = the SCENE only: count tag for how many people are visible (1boy, 2boys, 1boy 1girl...), the setting, background, crowd/audience if present, weather, time of day, camera framing, motion/impact tags, and quality tags. The base describes the world and composition, NOT individual appearances.
+- "characters" = one entry per NAMED character physically visible in the final frame, in left-to-right order. Each "tags" value is that ONE person's Danbooru tags: their appearance copied verbatim from CHARACTER SHEETS (hair, eyes, build, clothing) PLUS what they are doing this instant (pose, expression, action). Start each with a solo count tag (1boy or 1girl).
+
+CRITICAL RULES:
+- The sheets are the ONLY source for each character's hair, eyes, build, and default clothing. NEVER invent appearance. If the scene states current clothing/state (from a header or the prose), that overrides the sheet default for that character.
+- Put quality/style tags ONLY in "base", never inside a character entry — it weakens identity separation.
+- A crowd or audience is scenery: tag it in "base" (crowd, audience, spectators). NEVER make a character entry for background people.
+- Only include characters who are physically present in the final frame. Never add characters who are merely mentioned, remembered, or off-screen.
+- Maximum 4 character entries. If more than 4 people are foregrounded, keep the 4 most central and fold the rest into a "base" crowd tag.
+- Keep every character's age and relative size consistent with their sheet; never render anyone as a child unless the sheet says so.
+- No names as tags, no dialogue, no story text.`;
 
 const CAST_SYSTEM_PROMPT = `You extract character appearance sheets for an anime image model from a roleplay story.
 STORY MEMORY (established canon, summary snippets, author's note) is your PRIMARY source for appearances — it accumulates the whole story. Use the recent chat excerpt only for characters memory has not captured yet.
@@ -277,7 +297,63 @@ function composePositive(built, style) {
     return add.length ? `${built}, ${add.join(', ')}` : built;
 }
 
-async function buildScenePrompt(mesId) {
+function parseCastSheet(sheetText) {
+    const map = [];
+    for (const raw of String(sheetText || '').split('\n')) {
+        const line = raw.trim();
+        if (!line || line.indexOf(':') === -1) continue;
+        const name = line.slice(0, line.indexOf(':')).trim();
+        const tags = line.slice(line.indexOf(':') + 1).trim();
+        if (name && tags) map.push({ name, tags });
+    }
+    return map;
+}
+
+// NovelAI position grid: columns A-E (x), rows 1-5 (y). Spread N characters across the middle row.
+const NAI_CENTERS_BY_COUNT = {
+    1: [{ x: 0.5, y: 0.5 }],
+    2: [{ x: 0.3, y: 0.5 }, { x: 0.7, y: 0.5 }],
+    3: [{ x: 0.25, y: 0.5 }, { x: 0.5, y: 0.5 }, { x: 0.75, y: 0.5 }],
+    4: [{ x: 0.2, y: 0.5 }, { x: 0.4, y: 0.5 }, { x: 0.6, y: 0.5 }, { x: 0.8, y: 0.5 }],
+};
+
+async function buildMultiCharSpec(mesId, scene) {
+    const sheet = getActiveCastSheet();
+    const extra = String(settings.extraRules || '').trim();
+    const user = [
+        sheet ? `CHARACTER SHEETS:\n${sheet}` : 'CHARACTER SHEETS: (none — infer only from what the scene explicitly states)',
+        extra ? `EXTRA RULES:\n${extra}` : '',
+        `SCENE (illustrate its final moment):\n${scene}`,
+    ].filter(Boolean).join('\n\n');
+
+    let raw;
+    try {
+        raw = await callLLM(MULTICHAR_SYSTEM_PROMPT, user, 1400);
+    } catch (firstErr) {
+        console.warn('[SceneSnap] multichar builder attempt 1 failed, retrying once:', firstErr);
+        raw = await callLLM(MULTICHAR_SYSTEM_PROMPT, user, 1400);
+    }
+    console.log('[SceneSnap] raw multichar builder output:', String(raw).slice(0, 700));
+
+    const cleaned = String(raw).replace(/<think>[\s\S]*?<\/think>/gi, '').replace(/```json\n?|```/gi, '').trim();
+    const match = cleaned.match(/\{[\s\S]*\}/);
+    if (!match) throw new Error('Multi-character builder did not return JSON');
+    let obj;
+    try { obj = JSON.parse(match[0]); }
+    catch (e) { throw new Error('Multi-character builder returned invalid JSON'); }
+
+    let base = softSanitize(String(obj?.base ?? ''), 'tags');
+    let chars = Array.isArray(obj?.characters) ? obj.characters : [];
+    chars = chars
+        .map(c => softSanitize(String(c?.tags ?? c ?? ''), 'tags'))
+        .filter(Boolean)
+        .slice(0, 4);
+    if (!base) throw new Error('Multi-character builder produced an empty base prompt');
+    if (!chars.length) throw new Error('Multi-character builder produced no character panels');
+    return { base, chars, raw: String(raw) };
+}
+
+async function getSceneText(mesId) {
     const ctx = getContext();
     const message = ctx.chat?.[mesId];
     if (!message) throw new Error(`Message #${mesId} not found`);
@@ -302,7 +378,11 @@ async function buildScenePrompt(mesId) {
         // Keep the top (headers/trackers) and the tail (final beat of the scene).
         scene = scene.slice(0, Math.floor(max * 0.3)) + '\n[...trimmed...]\n' + scene.slice(-Math.floor(max * 0.7));
     }
+    return scene;
+}
 
+async function buildScenePrompt(mesId) {
+    const scene = await getSceneText(mesId);
     const style = resolveStyle();
     const system = style === 'tags' ? TAG_SYSTEM_PROMPT : NATURAL_SYSTEM_PROMPT;
     const sheet = getActiveCastSheet();
@@ -448,6 +528,122 @@ async function generatePollinations(positive, negative) {
     return { format: data?.format || 'jpg', data: data.image };
 }
 
+async function generateNovelAIMulti(base, charTags, negative) {
+    const token = String(settings.naiToken || '').trim();
+    if (!token) throw new Error('NovelAI persistent token not set — needed for multi-character mode (get it at NovelAI → User Settings → Account → Get Persistent API Token)');
+    const { width, height } = getSize();
+    const forced = effectiveForcedTags();
+    const baseCaption = forced
+        ? `${base}, ${forced.split(',').map(s => s.trim()).filter(s => s && !base.toLowerCase().includes(s.toLowerCase())).join(', ')}`.replace(/,\s*$/, '')
+        : base;
+
+    const centers = NAI_CENTERS_BY_COUNT[charTags.length] || NAI_CENTERS_BY_COUNT[4];
+    const characterPrompts = charTags.map((tags, i) => ({
+        prompt: tags,
+        uc: '',
+        center: centers[i] || { x: 0.5, y: 0.5 },
+        enabled: true,
+    }));
+    const charCaptions = charTags.map((tags, i) => ({
+        char_caption: tags,
+        centers: [centers[i] || { x: 0.5, y: 0.5 }],
+    }));
+
+    const seed = Math.floor(Math.random() * 4294967295);
+    const body = {
+        input: baseCaption,
+        model: settings.naiModel,
+        action: 'generate',
+        parameters: {
+            params_version: 3,
+            width,
+            height,
+            scale: Number(settings.naiScale) || 5,
+            sampler: 'k_euler_ancestral',
+            steps: Math.min(Math.max(1, Number(settings.naiSteps) || 28), 28),
+            seed,
+            n_samples: 1,
+            ucPreset: 0,
+            qualityToggle: true,
+            dynamic_thresholding: false,
+            controlnet_strength: 1,
+            legacy: false,
+            add_original_image: true,
+            cfg_rescale: 0,
+            noise_schedule: 'karras',
+            legacy_v3_extend: false,
+            skip_cfg_above_sigma: null,
+            characterPrompts,
+            use_coords: true,
+            negative_prompt: negative,
+            v4_prompt: {
+                caption: { base_caption: baseCaption, char_captions: charCaptions },
+                use_coords: true,
+                use_order: true,
+            },
+            v4_negative_prompt: {
+                caption: { base_caption: negative, char_captions: charTags.map(() => ({ char_caption: '', centers: [{ x: 0.5, y: 0.5 }] })) },
+            },
+        },
+    };
+
+    const res = await fetch('https://image.novelai.net/ai/generate-image', {
+        method: 'POST',
+        headers: {
+            'Content-Type': 'application/json',
+            'Authorization': `Bearer ${token}`,
+        },
+        body: JSON.stringify(body),
+    });
+    if (!res.ok) {
+        const text = await res.text().catch(() => '');
+        if (res.status === 401) throw new Error('NovelAI rejected the token (401) — use a Persistent API Token, not your password');
+        throw new Error(`NovelAI multi-char: ${res.status} ${text.slice(0, 200)}`);
+    }
+    // Response is a zip containing image_0.png — extract the first PNG.
+    const buf = new Uint8Array(await res.arrayBuffer());
+    const b64 = await extractFirstPngFromZip(buf);
+    return { format: 'png', data: b64 };
+}
+
+function bytesToBase64(bytes) {
+    let binary = '';
+    const chunk = 0x8000;
+    for (let i = 0; i < bytes.length; i += chunk) {
+        binary += String.fromCharCode.apply(null, bytes.subarray(i, i + chunk));
+    }
+    return btoa(binary);
+}
+
+async function inflateRaw(bytes) {
+    if (typeof DecompressionStream === 'undefined') {
+        throw new Error('This browser cannot decompress the NovelAI image (no DecompressionStream). Try a Chromium-based browser.');
+    }
+    const ds = new DecompressionStream('deflate-raw');
+    const stream = new Response(new Blob([bytes]).stream().pipeThrough(ds));
+    return new Uint8Array(await stream.arrayBuffer());
+}
+
+// Zip reader for NAI responses: handles both STORED (method 0) and DEFLATE (method 8) entries.
+async function extractFirstPngFromZip(bytes) {
+    const dv = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+    let off = 0;
+    while (off + 30 <= bytes.length) {
+        const sig = dv.getUint32(off, true);
+        if (sig !== 0x04034b50) break; // local file header
+        const method = dv.getUint16(off + 8, true);
+        const compSize = dv.getUint32(off + 18, true);
+        const nameLen = dv.getUint16(off + 26, true);
+        const extraLen = dv.getUint16(off + 28, true);
+        const dataStart = off + 30 + nameLen + extraLen;
+        const fileData = bytes.subarray(dataStart, dataStart + compSize);
+        if (method === 0) return bytesToBase64(fileData);
+        if (method === 8) return bytesToBase64(await inflateRaw(fileData));
+        off = dataStart + compSize;
+    }
+    throw new Error('Could not extract image from NovelAI response (unexpected zip format)');
+}
+
 async function generateWithBackend(positive, negative) {
     switch (settings.backend) {
         case 'runware': return generateRunware(positive, negative);
@@ -520,21 +716,43 @@ async function illustrateMessage(mesId, { force = false } = {}) {
             }
         }
 
-        const { prompts, style, raw } = await buildScenePrompt(mesId);
-        const finals = prompts.map(p => composePositive(p, style));
         const negative = effectiveNegative();
-        lastDebug = { time: new Date().toLocaleTimeString(), backend: settings.backend, style, raw, prompts: finals, negative, error: null };
-        console.log(`[SceneSnap] ${finals.length} panel(s) (${style}):`, finals);
+        const useMultiChar = settings.backend === 'novelai' && settings.naiMultiChar
+            && String(settings.naiToken || '').trim() && parseCastSheet(getActiveCastSheet()).length > 0;
 
-        const panelImages = [];
+        let panelImages = [];
         let panelFormat = 'png';
-        for (const prompt of finals) {
-            const result = await generateWithBackend(prompt, negative);
-            panelFormat = result.format || panelFormat;
-            panelImages.push(result.isUrl ? await urlToBase64(result.data) : result.data);
+        let positive = '';
+        let debugRaw = '';
+        let debugPrompts = [];
+
+        if (useMultiChar) {
+            // NovelAI native multi-character: base scene + per-character panels, single generation.
+            const scene = await getSceneText(mesId);
+            const spec = await buildMultiCharSpec(mesId, scene);
+            debugRaw = spec.raw;
+            debugPrompts = [`BASE: ${spec.base}`, ...spec.chars.map((c, i) => `CHAR ${i + 1}: ${c}`)];
+            positive = debugPrompts.join('\n');
+            const result = await generateNovelAIMulti(spec.base, spec.chars, negative);
+            panelFormat = result.format || 'png';
+            panelImages = [result.data];
+            console.log(`[SceneSnap] NAI multi-char: 1 base + ${spec.chars.length} character panels`);
+        } else {
+            const { prompts, style, raw } = await buildScenePrompt(mesId);
+            const finals = prompts.map(p => composePositive(p, style));
+            debugRaw = raw;
+            debugPrompts = finals;
+            console.log(`[SceneSnap] ${finals.length} panel(s) (${style}):`, finals);
+            for (const prompt of finals) {
+                const result = await generateWithBackend(prompt, negative);
+                panelFormat = result.format || panelFormat;
+                panelImages.push(result.isUrl ? await urlToBase64(result.data) : result.data);
+            }
+            positive = finals.join('  \u25ba  ');
         }
 
-        const positive = finals.join('  \u25ba  ');
+        lastDebug = { time: new Date().toLocaleTimeString(), backend: settings.backend + (useMultiChar ? ' (multi-char)' : ''), style: useMultiChar ? 'nai-multichar' : resolveStyle(), raw: debugRaw, prompts: debugPrompts, negative, error: null };
+
         const base64 = panelImages.length > 1
             ? await stitchPanels(panelImages, panelFormat)
             : panelImages[0];
@@ -792,6 +1010,11 @@ function settingsHtml() {
                         <div class="flex1"><label for="snapshot_nai_scale">Scale</label><input id="snapshot_nai_scale" type="number" min="1" max="10" step="0.5" class="text_pole"></div>
                     </div>
                     <small class="snapshot_hint">Steps capped at 28 — the free-generation limit on Opus. Scale = prompt adherence, ~5 for V4.5.</small>
+                    <label class="checkbox_label"><input id="snapshot_nai_multichar" type="checkbox"><span>Multi-character mode (per-character panels)</span></label>
+                    <small class="snapshot_hint">The big accuracy upgrade: sends each named character in the scene as its own NAI character panel (base scene + separate appearance per person), eliminating trait-bleed — the same structure that produces clean multi-person images in NAI's web UI. Needs the persistent token below and a cast sheet with the characters. Falls back to a single prompt when either is missing. Single-frame only (no comic panels).</small>
+                    <label for="snapshot_nai_token">NovelAI persistent token (for multi-character mode)</label>
+                    <input id="snapshot_nai_token" type="password" class="text_pole" placeholder="pst-..." autocomplete="off">
+                    <small class="snapshot_hint">NovelAI → User Settings → Account → Get Persistent API Token. Different from the key ST uses for single-prompt mode. Only needed for multi-character mode.</small>
                 </div>
 
                 <div id="snapshot_pollinations_block" class="snapshot_backend_block">
@@ -909,6 +1132,8 @@ function syncUI() {
     $('#snapshot_nai_model').val(settings.naiModel);
     $('#snapshot_nai_steps').val(settings.naiSteps);
     $('#snapshot_nai_scale').val(settings.naiScale);
+    $('#snapshot_nai_token').val(settings.naiToken);
+    $('#snapshot_nai_multichar').prop('checked', settings.naiMultiChar);
     $('#snapshot_poll_model').val(settings.pollModel);
     toggleBackendBlocks();
     refreshProfileOptions();
@@ -916,7 +1141,7 @@ function syncUI() {
 }
 
 // Settings that survive a reset: credentials, model choice, and user-authored content.
-const RESET_KEEP_KEYS = ['runwareKey', 'runwareModel', 'casts', 'extraRules', 'builderProfile', 'backend'];
+const RESET_KEEP_KEYS = ['runwareKey', 'runwareModel', 'naiToken', 'casts', 'extraRules', 'builderProfile', 'backend'];
 
 function resetToDefaults() {
     const kept = {};
@@ -952,6 +1177,8 @@ function bindSettings() {
     $('#snapshot_nai_model').on('change', function () { settings.naiModel = this.value; saveSettingsDebounced(); });
     $('#snapshot_nai_steps').on('input', function () { settings.naiSteps = Number(this.value) || 28; saveSettingsDebounced(); });
     $('#snapshot_nai_scale').on('input', function () { settings.naiScale = Number(this.value) || 5; saveSettingsDebounced(); });
+    $('#snapshot_nai_token').on('input', function () { settings.naiToken = this.value.trim(); saveSettingsDebounced(); });
+    $('#snapshot_nai_multichar').on('change', function () { settings.naiMultiChar = this.checked; saveSettingsDebounced(); });
 
     $('#snapshot_poll_model').on('input', function () { settings.pollModel = this.value; saveSettingsDebounced(); });
 

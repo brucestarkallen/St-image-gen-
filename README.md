@@ -40,6 +40,20 @@ Generation runs after the message renders. It never delays text generation. The 
 
 Good starting checkpoints for Runware: any high-rated **Illustrious XL** or **NoobAI-XL** merge on Civitai. Community-recommended params are already the defaults (steps ~26, CFG 5, clip skip 2). Leave scheduler blank unless you know the model prefers `Euler a`.
 
+## NovelAI multi-character mode (the accuracy upgrade)
+
+This is what closes the gap between a hand-made NAI web-UI image and an automatic one. Instead of cramming every character into a single prompt (which causes trait-bleed — the wrong person gets the wrong hair/eyes), it sends **each named character in the scene as a separate NAI character panel**: a base prompt for the scene/crowd/composition, plus one appearance-only prompt per person, positioned across the frame. Exactly the structure that produces clean multi-person images in NovelAI's own UI.
+
+**Enable it:**
+1. Backend = NovelAI.
+2. Turn on **Multi-character mode**.
+3. Paste a **persistent token** (NovelAI → User Settings → Account → Get Persistent API Token — this is separate from the key SillyTavern uses).
+4. Have a **cast sheet** with the characters (auto-build fills it from story memory).
+
+When active, the builder emits a base scene prompt plus one panel per named character physically present in the final frame (max 4; extras fold into the crowd). Quality tags live only in the base; each panel is pure appearance + current action. It's single-frame only — comic sequence mode applies to the other backends. If the token or cast sheet is missing, it silently falls back to the normal single-prompt path.
+
+Check **Show last generation** to see the exact base prompt and per-character panels that were sent.
+
 ## Comic sequence mode
 
 Set **Max panels** to 2–4 and the builder decides *per scene* whether the climax is one frozen frame or a sequence of distinct beats (a liver shot → the fold → the collar grab), keeping character tags identical across panels. Panels are generated back-to-back and stitched into a single comic strip (2–3 side by side, 4 in a grid). Default is 1 — behavior unchanged unless you raise it.
