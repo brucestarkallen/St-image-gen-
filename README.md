@@ -116,6 +116,11 @@ Stella: girl, long crimson hair, red eyes, large breasts, hair ribbon, school un
 
 ## Changelog
 
+### 0.9.2
+- **Same person in every panel.** The whole strip now shares one generation seed: identical seed + identical appearance tags = the same rendition of each character across panels, instead of a fresh re-roll per panel. Works on NovelAI, Runware, and Pollinations.
+- **Rigid printed-comic grid.** Every panel cover-fills an identical cell — thin gutters, black panel frames, no letterboxing, and no stray panel size can break the layout.
+- The sequence prompt now carries an explicit outfit contract: full appearance tags repeated verbatim per panel, no outfit/hair/color changes between panels.
+
 ### 0.9.1
 - **Strips render large.** Panels in sequence mode now generate in landscape and stack into a readable manhwa-strip shape (~1:2), instead of three portrait towers squeezed to a sliver by the chat viewer's height limit. Single-frame generations keep your chosen size preset untouched.
 - **Dialogue spreads across panels** — one bubble per panel by default, in speaking order; two only for a tight same-beat exchange. No more both lines crammed onto one face.

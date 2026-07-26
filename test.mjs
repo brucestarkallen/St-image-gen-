@@ -302,8 +302,22 @@ function defaultPatterns() { return '<details>[\\s\\S]*?</details>\n\\{[A-Z_]+\\
     check('src: proxy target is percent-encoded into the path',
         src.includes('/proxy/${encodeURIComponent(NAI_IMAGE_ENDPOINT)}') && !src.includes('/proxy/${NAI_IMAGE_ENDPOINT}'));
     check('src: strip panels generate landscape (flag threaded to every panel backend)',
-        src.includes('generateWithBackend(finals[i], negative, panels.length > 1)'));
+        src.includes('generateWithBackend(finals[i], negative, panels.length > 1, runSeed)')
+        && src.includes('generateRunware(positive, negative, landscape, seed)')
+        && src.includes('generateNovelAI(positive, negative, landscape, seed)')
+        && src.includes('generatePollinations(positive, negative, landscape, seed)')
+        && src.includes('if (landscape && p.height > p.width)'));
     check('src: dialogue spreads one-per-panel by default', src.includes('Prefer ONE line per panel'));
+    check('src: one seed per strip — threaded through dispatch and all three backends',
+        src.includes('generateWithBackend(finals[i], negative, panels.length > 1, runSeed)')
+        && src.includes('generateRunware(positive, negative, landscape, seed)')
+        && src.includes('seed: Number.isInteger(seed) ? seed : -1,')
+        && src.includes('seed: Number.isInteger(seed) ? seed : undefined,')
+        && src.includes('Number.isInteger(seed) ? seed : Math.floor'));
+    check('src: stitch is a rigid cover-filled grid with framed cells',
+        src.includes('cx.drawImage(img2, sx, sy, sw, sh, gutter, y, cellW, cellH)') && src.includes('cx.strokeRect(gutter + 2'));
+    check('src: the outfit contract is verbatim per panel',
+        src.includes('never change outfits, hair, or colors between panels'));
     check('src: sequence mode floors at 2 panels — the strip is guaranteed',
         src.includes('(2 to ${maxPanels})') && src.includes('Never fewer than 2 panels'));
     check('src: two bubbles sit side-by-side in the top band, never stacked down the frame',

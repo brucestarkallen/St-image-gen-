@@ -12,7 +12,7 @@ import { getBase64Async, saveBase64AsFile } from '../../../utils.js';
 import { callGenericPopup, POPUP_TYPE } from '../../../popup.js';
 
 const MODULE = 'sceneSnap';
-const VERSION = '0.9.1';
+const VERSION = '0.9.2';
 
 const defaultSettings = Object.freeze({
     enabled: true,
@@ -645,7 +645,7 @@ async function buildScenePrompt(mesId) {
     if (grounding.has) fullSystem += GROUNDING_RULE;
     const bubbleSchema = bubblesOn ? ',"bubbles":[{"speaker":"<name>","text":"<verbatim quote>"}]' : '';
     if (maxPanels > 1) {
-        fullSystem += `\n\nSEQUENCE MODE (active):\nBuild a vertical comic strip: decide how many panels (2 to ${maxPanels}) the scene's climax needs — one panel per DISTINCT visual beat, chronological order, ending on the final beat. Never fewer than 2 panels: the reader asked for a strip. Characters keep identical appearance tags in every panel.${bubblesOn ? '\n\n' + BUBBLE_RULES : ''}\nOUTPUT (replaces the single-line requirement above): strict JSON only — no reasoning, no commentary, no markdown: {"panels":[{"prompt":"<one prompt following all rules above>"${bubbleSchema}}]}`;
+        fullSystem += `\n\nSEQUENCE MODE (active):\nBuild a vertical comic strip: decide how many panels (2 to ${maxPanels}) the scene's climax needs — one panel per DISTINCT visual beat, chronological order, ending on the final beat. Never fewer than 2 panels: the reader asked for a strip. Every character repeats their FULL appearance tag set verbatim in every panel they appear in — never change outfits, hair, or colors between panels.${bubblesOn ? '\n\n' + BUBBLE_RULES : ''}\nOUTPUT (replaces the single-line requirement above): strict JSON only — no reasoning, no commentary, no markdown: {"panels":[{"prompt":"<one prompt following all rules above>"${bubbleSchema}}]}`;
     } else if (bubblesOn) {
         fullSystem += `\n\n${BUBBLE_RULES}\nOUTPUT (replaces the single-line requirement above): strict JSON only — no reasoning, no commentary, no markdown, exactly one panel: {"panels":[{"prompt":"<one prompt following all rules above>"${bubbleSchema}}]}`;
     }
@@ -664,7 +664,7 @@ async function buildScenePrompt(mesId) {
 
 // ------------------------------------------------------------------ backends
 
-async function generateRunware(positive, negative, landscape) {
+async function generateRunware(positive, negative, landscape, seed) {
     const key = String(settings.runwareKey || '').trim();
     const model = String(settings.runwareModel || '').trim();
     if (!key) throw new Error('Runware API key is not set (SceneSnap settings)');
@@ -707,6 +707,7 @@ async function generateRunware(positive, negative, landscape) {
                         CFGScale: Number(settings.runwareCfg) || 5,
                         clipSkip: 2,
                         numberResults: 1,
+                        seed: Number.isInteger(seed) ? seed : undefined,
                         outputType: 'base64Data',
                         outputFormat: 'JPEG',
                     };
@@ -723,7 +724,7 @@ async function generateRunware(positive, negative, landscape) {
     });
 }
 
-async function generateNovelAI(positive, negative, landscape) {
+async function generateNovelAI(positive, negative, landscape, seed) {
     const { width, height } = getSize(landscape);
     const res = await fetch('/api/novelai/generate-image', {
         method: 'POST',
@@ -738,6 +739,7 @@ async function generateNovelAI(positive, negative, landscape) {
             width,
             height,
             negative_prompt: negative,
+            seed: Number.isInteger(seed) ? seed : -1,
             sm: false,
             sm_dyn: false,
             decrisper: false,
@@ -752,7 +754,7 @@ async function generateNovelAI(positive, negative, landscape) {
     return { format: 'png', data: await res.text() };
 }
 
-async function generatePollinations(positive, negative, landscape) {
+async function generatePollinations(positive, negative, landscape, seed) {
     const { width, height } = getSize(landscape);
     const res = await fetch('/api/sd/pollinations/generate', {
         method: 'POST',
@@ -764,7 +766,7 @@ async function generatePollinations(positive, negative, landscape) {
             width,
             height,
             enhance: false,
-            seed: Math.floor(Math.random() * 2 ** 31),
+            seed: Number.isInteger(seed) ? seed : Math.floor(Math.random() * 2 ** 31),
         }),
     });
     if (!res.ok) {
@@ -955,11 +957,11 @@ async function extractFirstPngFromZip(bytes) {
     throw new Error('Could not extract image from NovelAI response (unexpected zip format)');
 }
 
-async function generateWithBackend(positive, negative, landscape) {
+async function generateWithBackend(positive, negative, landscape, seed) {
     switch (settings.backend) {
-        case 'runware': return generateRunware(positive, negative, landscape);
-        case 'novelai': return generateNovelAI(positive, negative, landscape);
-        default: return generatePollinations(positive, negative, landscape);
+        case 'runware': return generateRunware(positive, negative, landscape, seed);
+        case 'novelai': return generateNovelAI(positive, negative, landscape, seed);
+        default: return generatePollinations(positive, negative, landscape, seed);
     }
 }
 
@@ -972,19 +974,30 @@ async function stitchPanels(base64List, format) {
         img.src = `data:image/${mime};base64,${b64}`;
     })));
     // Vertical webtoon stack: reads top-to-bottom, mobile-native, works for any panel count.
-    const gutter = 16;
-    const w = Math.max(...imgs.map(i => i.width));
-    const scaled = imgs.map(i => ({ img: i, h: Math.round(i.height * (w / i.width)) }));
+    // Rigid comic grid: every panel cover-fills an identical cell (first panel's dims are
+    // the contract), thin gutters, black frame per cell — the printed-strip look. Cover-crop
+    // makes it impossible for a stray odd-sized panel to break the grid.
+    const gutter = 10;
+    const cellW = imgs[0].width;
+    const cellH = imgs[0].height;
     const canvas = document.createElement('canvas');
-    canvas.width = w + gutter * 2;
-    canvas.height = scaled.reduce((sum, s) => sum + s.h, 0) + gutter * (imgs.length + 1);
+    canvas.width = cellW + gutter * 2;
+    canvas.height = cellH * imgs.length + gutter * (imgs.length + 1);
     const cx = canvas.getContext('2d');
     cx.fillStyle = '#ffffff';
     cx.fillRect(0, 0, canvas.width, canvas.height);
     let y = gutter;
-    for (const s of scaled) {
-        cx.drawImage(s.img, gutter, y, w, s.h);
-        y += s.h + gutter;
+    for (const img2 of imgs) {
+        const scale = Math.max(cellW / img2.width, cellH / img2.height);
+        const sw = cellW / scale;
+        const sh = cellH / scale;
+        const sx = (img2.width - sw) / 2;
+        const sy = (img2.height - sh) / 2;
+        cx.drawImage(img2, sx, sy, sw, sh, gutter, y, cellW, cellH);
+        cx.lineWidth = 4;
+        cx.strokeStyle = '#101010';
+        cx.strokeRect(gutter + 2, y + 2, cellW - 4, cellH - 4);
+        y += cellH + gutter;
     }
     const blob = await new Promise(resolve => canvas.toBlob(resolve, 'image/jpeg', 0.92));
     if (!blob) throw new Error('Comic strip stitching failed');
@@ -1156,8 +1169,10 @@ async function illustrateMessage(mesId, { force = false } = {}) {
             debugPrompts = finals.slice();
             panels.forEach((p, i) => p.bubbles.forEach(b => debugPrompts.push(`PANEL ${i + 1} BUBBLE — ${b.speaker || '?'}: "${b.text}"`)));
             console.log(`[SceneSnap] ${finals.length} panel(s) (${style}):`, finals);
+            // One seed for the whole strip: same character rendering in every panel.
+            const runSeed = Math.floor(Math.random() * 2 ** 31);
             for (let i = 0; i < panels.length; i++) {
-                const result = await generateWithBackend(finals[i], negative, panels.length > 1);
+                const result = await generateWithBackend(finals[i], negative, panels.length > 1, runSeed);
                 panelFormat = result.format || panelFormat;
                 let imageB64 = result.isUrl ? await urlToBase64(result.data) : result.data;
                 if (panels[i].bubbles.length) {
