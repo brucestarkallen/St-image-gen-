@@ -116,6 +116,10 @@ Stella: girl, long crimson hair, red eyes, large breasts, hair ribbon, school un
 
 ## Changelog
 
+### 0.9.1
+- **Strips render large.** Panels in sequence mode now generate in landscape and stack into a readable manhwa-strip shape (~1:2), instead of three portrait towers squeezed to a sliver by the chat viewer's height limit. Single-frame generations keep your chosen size preset untouched.
+- **Dialogue spreads across panels** — one bubble per panel by default, in speaking order; two only for a tight same-beat exchange. No more both lines crammed onto one face.
+
 ### 0.9.0 — the Reddit-strip release
 - **The strip is guaranteed.** With Max panels ≥ 2, the builder must produce at least 2 panels — "one moment carries the scene" can no longer collapse your comic into a single frame.
 - **Bubbles never chop a sentence.** Lines up to 110 chars ship whole; longer lines cut exactly at a sentence boundary, and only sentence-less run-ons get a word-safe cut with a visible ellipsis. The mid-phrase amputation ("…a Thirteenth Division") is dead.

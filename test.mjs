@@ -27,7 +27,7 @@ const FUNCS = [
     'normalizeForMatch', 'sanitizeBubbles', 'sanitizeBuilderOutput', 'softSanitize',
     'parsePanels', 'parseCastSheet', 'mergeCastLines', 'effectiveForcedTags',
     'composePositive', 'scanPresenceIn', 'markerDetails', 'ledgerStateLines',
-    'stripScene', 'isCorsProxyDisabled', 'explainError', 'isStaleSession', 'classifyFetchDeath',
+    'stripScene', 'isCorsProxyDisabled', 'explainError', 'isStaleSession', 'classifyFetchDeath', 'getSize',
 ];
 
 const prelude = `
@@ -37,6 +37,8 @@ const defaultSettings = Object.freeze({
     stripPatterns: '<details>[\\\\s\\\\S]*?</details>\\n\\\\{[A-Z_]+\\\\}[\\\\s\\\\S]*?\\\\{/[A-Z_]+\\\\}\\n<!--[\\\\s\\\\S]*?-->',
 });
 const BACKEND_QUALITY = { novelai: 'very aesthetic, masterpiece, no text, detailed background' };
+const SIZE_PRESETS = { portrait: { width: 832, height: 1216 }, landscape: { width: 1216, height: 832 }, square: { width: 1024, height: 1024 } };
+let settingsSizeRef;
 let settings = {
     forcedTags: defaultSettings.forcedTags,
     backend: 'runware',
@@ -247,6 +249,19 @@ function defaultPatterns() { return '<details>[\\s\\S]*?</details>\n\\{[A-Z_]+\\
     check('cors-guard: empty body tolerated', !S.isCorsProxyDisabled(404, ''));
 }
 
+// ---------------------------------------------------------------- strip sizing
+{
+    S._setSettings({ sizePreset: 'portrait' });
+    const p = S.getSize();
+    const l = S.getSize(true);
+    check('size: default stays portrait', p.height > p.width);
+    check('size: strip mode flips portrait panels to landscape', l.width > l.height && l.width === p.height && l.height === p.width);
+    S._setSettings({ sizePreset: 'landscape' });
+    const already = S.getSize(true);
+    check('size: an already-wide preset is untouched', already.width === 1216 && already.height === 832);
+    S._setSettings({ sizePreset: 'portrait' });
+}
+
 // ---------------------------------------------------------------- fetch-death classification
 {
     check('death: server unreachable -> null (unreachable message owns it)', S.classifyFetchDeath(false) === null);
@@ -286,6 +301,9 @@ function defaultPatterns() { return '<details>[\\s\\S]*?</details>\n\\{[A-Z_]+\\
         !src.includes("fetch('https://image.novelai.net"));
     check('src: proxy target is percent-encoded into the path',
         src.includes('/proxy/${encodeURIComponent(NAI_IMAGE_ENDPOINT)}') && !src.includes('/proxy/${NAI_IMAGE_ENDPOINT}'));
+    check('src: strip panels generate landscape (flag threaded to every panel backend)',
+        src.includes('generateWithBackend(finals[i], negative, panels.length > 1)'));
+    check('src: dialogue spreads one-per-panel by default', src.includes('Prefer ONE line per panel'));
     check('src: sequence mode floors at 2 panels — the strip is guaranteed',
         src.includes('(2 to ${maxPanels})') && src.includes('Never fewer than 2 panels'));
     check('src: two bubbles sit side-by-side in the top band, never stacked down the frame',

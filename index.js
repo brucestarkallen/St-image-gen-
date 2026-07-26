@@ -12,7 +12,7 @@ import { getBase64Async, saveBase64AsFile } from '../../../utils.js';
 import { callGenericPopup, POPUP_TYPE } from '../../../popup.js';
 
 const MODULE = 'sceneSnap';
-const VERSION = '0.9.0';
+const VERSION = '0.9.1';
 
 const defaultSettings = Object.freeze({
     enabled: true,
@@ -126,7 +126,7 @@ Rules: visual traits only — never personality, locations, positions, or curren
 
 // One canonical dialogue-bubble contract, cited by both builder paths — never restated.
 const BUBBLE_RULES = `DIALOGUE BUBBLES (active):
-Alongside each panel prompt, pick 0-2 spoken lines for that panel's beat, copied VERBATIM from the SCENE text — never invent, paraphrase, translate, or merge lines. Max 12 words per line; prefer the punchiest dialogue of the beat. "speaker" is the exact character name. If the beat has no spoken dialogue, use an empty array. The image prompt itself must still contain no dialogue or quotation marks — spoken lines go ONLY in the bubbles field; SceneSnap draws them onto the image afterward.`;
+Alongside each panel prompt, pick 0-2 spoken lines for that panel's beat, copied VERBATIM from the SCENE text — never invent, paraphrase, translate, or merge lines. Prefer ONE line per panel, spreading the dialogue across panels in speaking order; put two lines in one panel only for a tight same-beat exchange, and never repeat a line across panels. Max 12 words per line; prefer the punchiest dialogue of the beat. "speaker" is the exact character name. If the beat has no spoken dialogue, use an empty array. The image prompt itself must still contain no dialogue or quotation marks — spoken lines go ONLY in the bubbles field; SceneSnap draws them onto the image afterward.`;
 
 // One canonical grounding-authority rule, cited by both builder paths — never restated.
 const GROUNDING_RULE = `
@@ -153,8 +153,12 @@ function uuid() {
     });
 }
 
-function getSize() {
-    return SIZE_PRESETS[settings.sizePreset] || SIZE_PRESETS.portrait;
+function getSize(landscape) {
+    const p = SIZE_PRESETS[settings.sizePreset] || SIZE_PRESETS.portrait;
+    // Strip mode: stacked portrait panels make a 1:3+ tower that chat viewers shrink to a
+    // sliver. Wide frames stacked stay large and readable — the manhwa-strip shape.
+    if (landscape && p.height > p.width) return { width: p.height, height: p.width };
+    return p;
 }
 
 function resolveStyle() {
@@ -660,12 +664,12 @@ async function buildScenePrompt(mesId) {
 
 // ------------------------------------------------------------------ backends
 
-async function generateRunware(positive, negative) {
+async function generateRunware(positive, negative, landscape) {
     const key = String(settings.runwareKey || '').trim();
     const model = String(settings.runwareModel || '').trim();
     if (!key) throw new Error('Runware API key is not set (SceneSnap settings)');
     if (!model) throw new Error('Runware model AIR is not set — copy it from the model page sidebar on Civitai (e.g. civitai:XXXXXX@XXXXXXX)');
-    const { width, height } = getSize();
+    const { width, height } = getSize(landscape);
 
     return new Promise((resolve, reject) => {
         let settled = false;
@@ -719,8 +723,8 @@ async function generateRunware(positive, negative) {
     });
 }
 
-async function generateNovelAI(positive, negative) {
-    const { width, height } = getSize();
+async function generateNovelAI(positive, negative, landscape) {
+    const { width, height } = getSize(landscape);
     const res = await fetch('/api/novelai/generate-image', {
         method: 'POST',
         headers: getRequestHeaders(),
@@ -748,8 +752,8 @@ async function generateNovelAI(positive, negative) {
     return { format: 'png', data: await res.text() };
 }
 
-async function generatePollinations(positive, negative) {
-    const { width, height } = getSize();
+async function generatePollinations(positive, negative, landscape) {
+    const { width, height } = getSize(landscape);
     const res = await fetch('/api/sd/pollinations/generate', {
         method: 'POST',
         headers: getRequestHeaders(),
@@ -951,11 +955,11 @@ async function extractFirstPngFromZip(bytes) {
     throw new Error('Could not extract image from NovelAI response (unexpected zip format)');
 }
 
-async function generateWithBackend(positive, negative) {
+async function generateWithBackend(positive, negative, landscape) {
     switch (settings.backend) {
-        case 'runware': return generateRunware(positive, negative);
-        case 'novelai': return generateNovelAI(positive, negative);
-        default: return generatePollinations(positive, negative);
+        case 'runware': return generateRunware(positive, negative, landscape);
+        case 'novelai': return generateNovelAI(positive, negative, landscape);
+        default: return generatePollinations(positive, negative, landscape);
     }
 }
 
@@ -1153,7 +1157,7 @@ async function illustrateMessage(mesId, { force = false } = {}) {
             panels.forEach((p, i) => p.bubbles.forEach(b => debugPrompts.push(`PANEL ${i + 1} BUBBLE — ${b.speaker || '?'}: "${b.text}"`)));
             console.log(`[SceneSnap] ${finals.length} panel(s) (${style}):`, finals);
             for (let i = 0; i < panels.length; i++) {
-                const result = await generateWithBackend(finals[i], negative);
+                const result = await generateWithBackend(finals[i], negative, panels.length > 1);
                 panelFormat = result.format || panelFormat;
                 let imageB64 = result.isUrl ? await urlToBase64(result.data) : result.data;
                 if (panels[i].bubbles.length) {

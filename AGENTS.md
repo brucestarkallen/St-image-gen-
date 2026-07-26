@@ -28,7 +28,7 @@ Version discipline: `manifest.json` version and the `const VERSION` stamp in `in
 ## Invariants
 
 1. Invented dialogue can never reach an image (verbatim guarantee — negative-tested). Bubble text also never ends mid-sentence: whole ≤110, sentence-boundary cut, or word-cut + ellipsis (negative-tested). Two bubbles render side-by-side in the top band only.
-1b. Sequence mode (Max panels ≥ 2) is a strip contract: the builder prompt floors at 2 panels.
+1b. Sequence mode (Max panels ≥ 2) is a strip contract: the builder prompt floors at 2 panels, every panel generates landscape (getSize(landscape) flips portrait presets), and dialogue spreads one-bubble-per-panel by default.
 2. NOTHING breaks image generation: bubbles, grounding, and multi-char are all best-effort layers over the standard single-prompt route. Any multi-char failure degrades to single prompt with the obstruction named in the toast and stored in lastDebug.multiCharError — the button never returns empty while the standard route works. Negative-tested (reintroducing selective rethrow fails the gate).
 3. Bubbles OFF means zero bubbles regardless of what the builder returns (gating — negative-tested).
 4. Presets and briefs stay model-agnostic; nothing assumes a specific text or image model beyond declared backend prompt styles.
