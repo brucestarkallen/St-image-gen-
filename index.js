@@ -12,7 +12,7 @@ import { getBase64Async, saveBase64AsFile } from '../../../utils.js';
 import { callGenericPopup, POPUP_TYPE } from '../../../popup.js';
 
 const MODULE = 'sceneSnap';
-const VERSION = '0.16.0';
+const VERSION = '0.17.0';
 
 const defaultSettings = Object.freeze({
     enabled: true,
@@ -104,7 +104,9 @@ Name: girl|boy|woman|man, hair length + hair color, eye color, 2-5 distinctive p
 Example:
 Akane: girl, long black hair, ponytail, brown eyes, athletic build, school uniform, red ribbon
 Rules: visual traits only — never personality, locations, positions, or current actions. Max 12 tags per character, Danbooru-style tags, prefer information from character tracker blocks when present, skip characters already listed in EXISTING SHEET.
+CANONICAL NAME TAG (do this FIRST for every character who comes from a published work — anime, manga, game, novel — that an anime image model would know): begin their tag list with their danbooru character tag, then the work's danbooru tag, then the description. Danbooru character tags are lowercase and surname-first with the given name after: "kuchiki rukia, bleach", "abarai renji, bleach", "megumin, konosuba". The image model already knows what these characters look like and what they wear, and their own tag invokes that knowledge directly — it binds harder than any description and it never drifts between panels. Keep the description after it anyway: the tag carries the canonical look, the description carries this story's version. ORIGINAL characters have no such tag and get description only — never invent a character tag for an OC, and never guess a tag you are not sure exists.
 APPEARANCE SOURCE ORDER: 1) CANON WIKI DATA when present — it is authoritative; convert its prose faithfully into danbooru tags. 2) Story memory and chat text. 3) For an ESTABLISHED CANON CHARACTER of the story's fandom that neither source describes, use their widely known canonical appearance in standard danbooru tags — canon characters are never "unknown". Reserve "Name: gender, (appearance unknown — fill in)" strictly for ORIGINAL characters no source describes.
+RANK IS NOT AN OUTFIT, in the cast line either: write the garment you can SEE ('white armband on left arm'), never the rank that garment signifies ('lieutenant's badge', 'captain's insignia', 'officer's braid') — an image model reads a rank word as modern military dress and returns gold cuff braid and shoulder boards.
 COPY, never compose: take each trait's wording from the story/memory VERBATIM where it appears — never synonymize or re-style ('lieutenant armband' stays 'armband', never 'badge'; 'medium white hair' never becomes 'short white hair'). Adults are 'man'/'woman'; 'boy'/'girl' ONLY for characters the story marks as children or child-statured. Always include eye color and exact hair length when the story states them; never drop a distinguishing trait the memory contains; base clothing (uniform/kimono) is listed per character, not assumed. ALWAYS include the story's protagonist/viewpoint character — the player's character counts as a character. If a required character's appearance is never described, still output their line as: Name: gender, (appearance unknown — fill in). If there are no new characters at all, output NONE.`;
 
 // One canonical dialogue-bubble contract, cited by both builder paths — never restated.
@@ -129,13 +131,11 @@ GROUND TRUTH: when a CURRENT WORLD STATE block is provided, it is authoritative 
 const FRAME_LAWS = `PANEL DISCIPLINE (binding rules for every panel):
 - When someone acts ON another person (healing, striking, carrying, restraining), the panel shows BOTH — the object of the action is never cropped out. A medic kneels beside a VISIBLE patient.
 - WHO writes identity AND owns state, and WHO is not you: list each panel's characters in "who" as {"name": exact cast-sheet name, "state": THAT character's pose, expression, wounds, and action tags — pose and feeling ONLY. Never a count tag (1boy, 1girl, 2boys, solo) and never a garment: the extension computes every count itself and dresses every character itself, and a count tag inside a character's block reads to the image model as a second person starting there, which fuses the frame's two characters into one} — primary first, AT MOST TWO. Two is model physics, not preference: single-prompt tag binding cannot reliably assign a garment or a wound across three people, so a frame never holds more than two principals — everyone else is crowd. The extension enforces the cap.
-- USE both slots when the beat GENUINELY has two people in one exchange: a spoken line addressed to a present character is a TWO-shot (speaker AND addressee in "who"). But a beat that belongs to ONE person — a reaction, a salute, a private realization, a face in the crowd — is a SOLO frame, and padding it with a second principal who is doing something else somewhere else is a failed panel. Fill the second slot because the beat has two people in it, never to avoid a solo frame.
+- WHO IS THE PEOPLE THE BEAT'S ACTION PASSES BETWEEN, and nobody else. If the beat is an action between two people — speaking to, striking, healing, carrying, standing at someone's shoulder, reacting to each other — BOTH are in "who"; cropping the other one out is a failed panel. If the beat happens inside one person — a private realization, a salute to a memory, a face in the ranks — that is one name. If the beat belongs to the place or the crowd itself (the courtyard erupting, three hundred voices at once), "who" is [] — the field must still be PRESENT, because an omitted "who" is non-compliance and gets the panel rejected. Never more than two: single-prompt tag binding cannot assign a garment or a wound across three people, so a third principal means the beat SPLITS across two panels and everyone else is crowd. Never pad a frame to two, and never cut a frame to one.
 - A panel that carries a dialogue bubble must SHOW ITS SPEAKER'S FACE: dialogue never rides a from-behind, neck-down, or faceless framing of its own speaker. Only a character in THIS panel's "who" may speak in this panel — a line belonging to anyone else moves to the panel that draws them, or is dropped. The extension enforces this. The extension inserts each character's appearance block VERBATIM from the cast sheet, welds their state onto it, and computes the counts — one contiguous run per character, so the image model cannot give one character's laugh or wound to another. The panel "prompt" therefore contains ONLY what is shared: camera, lighting, atmosphere, environment, and scene-wide effects. A per-character detail in the shared prompt, or any appearance trait anywhere, is a failed panel.
 - The character an effect happens TO carries it in their OWN "state": the exploding sword detonates in its holder's state, the wound bleeds in the wounded one's state — a climax panel whose victim is missing from "who" is a failed panel. Healing, striking, carrying, restraining: BOTH parties in "who", each with their own state; "hand on patient" with no patient listed is a failed panel.
 - Characters not in physical contact get explicit spatial-relation tags in the prompt (distance between them, one far in the background, facing from across the field).
-- A frame may legitimately have NO named principal: when the beat belongs to the place or to the crowd itself (the courtyard erupting, three hundred people roaring, an empty room after everyone leaves), declare "who": [] and let the environment and the crowd carry the frame. An empty "who" must still be present as a field — omitting it is non-compliance and gets the panel rejected. A scene whose crowd reacts is not told by four frames of individual faces: give the crowd its own frame.
-- WHO IS PRINCIPALS ONLY — the people this frame is ABOUT, drawn at readable size. A character who is far away, tiny, a silhouette, or seen from behind at a distance is NOT a principal and does NOT go in "who": name them in the prompt as an environment element ("a distant figure on the far side of the courtyard"). Listing a background figure in "who" spends a subject slot and a count tag on someone three pixels tall, and the model splits its attention — both people come out degraded. The extension demotes them.
-- BOTH principals must share ONE interaction: two people in a frame are looking at, speaking to, touching, or reacting to EACH OTHER. Two people doing unrelated things in different parts of the location are TWO panels, never one frame — a single prompt cannot bind separate actions to separate distant bodies, and the model fuses them into one person carrying both.
+- A character drawn far away, tiny, or as a silhouette is NOT in "who" — name them in the prompt as an environment element ("a distant figure across the courtyard"). A background figure in "who" spends a subject slot and a count tag on someone three pixels tall. The extension demotes them.
 - SHOT GRAMMAR (every panel's "prompt", mandatory): exactly ONE framing tag (close-up / upper body / cowboy shot / full body / wide shot) + exactly ONE angle tag (from below / from behind / from side / eye level / dutch angle) + lighting and atmosphere tags (dramatic lighting, sunlight, lens flare, backlighting, wind, dust motes, motion blur where there is motion).
 - ACTING DENSITY: each character's "state" is 4-8 concrete tags — pose AND expression AND gaze AND one physical emotive detail (tears streaming, clenched fist at chest, open mouth shouting, trembling hands). A two-tag state is a failed panel.
 - "sentence" is where natural language earns its keep: ONE short plain-English sentence per panel stating the spatial arrangement and interaction ("She kneels beside him at the crater's center, pressing both hands to his chest while the crowd watches from the stands."). Relations only — any appearance word there is a failed panel.
@@ -315,6 +315,14 @@ function stripLayoutMeta(text) {
         .replace(/\s{2,}/g, ' ');
 }
 
+// Danbooru-style tags are ASCII. A macron or accent makes a near-miss token the model
+// was never trained on — "shihakusho" is a known garment, "shihakusho" with a macron is
+// not the same string, and the field run rendered a modern black dress shirt instead.
+// Fold Latin diacritics; leave CJK and everything else untouched.
+function foldTagDiacritics(text) {
+    return String(text || '').normalize('NFD').replace(/[\u0300-\u036f]/g, '');
+}
+
 function softSanitize(text, style) {
     try { return sanitizeBuilderOutput(text, style); } catch { return ''; }
 }
@@ -398,7 +406,7 @@ function parsePanels(raw, style, maxPanels, opts = {}) {
                             return { name: String(w ?? '').trim(), state: '' };
                         }).filter(w => w.name).slice(0, 2) : [];
                         return {
-                            sentence: stripLayoutMeta(String(p?.sentence ?? '').replace(/["`\n]+/g, ' ')).replace(/\s{2,}/g, ' ').trim().slice(0, 220),
+                            sentence: capSentenceSafe(stripLayoutMeta(String(p?.sentence ?? '').replace(/["`\n]+/g, ' ')).replace(/\s{2,}/g, ' '), 220),
                             who,
                             whoDeclared: Array.isArray(p?.who),
                             prompt: normalizeCountTags(softSanitize(typeof p === 'string' ? p : String(p?.prompt ?? ''), style)),
@@ -516,6 +524,19 @@ function scrubState(state, blockTags) {
 
 // Tag-safe truncation: an overlong tag list is cut at the last complete tag,
 // never mid-word — mid-word fragments ('towering mus') poison prompts.
+// The composition sentence is prose. A hard slice ends a panel mid-word ("as the ,"),
+// which the image model reads as a dangling instruction. Cut at the last sentence end,
+// else the last word boundary, and never leave trailing punctuation behind.
+function capSentenceSafe(text, n) {
+    const s = String(text || '').trim();
+    if (s.length <= n) return s;
+    const cut = s.slice(0, n);
+    const stop = Math.max(cut.lastIndexOf('. '), cut.lastIndexOf('! '), cut.lastIndexOf('? '));
+    if (stop > n * 0.5) return cut.slice(0, stop + 1).trim();
+    const at = cut.lastIndexOf(' ');
+    return (at > 0 ? cut.slice(0, at) : cut).replace(/[\s,;:—-]+$/, '').trim() + '.';
+}
+
 function capTagSafe(text, n) {
     const s = String(text || '');
     if (s.length <= n) return s;
@@ -748,6 +769,7 @@ function effectiveNegative() {
 }
 
 function composePositive(built, style) {
+    built = foldTagDiacritics(built);
     const forced = effectiveForcedTags();
     if (!forced) return built;
     if (style === 'natural') return `${built} ${forced.split(',').map(s => s.trim()).filter(Boolean).join(', ')}.`.trim();
@@ -967,9 +989,8 @@ STRIP RULES (sequence mode only):
 - Panels are the SCENE's beats in strict chronological order, first key moment to last — and the climax action itself (the strike, the explosion, the reveal) MUST be one of the panels; a strip that skips its own climax is a failed strip.
 - CONTINUITY: consecutive panels are one continuous moment in one place — carry the previous panel's consequences forward (smoke from a blast lingers in the next panel; wounds, debris, and damage persist; light and weather never change mid-scene). No panel may contradict a state an earlier panel established.
 - A beat with three or more principals is SPLIT into consecutive panels (panels are unlimited; frames are not).
-- ONE BEAT PER PANEL. If the scene has more distinct beats than you have panels, DROP the weakest beats — never merge two beats into one frame. Two beats crammed into a frame ("X salutes by the stone while Y shouts across the courtyard") is a failed panel twice over: a single prompt cannot bind two separate actions to two separate bodies, and the model fuses them.
-- Do not spend two panels on one continuous action. A sword leaving its sheath and that same sword held overhead is ONE beat rendered twice — pick the stronger image and spend the freed panel on a beat nothing else covers.
-- In a strip, a two-person exchange may also play as a shot/reverse-shot pair across two panels. Defaulting everything to solo is a failed strip.
+- ONE BEAT PER PANEL, and every panel a DIFFERENT beat. More beats than panels: drop the weakest, never merge two into one frame. One action stretched over two panels (a sword leaving its sheath, then that same sword held overhead) is one beat rendered twice — pick the stronger image and spend the freed panel on a beat nothing else covers.
+- A two-person exchange may play as a shot/reverse-shot pair across two panels.
 - Consecutive panels NEVER repeat the same framing+angle pair — vary the camera like a filmed scene.${bubblesOn ? '\n\n' + BUBBLE_RULES : ''}\nOUTPUT (replaces the single-line requirement above): strict JSON only — no reasoning, no commentary, no markdown: {"setting":"<location/environment/population tags for this scene>","dress":"<what people of this world wear, as tags>","panels":[{"who":[{"name":"Exact Cast Name","state":"<THIS character's pose, expression, wounds, and action tags>"},{"name":"...","state":"..."}],"prompt":"<camera, lighting, atmosphere, shared effects, environment ONLY>","sentence":"<ONE plain-English sentence describing only how the characters are arranged toward each other and the space — spatial relations and interaction, no appearance words>"${bubbleSchema}}]}`;
     } else if (structuredSingle) {
         fullSystem += `\n\nSINGLE FRAME (active):\nDepict exactly ONE frozen frame: the scene's FINAL visual beat — the last thing a camera would see. Choose that beat's principals for "who" and fold everyone else into the crowd; never montage, never split the moment.
@@ -1128,7 +1149,9 @@ async function generateNovelAI(positive, negative, landscape, seed) {
             sm: false,
             sm_dyn: false,
             decrisper: false,
-            variety_boost: true,
+            // Variety boost exists to push outputs apart. A strip is one continuous
+            // place across its panels, so it is switched off there and kept for singles.
+            variety_boost: !landscape,
         }),
     });
     if (!res.ok) {
@@ -1357,11 +1380,12 @@ async function illustrateMessage(mesId, { force = false } = {}) {
             // lost it on panel 1 and three hundred shinigami came back in school uniforms.
             // Bind it to the population instead: a distinct phrase no character block holds.
             const crowdDress = firstGarmentTag(dress);
-            const anchorFor = p => [
-                setting,
-                p.crowd && crowdDress ? `crowd in ${crowdDress}` : '',
-                dress,
-            ].filter(Boolean).join(', ');
+            const anchorFor = (p) => {
+                const bound = p.crowd && crowdDress ? `crowd in ${crowdDress}` : '';
+                const rest = String(dress || '').split(',').map(t => t.trim())
+                    .filter(t => t && !(bound && bound.toLowerCase().includes(t.toLowerCase())));
+                return [setting, bound, ...rest].filter(Boolean).join(', ');
+            };
             const negFull = antiModernNegative(dress) ? `${negative}, ${antiModernNegative(dress)}` : negative;
             // Hybrid prompting: tags own identity/state (binding); NAI 4.5-class models also
             // read short natural sentences well, and sentences beat tags at spatial relations —

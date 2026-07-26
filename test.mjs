@@ -24,7 +24,7 @@ function extract(name) {
 }
 
 const FUNCS = [
-    'splitPrincipals', 'framesCrowd', 'enforceShotGrammar', 'hasGarment', 'firstGarmentTag', 'stripTransientFromSetting',
+    'splitPrincipals', 'framesCrowd', 'enforceShotGrammar', 'hasGarment', 'firstGarmentTag', 'stripTransientFromSetting', 'capSentenceSafe', 'foldTagDiacritics',
     'normalizeForMatch', 'sanitizeBubbles', 'sanitizeBuilderOutput', 'softSanitize',
     'parsePanels', 'parseCastSheet', 'mergeCastLines', 'effectiveForcedTags',
     'composePositive', 'scanPresenceIn', 'markerDetails', 'ledgerStateLines',
@@ -464,6 +464,27 @@ function defaultPatterns() { return '<details>[\\s\\S]*?</details>\n\\{[A-Z_]+\\
         S.stripTransientFromSetting('courtyard, dispersing crowd of shinigami in black shihakusho, bare plum tree')
             === 'courtyard, crowd of shinigami in black shihakusho, bare plum tree'
         && S.stripTransientFromSetting('cheering crowd, marching soldiers') === 'crowd, soldiers');
+    // Field regression, snap_31 v0.16.0: the panel ended on "as the ," — a dangling
+    // fragment the image model has to interpret.
+    check('sentence: a long sentence is cut at a boundary, never mid-word',
+        (() => {
+            const s = 'The courtyard erupts and three hundred voices slam into the chant at once, fists punch the cold air, a cook waves his ladle overhead, nurses cry and chant together, and officers on the roof tiles leap to their feet as the sound rolls out over the wall.';
+            const c = S.capSentenceSafe(s, 220);
+            return c.length <= 221 && !/[\s,;:]$/.test(c) && s.startsWith(c.replace(/\.$/, ''));
+        })());
+    check('sentence: a short sentence is untouched',
+        S.capSentenceSafe('She kneels beside him.', 220) === 'She kneels beside him.');
+    check('sentence: cuts at a full stop when one is available late enough',
+        S.capSentenceSafe('A'.repeat(120) + '. ' + 'B'.repeat(200), 220).endsWith('.')
+        && S.capSentenceSafe('A'.repeat(120) + '. ' + 'B'.repeat(200), 220).length === 121);
+
+    // Field regression: the macron made "shihakusho" a token the model never trained on,
+    // and the garment came back as a modern black dress shirt.
+    check('tags: Latin diacritics are folded to the trained danbooru spelling',
+        S.foldTagDiacritics('black shihakush\u014d, caf\u00e9 table') === 'black shihakusho, cafe table');
+    check('tags: non-Latin scripts are left alone',
+        S.foldTagDiacritics('1girl, \u6b7b\u795e, black shihakusho') === '1girl, \u6b7b\u795e, black shihakusho');
+
     check('setting: standing description untouched',
         S.stripTransientFromSetting('stone courtyard, memorial stone, pale winter sun')
             === 'stone courtyard, memorial stone, pale winter sun');
@@ -628,10 +649,25 @@ function defaultPatterns() { return '<details>[\\s\\S]*?</details>\n\\{[A-Z_]+\\
     check('src: garments and transient activity are enforced, not merely mandated',
         src.includes('if (hasGarment(low) && !GARMENT_CONDITION.test(low)) continue;')
         && src.includes('stripTransientFromSetting(capTags(obj?.setting, 16))'));
-    check('src: laws — crowd frames, one beat per panel, no beat spent twice',
-        src.includes('declare "who": [] and let the environment and the crowd carry the frame')
-        && src.includes('ONE BEAT PER PANEL')
-        && src.includes('Do not spend two panels on one continuous action'));
+    check('src: who-membership is ONE rule with no counter-rule pulling against it',
+        src.includes("WHO IS THE PEOPLE THE BEAT'S ACTION PASSES BETWEEN")
+        && src.includes('Never pad a frame to two, and never cut a frame to one.')
+        && src.includes('"who" is [] — the field must still be PRESENT')
+        && src.includes('ONE BEAT PER PANEL, and every panel a DIFFERENT beat')
+        // the rule this one replaced pulled the opposite way and produced an all-solo strip
+        && !src.includes('Defaulting everything to solo is a failed strip')
+        && !src.includes('BOTH principals must share ONE interaction'));
+    check('src: diacritics folded and sentences cut at a boundary, both wired in',
+        src.includes('built = foldTagDiacritics(built);')
+        && src.includes('sentence: capSentenceSafe(stripLayoutMeta('));
+    check('src: variety boost is off for strips — a strip is one continuous place',
+        src.includes('variety_boost: !landscape,'));
+    check('src: the dress anchor lands once, not three times',
+        src.includes('.filter(t => t && !(bound && bound.toLowerCase().includes(t.toLowerCase())))'));
+    check('src: canon characters get their danbooru character tag; OCs never do',
+        src.includes('CANONICAL NAME TAG') && src.includes('kuchiki rukia, bleach')
+        && src.includes('never invent a character tag for an OC')
+        && src.includes('RANK IS NOT AN OUTFIT, in the cast line either'));
     check('src: bubbles can only be spoken by someone drawn in the frame',
         src.includes('function sanitizeBubbles(list, sceneText, who)')
         && src.includes('if (!speakerPresent(speaker)) continue;')
@@ -640,8 +676,8 @@ function defaultPatterns() { return '<details>[\\s\\S]*?</details>\n\\{[A-Z_]+\\
         src.includes("opts.crowd ? 'crowd' : ''")
         && src.includes('const crowdHere = framesCrowd(anchorText) || framesCrowd(p.prompt);')
         && src.includes('const { principals, background } = splitPrincipals(p.who);'));
-    check('src: laws match enforcement — principals-only, shared interaction, standing setting',
-        src.includes('WHO IS PRINCIPALS ONLY') && src.includes('BOTH principals must share ONE interaction')
+    check('src: laws match enforcement — background demotion, speaker presence, standing setting',
+        src.includes('A character drawn far away, tiny, or as a silhouette is NOT in "who"')
         && src.includes('Only a character in THIS panel\'s "who" may speak in this panel')
         && src.includes('"setting" is a STANDING description')
         && !src.includes('the extension appends a placement tag'));
@@ -665,10 +701,9 @@ function defaultPatterns() { return '<details>[\\s\\S]*?</details>\n\\{[A-Z_]+\\
         src.includes('antiModernNegative(dress) ? `${negative}, ${antiModernNegative(dress)}` : negative')
         && src.includes('generateWithBackend(finals[i], negFull,'));
     check('src: dialogue beats are two-shots and bubbles show the speaker\'s face',
-        src.includes('a spoken line addressed to a present character is a TWO-shot')
+        src.includes('BOTH are in "who"; cropping the other one out is a failed panel')
         && src.includes("SHOW ITS SPEAKER'S FACE")
-        && src.includes('Defaulting everything to solo is a failed strip')
-        && src.includes('padding it with a second principal who is doing something else somewhere else is a failed panel'));
+        && src.includes('A two-person exchange may play as a shot/reverse-shot pair across two panels.'));
     check('src: welded panels share the run seed (one place); the who-hash backstops unwelded ones',
         src.includes('seedForPanel(runSeed, (panels[i].who || []).map(w => w.name), panels[i].welded)')
         && src.includes('if (identityWelded) return (runSeed >>> 0) % 2147483647;')
