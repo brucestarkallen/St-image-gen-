@@ -114,6 +114,10 @@ Stella: girl, long crimson hair, red eyes, large breasts, hair ribbon, school un
 
 ## Changelog
 
+### 0.11.3
+- **The cast author copies canon, never composes it.** Auto-build must take trait wording verbatim from story memory ('armband' can never become 'badge', 'medium' can never become 'short'), keep eye colors and exact hair lengths, list base clothing per character, and use 'man'/'woman' for adults — 'boy'/'girl' only for canonically child-statured characters.
+- **The delete-per-chat ritual is dead.** Every chat now seeds its own NEW characters automatically, once, append-only — existing lines are never modified. To refresh one wrong entry: delete that single line; the next chat re-seeds it fresh.
+
 ### 0.11.2
 - **Every generation self-identifies.** Show last generation now opens with `ENGINE vX.Y.Z` and `CAST — "name": N entries (first: ...)`, and the popup header carries the version. A pasted dump can never again be ambiguous about which engine ran or which cast sheet identity was copied from — the two questions that burned this session's last three rounds.
 - Reminder the provenance line makes actionable: **each chat remembers its own active cast.** If the CAST line names an auto-built slot with paraphrased entries instead of your curated sheet, switch the cast dropdown for that chat — verbatim insertion is only as good as the sheet it copies.

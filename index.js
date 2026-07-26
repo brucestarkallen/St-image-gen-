@@ -12,7 +12,7 @@ import { getBase64Async, saveBase64AsFile } from '../../../utils.js';
 import { callGenericPopup, POPUP_TYPE } from '../../../popup.js';
 
 const MODULE = 'sceneSnap';
-const VERSION = '0.11.2';
+const VERSION = '0.11.3';
 
 const defaultSettings = Object.freeze({
     enabled: true,
@@ -102,7 +102,8 @@ Output one line per NEW named character, in exactly this format and nothing else
 Name: girl|boy|woman|man, hair length + hair color, eye color, 2-5 distinctive physical tags, default outfit tags
 Example:
 Akane: girl, long black hair, ponytail, brown eyes, athletic build, school uniform, red ribbon
-Rules: visual traits only — never personality, locations, positions, or current actions. Max 12 tags per character, Danbooru-style tags, prefer information from character tracker blocks when present, skip characters already listed in EXISTING SHEET. ALWAYS include the story's protagonist/viewpoint character — the player's character counts as a character. If a required character's appearance is never described, still output their line as: Name: gender, (appearance unknown — fill in). If there are no new characters at all, output NONE.`;
+Rules: visual traits only — never personality, locations, positions, or current actions. Max 12 tags per character, Danbooru-style tags, prefer information from character tracker blocks when present, skip characters already listed in EXISTING SHEET.
+COPY, never compose: take each trait's wording from the story/memory VERBATIM where it appears — never synonymize or re-style ('lieutenant armband' stays 'armband', never 'badge'; 'medium white hair' never becomes 'short white hair'). Adults are 'man'/'woman'; 'boy'/'girl' ONLY for characters the story marks as children or child-statured. Always include eye color and exact hair length when the story states them; never drop a distinguishing trait the memory contains; base clothing (uniform/kimono) is listed per character, not assumed. ALWAYS include the story's protagonist/viewpoint character — the player's character counts as a character. If a required character's appearance is never described, still output their line as: Name: gender, (appearance unknown — fill in). If there are no new characters at all, output NONE.`;
 
 // One canonical dialogue-bubble contract, cited by both builder paths — never restated.
 const BUBBLE_RULES = `DIALOGUE BUBBLES (active):
@@ -1014,7 +1015,10 @@ async function illustrateMessage(mesId, { force = false } = {}) {
     setButtonBusy(mesId, true);
 
     try {
-        if (settings.autoCast && !getActiveCastSheet()) {
+        if (settings.autoCast) {
+            // Every chat seeds its own NEW characters once — append-only: existing lines
+            // are never touched (the builder skips them and mergeCastLines keeps them).
+            // Refreshing a wrong entry = delete that one line; the next chat re-seeds it.
             const ctx0 = getContext();
             const bootKey = `${ctx0.chatId ?? 'chat'}:${getActiveCastName()}`;
             if (!castBootstrapAttempted.has(bootKey)) {

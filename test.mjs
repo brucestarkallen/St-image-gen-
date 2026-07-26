@@ -371,6 +371,11 @@ function defaultPatterns() { return '<details>[\\s\\S]*?</details>\n\\{[A-Z_]+\\
         && src.includes('oriented toward whoever they address'));
     check('src: explicit scenes are tagged explicitly, anatomy locked to cast sheet',
         src.includes('EXPLICIT SCENES:') && src.includes('never euphemize') && src.includes('fullSystem += NSFW_RULE;'));
+    check('src: the cast author copies canon verbatim — no synonyms, adults are man/woman',
+        src.includes('COPY, never compose') && src.includes("never 'badge'")
+        && src.includes("ONLY for characters the story marks as children"));
+    check('src: every chat seeds its new characters append-only, no emptiness gate',
+        src.includes('Every chat seeds its own NEW characters once') && !src.includes('settings.autoCast && !getActiveCastSheet()'));
     check('src: every generation self-identifies — engine version + cast provenance in the debug record',
         src.includes('`ENGINE v${VERSION}`')
         && src.includes('CAST — "${getActiveCastName()}"')
