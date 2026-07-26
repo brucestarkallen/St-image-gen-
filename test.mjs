@@ -257,8 +257,9 @@ function defaultPatterns() { return '<details>[\\s\\S]*?</details>\n\\{[A-Z_]+\\
     {
         S._setSettings({ backend: 'novelai', forcedTags: 'masterpiece, best quality, absurdres, detailed background' });
         const out = S.composePositive('1boy, shouting, courtyard', 'tags');
-        check('nai: quality block prepended with emphasis braces',
-            out.startsWith('{very aesthetic, best quality, amazing quality}, 1boy, shouting, courtyard'));
+        check('nai: quality block prepended UNBRACED (0.27.0 user A/B — braces hurt the aesthetic)',
+            out.startsWith('very aesthetic, best quality, amazing quality, 1boy, shouting, courtyard')
+            && !out.includes('{'));
         check('nai: tail carries no-text + the docs-backed flat-color rescue',
             /no text, detailed background, -1\.5::flat color ::$/.test(out));
         check('nai: natural style keeps the classic append path',
@@ -876,11 +877,33 @@ function defaultPatterns() { return '<details>[\\s\\S]*?</details>\n\\{[A-Z_]+\\
     const gid = S.assembleIdentity([{ name: 'Rukia', state: 'hands folded, tears forming' }],
         'Rukia: woman, short black hair, violet eyes, petite', { dress: 'black shihakusho', worldDress: 'black shihakusho' });
     const gb = gid.blocks[0];
-    check('garment: welded dress precedes state and is emphasis-braced',
-        gb.indexOf('{black shihakusho}') !== -1 && gb.indexOf('{black shihakusho}') < gb.indexOf('hands folded'));
-    // appendAnchor sees through the braces — no tail duplicate.
+    check('garment: welded dress precedes state, unbraced',
+        gb.indexOf('black shihakusho') !== -1 && !gb.includes('{')
+        && gb.indexOf('black shihakusho') < gb.indexOf('hands folded'));
+    // appendAnchor sees through braces — no tail duplicate.
     check('garment: anchor dedupe sees through emphasis braces',
         S.appendAnchor('1girl, {black shihakusho}, wind', 'black shihakusho, courtyard') === '1girl, {black shihakusho}, wind, courtyard');
+}
+
+// ---------------------------------------------------------------- NSFW state budget + state lighting scrub (0.27.0)
+{
+    // The 200-char cap amputated anatomy off the end of explicit states.
+    // Anatomy lands at ~206 chars here: cut at 200, kept at 420.
+    const longState = 'completely nude, nipples, breasts, ' + Array(6).fill('trembling with pleasure').join(', ') + ', pussy, vaginal sex';
+    check('nsfw: explicit states keep their anatomy past the old 200-char cap',
+        /pussy, vaginal sex$/.test(S.scrubState(longState, 'woman, long hair', 420))
+        && !/vaginal sex/.test(S.scrubState(longState, 'woman, long hair', 200)));
+    check('nsfw: SFW states still cap at 200',
+        S.scrubState(Array(30).fill('standing very still').join(', '), 'man, tall', 200).length <= 201);
+    check('nsfw: cap defaults to 200 when omitted',
+        S.scrubState(Array(30).fill('standing very still').join(', '), 'man, tall').length <= 201);
+    // The explicit cap is chosen by EXPLICIT_STATE at the weld.
+    const nid2 = S.assembleIdentity([{ name: 'Mira', state: longState }], 'Mira: girl, long silver hair, blue eyes', {});
+    check('nsfw: the weld routes explicit states to the 420 budget',
+        /vaginal sex/.test(nid2.blocks[0]));
+    // Lighting in a STATE gets the same sky-unification as the shared prompt.
+    check('sky: state-sourced lighting is scrubbed at the weld call site',
+        src.includes('w.state = unifyStripLighting(String(w.state || \'\'), anchorText);'));
 }
 
 // ---------------------------------------------------------------- source-level invariants
@@ -1049,11 +1072,11 @@ function defaultPatterns() { return '<details>[\\s\\S]*?</details>\n\\{[A-Z_]+\\
         && src.includes('where natural language earns its keep')
         && src.includes("p.sentence && style === 'tags'"));
     check('src: state purity is enforced in code, not requested',
-        src.includes('function scrubState(') && src.includes('stripRankInsignia(scrubState(state, tags))'));
+        src.includes('function scrubState(') && src.includes('stripRankInsignia(scrubState(state, tags, EXPLICIT_STATE.test(state) ? 420 : 200))'));
     check('src: state is bound to its owner by schema and weld',
         src.includes('"state":"<THIS character') && src.includes('welds their state onto it')
         && src.includes("carries it in their OWN \"state\"")
-        && src.includes('const scrubbed = stripRankInsignia(scrubState(state, tags));')
+        && src.includes('const scrubbed = stripRankInsignia(scrubState(state, tags, EXPLICIT_STATE.test(state) ? 420 : 200));')
         && src.includes('const dressed = applyUndress(tags, scrubbed);')
         && src.includes('blocks.push([dressed, clothing, scrubbed].filter(Boolean).join(\', \'));'));
     check('src: setting and dress are tag-capped in code',

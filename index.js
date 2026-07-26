@@ -12,7 +12,7 @@ import { getBase64Async, saveBase64AsFile } from '../../../utils.js';
 import { callGenericPopup, POPUP_TYPE } from '../../../popup.js';
 
 const MODULE = 'sceneSnap';
-const VERSION = '0.26.0';
+const VERSION = '0.27.0';
 
 const defaultSettings = Object.freeze({
     enabled: true,
@@ -69,7 +69,11 @@ const BACKEND_NEGATIVE = {
 // v4_prompt.caption.base_caption, which NAI parses server-side. The tail carries
 // V4.5 negative emphasis — the docs' own rescue for flat, washed output
 // ("-2.5::flat color :: can fancy it right up"); 1.5 is the moderate dose.
-const BACKEND_QUALITY_FRONT = { novelai: '{very aesthetic, best quality, amazing quality}' };
+// Braces are OUT (0.27.0, user A/B): the quality words keep the front position but
+// ship unbraced — emphasis syntax made the aesthetic visibly worse in the field,
+// and a field A/B outranks the doc's ×1.05 arithmetic. The numeric tail stays: it
+// is the docs' own flatness rescue and carries no brace artifacts.
+const BACKEND_QUALITY_FRONT = { novelai: 'very aesthetic, best quality, amazing quality' };
 const BACKEND_QUALITY_TAIL = { novelai: 'no text, detailed background, -1.5::flat color ::' };
 
 let lastDebug = null;
@@ -147,7 +151,7 @@ const FRAME_LAWS = `PANEL DISCIPLINE (binding rules for every panel):
 - The character an effect happens TO carries it in their OWN "state": the exploding sword detonates in its holder's state, the wound bleeds in the wounded one's state — a climax panel whose victim is missing from "who" is a failed panel. Healing, striking, carrying, restraining: BOTH parties in "who", each with their own state; "hand on patient" with no patient listed is a failed panel.
 - Characters not in physical contact get explicit spatial-relation tags in the prompt (distance between them, one far in the background, facing from across the field).
 - A character drawn far away, tiny, or as a silhouette is NOT in "who" — name them in the prompt as an environment element ("a distant figure across the courtyard"). A background figure in "who" spends a subject slot and a count tag on someone three pixels tall. The extension demotes them.
-- SHOT GRAMMAR (every panel's "prompt", mandatory): exactly ONE framing tag (close-up / upper body / cowboy shot / full body / wide shot) + exactly ONE angle tag (from below / from behind / from side / eye level / dutch angle) + lighting and atmosphere tags (dramatic lighting, sunlight, lens flare, backlighting, wind, dust motes, motion blur where there is motion).
+- SHOT GRAMMAR (every panel's "prompt", mandatory): exactly ONE framing tag (close-up / upper body / cowboy shot / full body / wide shot) + exactly ONE angle tag (from below / from behind / from side / eye level / dutch angle) + lighting and atmosphere tags (dramatic lighting, sunlight, lens flare, backlighting, wind, dust motes, motion blur where there is motion). A frame whose crowd must be SEEN needs a crowd-visible camera — cowboy shot / wide shot / eye level / from above. NEVER from below or close-up when the crowd matters: a camera pointed at the sky or into a face crops the audience out of the frame, and the panel renders an empty venue with 'crowd' sitting in the tags (field-proven).
 - ACTING DENSITY: each character's "state" is 4-8 concrete tags — pose AND expression AND gaze AND one physical emotive detail (tears streaming, clenched fist at chest, open mouth shouting, trembling hands). A two-tag state is a failed panel.
 - "sentence" is where natural language earns its keep: ONE short plain-English sentence per panel stating the spatial arrangement and interaction ("She kneels beside him at the crater's center, pressing both hands to his chest while the crowd watches from the stands."). Relations only — any appearance word there is a failed panel.
 - Never blend two people into one, and never render anyone as a child unless their cast tags say so.
@@ -566,7 +570,12 @@ const SIZE_NOUN = /\b(?:posture|frame|figure|build|stature|body|form|size|height
 
 const GARMENT_CONDITION = /\b(?:torn|ripped|shredded|tattered|slashed|cut|open|opened|undone|unbuttoned|unfastened|loose|falling|fallen|removed|discarded|missing|soaked|wet|bloodied|bloody|dirty|muddy|burned|burnt|singed|scorched|disheveled|askew|pulled|lifted|hiked|blowing|billowing|fluttering|stirring|flaring|swirling|damaged|half-?off)\b/i;
 
-function scrubState(state, blockTags) {
+// The 200-char state cap was silently amputating NSFW states: the explicit-scene
+// law demands undress + anatomy + position + fluids per character (300+ chars), so
+// nipples and genitals were truncated off the END of the state before the image ever
+// saw them (the NSFW regression vs the pre-weld versions, whose builder-written
+// prompts had no cap). Explicit states get 420; everyone else keeps 200.
+function scrubState(state, blockTags, cap = 200) {
     const blockToks = String(blockTags || '').split(',').map(t => t.trim()).filter(Boolean);
     const blockSet = new Set(blockToks.map(t => t.toLowerCase()));
     // Count tags are computed by code and belong at the head of the prompt. A "1boy"
@@ -594,7 +603,7 @@ function scrubState(state, blockTags) {
         if (SIZE_WORD.test(low) && SIZE_WORD.test(String(blockTags || ''))
             && (words.length === 1 || SIZE_NOUN.test(low))) continue;
         if (low.length < 3) continue;
-        if (used + t.length + 2 > 200) break;
+        if (used + t.length + 2 > cap) break;
         out.push(t);
         used += t.length + 2;
     }
@@ -747,7 +756,7 @@ function assembleIdentity(who, sheetText, opts = {}) {
         const hit = byName.get(name.trim().toLowerCase());
         if (hit && !isPlaceholderTags(hit.tags)) {
             const tags = neutralizeRoleUniforms(stripRankInsignia(stripNameTags(hit.tags, hit.name)), opts.worldDress || opts.dress);
-            const scrubbed = stripRankInsignia(scrubState(state, tags));
+            const scrubbed = stripRankInsignia(scrubState(state, tags, EXPLICIT_STATE.test(state) ? 420 : 200));
             // A state of undress UNDRESSES the weld, or the welded garment wins.
             const dressed = applyUndress(tags, scrubbed);
             // A character the state undressed never gets re-dressed by the world
@@ -761,9 +770,7 @@ function assembleIdentity(who, sheetText, opts = {}) {
             // world the anti-modern gate fires on, the garment is emphasis-braced.
             const worldDress = String(opts.dress || '').trim();
             const needsDress = !undressing && !hasGarment(dressed) && !hasGarment(scrubbed) && worldDress;
-            const clothing = needsDress
-                ? (antiModernNegative(opts.worldDress || worldDress) ? `{${worldDress}}` : worldDress)
-                : '';
+            const clothing = needsDress ? worldDress : '';
             blocks.push([dressed, clothing, scrubbed].filter(Boolean).join(', '));
         }
         else missing.push(name.trim() || '(unnamed)');
@@ -1403,6 +1410,10 @@ ${FRAME_LAWS}${bubblesOn ? '\n\n' + BUBBLE_RULES : ''}\nOUTPUT (replaces the sin
         }
         const { principals, background } = splitPrincipals(p.who);
         if (background.length) console.warn('[SceneSnap] background figure(s) demoted out of who:', background.map(w => w.name));
+        // Lighting smuggled in via STATE bypasses the sky-unifier, which only scrubs
+        // the shared prompt (field: 'dramatic backlighting from pale sun' welded into
+        // a block gave one panel its own sky).
+        for (const w of principals) w.state = unifyStripLighting(String(w.state || ''), anchorText);
         const id = assembleIdentity(principals, activeSheet, { dress: firstGarmentTag(dress), worldDress: dress });
         if (id.missing.length) console.warn('[SceneSnap] panel "who" names still not in cast sheet:', id.missing);
         const bgTag = background.length ? backgroundFigureTag(background, activeSheet) : '';

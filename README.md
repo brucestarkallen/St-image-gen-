@@ -114,6 +114,13 @@ Stella: girl, long crimson hair, red eyes, large breasts, hair ribbon, school un
 
 ## Changelog
 
+### 0.27.0 — braces out, anatomy no longer truncated, crowds get a visible camera
+- **Reverted: all `{}` emphasis braces (user A/B).** The quality block keeps its front position but ships unbraced; welded garments keep their before-state position unbraced. A field A/B outranks the doc's ×1.05 arithmetic. The numeric `-1.5::flat color ::` tail stays (docs' flatness rescue, no brace artifacts).
+- **Fixed: the actual NSFW anatomy killer.** `scrubState`'s 200-char cap was amputating anatomy off the END of explicit states — the NSFW law demands undress + anatomy + position + fluids (300+ chars), so nipples/genitals were truncated before reaching the prompt. Explicit states now get a 420-char budget; SFW keeps 200. This is the regression vs. the old pre-weld versions (builder-written prompts had no cap).
+- **Fixed: lighting smuggled in via character state.** `dramatic backlighting from pale sun` inside a *state* bypassed the sky-unifier, which only scrubbed the shared prompt — one panel got its own sky. States are now sky-scrubbed at the weld.
+- **Crowd camera law:** a frame whose crowd must be SEEN needs a crowd-visible camera (cowboy shot / wide shot / eye level / from above) — never `from below` or `close-up`. Panel 1's crowd sat correctly in the tags at position ~20 and rendered as an empty courtyard because the camera pointed at the sky.
+- Gate: 264 → 269 checks; the explicit-budget guard negative-tested.
+
 ### 0.26.0 — the weld undresses, the crowd moves forward, the garment takes position
 - **Fixed: the NSFW regression (two causes).** (1) The 0.25.0 `seen from behind` demotion fired on from-behind *positions* — the partner became a 'distant figure' and positioning collapsed. One anatomy/position tag anywhere in the frame's states now marks it explicit (`EXPLICIT_STATE`), and explicit frames never demote. (2) The weld dressed every character from the cast sheet, so a `dress removed` / `completely nude` state fought welded clothing and the model drew the clothes ON. `applyUndress()` now undresses the weld in code: `nude`/`naked` strips every garment token, a condition token (`kosode removed`, `shirt open`) strips just that garment — and an undressed character is never re-dressed by the world-dress weld (the gate caught exactly that). Explicit anatomy tags ride the state verbatim, as always.
 - **Fixed: crowd present in words, absent in pixels.** The crowd lived only in the anchor tail (~token 50 — weather, under `use_order`). When a frame has a crowd, the anchor's own crowd words are now hoisted to directly after the identity blocks (`hoistCrowdTokens`). Same words, front position; no invented tags.
