@@ -330,6 +330,11 @@ function defaultPatterns() { return '<details>[\\s\\S]*?</details>\n\\{[A-Z_]+\\
         && src.includes('Number.isInteger(seed) ? seed : Math.floor'));
     check('src: stitch is a rigid cover-filled grid with framed cells',
         src.includes('cx.drawImage(img2, sx, sy, sw, sh, gutter, y, cellW, cellH)') && src.includes('cx.strokeRect(gutter + 2'));
+    check('src: panel discipline — count tags, two-character cap, no role-word clothing, speaker orientation, concrete actions',
+        src.includes('At most TWO named characters drawn per panel')
+        && src.includes('jobs, not outfits')
+        && src.includes('oriented toward whoever they address')
+        && src.includes("never compound phrases like 'hands clapping together'"));
     check('src: panel prompts are single frames by contract (rule + scrub wired)',
         src.includes('never write layout words') && src.includes('stripLayoutMeta(t.replace'));
     check('src: blocked multichar transport latches off for the session',
