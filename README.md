@@ -114,6 +114,15 @@ Stella: girl, long crimson hair, red eyes, large breasts, hair ribbon, school un
 
 ## Changelog
 
+### 0.10.1
+- **Explicit scenes are tagged explicitly.** New builder law: sexual/nude beats get concrete danbooru anatomy tags per character (undress state, exposed anatomy with size/texture descriptors, exact position by its danbooru name, contact state, fluids), with proportions locked to each character's cast tags across every image. Tip: fix sizes/marks in the cast sheet once and they stay identical everywhere. Vague NSFW was the worst-case of the general problem — body position accuracy — so precision here lifts every scene.
+- **Strips are chronological and complete**: panels follow the scene's beats in strict order and the climax action (the strike, the explosion) MUST be one of them.
+- **Panels are interconnected**: consequences carry forward — smoke lingers, wounds and debris persist, light never changes mid-scene; no panel may contradict an earlier one.
+- **Acting on someone shows both parties**: the medic kneels beside a visible patient, never a cropped-out one.
+- **Cast cap lifted to four** named characters per panel when the beat needs them (fewest preferred; full tag block per character, exact danbooru count tags).
+- **Fixed: rank garments stamped on everyone.** The world-dress anchor was appending `captain haori, lieutenant armband` to every panel — including a no-insignia protagonist. The dress field is now contractually the universal base outfit only, and the cast-mining backstop filters rank-bearing garments. Negative-tested.
+- Gate repair: an 0.10.0 trim overshoot had silently dropped four behavioral suites (anchor/mine/layout/stale) — restored, 73 checks green.
+
 ### 0.10.0 — multi-character mode removed
 - **NAI multi-character mode is gone**, deliberately. Honest ledger: it was never observed working end-to-end anywhere — the build rig proved every link except the final NovelAI hop, and on the one real device it ran on, its transport died at browser level across clean browsers with every blocker theory eliminated. A feature that can't be verified and can't be used is a liability, and since 0.9.5/0.9.6 (seed-lock, two-character cap, solo close-ups, stamped world) the strips it was meant to help never touch it. Removed whole: transport, token setting, session latch, zip extractor, its prompts and its toasts. The last version carrying it is v0.9.6 (`git checkout v0.9.6-era` via history) if a desktop deployment ever wants to resurrect and actually verify it.
 - The sheetless warning now fires on a sheet with no parseable entries, not just an empty one.

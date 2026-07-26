@@ -12,7 +12,7 @@ import { getBase64Async, saveBase64AsFile } from '../../../utils.js';
 import { callGenericPopup, POPUP_TYPE } from '../../../popup.js';
 
 const MODULE = 'sceneSnap';
-const VERSION = '0.10.0';
+const VERSION = '0.10.1';
 
 const defaultSettings = Object.freeze({
     enabled: true,
@@ -107,6 +107,12 @@ Rules: visual traits only — never personality, locations, positions, or curren
 // One canonical dialogue-bubble contract, cited by both builder paths — never restated.
 const BUBBLE_RULES = `DIALOGUE BUBBLES (active):
 Alongside each panel prompt, pick 0-2 spoken lines for that panel's beat, copied VERBATIM from the SCENE text — never invent, paraphrase, translate, or merge lines. Prefer ONE line per panel, spreading the dialogue across panels in speaking order; put two lines in one panel only for a tight same-beat exchange, and never repeat a line across panels. Max 12 words per line; prefer the punchiest dialogue of the beat. "speaker" is the exact character name. If the beat has no spoken dialogue, use an empty array. The image prompt itself must still contain no dialogue or quotation marks — spoken lines go ONLY in the bubbles field; SceneSnap draws them onto the image afterward.`;
+
+// Explicit scenes get explicit tags: vagueness is the accuracy killer in NSFW beats,
+// and body position accuracy is the hardest part of any scene. One canonical rule.
+const NSFW_RULE = `
+
+EXPLICIT SCENES: when the scene is sexual or nude, tag it exactly — never euphemize or fade to black. State per character: state of undress (specific garments removed/open), exposed anatomy with concrete danbooru anatomy tags (breast size class and nipples, penis/erection/testicles, pussy/vulva, pubic hair state, skin tone and texture details), and body proportions CONSISTENT with that character's cast tags in every panel. Name the exact position by its danbooru term (missionary, cowgirl position, doggystyle, standing sex, ...), the penetration or contact state, hand and leg placement, and fluids. In natural-language mode, express the same specifics as prose. Anatomy follows the cast sheet: if a character's sheet fixes sizes or marks, keep them identical in every image.`;
 
 // One canonical grounding-authority rule, cited by both builder paths — never restated.
 const GROUNDING_RULE = `
@@ -388,6 +394,9 @@ function mineDressTags(castText) {
             const tag = t.trim();
             const low = tag.toLowerCase();
             if (!tag || seen.has(low)) continue;
+            // Rank/status garments are per-character, not world dress — stamping them on
+            // everyone dressed a no-insignia protagonist in a captain's haori (field bug).
+            if (/captain|lieutenant|commander|general|sergeant|king|queen|royal/.test(low)) continue;
             if (garments.some(g => low.includes(g))) { seen.add(low); out.push(tag); }
         }
     }
@@ -611,18 +620,21 @@ async function buildScenePrompt(mesId) {
         fullSystem += '\n\nTARGET MODEL: NovelAI Diffusion V4.5 — blend Danbooru tags with a few short natural phrases used as tags (e.g. "moonlit stone alley at night", "crowded arena under harsh sun"); count tags and sheet-verbatim appearance rules still apply.';
     }
     if (grounding.has) fullSystem += GROUNDING_RULE;
+    fullSystem += NSFW_RULE;
     const bubbleSchema = bubblesOn ? ',"bubbles":[{"speaker":"<name>","text":"<verbatim quote>"}]' : '';
     if (maxPanels > 1) {
         fullSystem += `\n\nSEQUENCE MODE (active):\nBuild a vertical comic strip: decide how many panels (2 to ${maxPanels}) the scene's climax needs — one panel per DISTINCT visual beat, chronological order, ending on the final beat. Never fewer than 2 panels: the reader asked for a strip. Every character repeats their FULL appearance tag set verbatim in every panel they appear in — never change outfits, hair, or colors between panels. Each panel prompt describes exactly ONE moment in ONE frame — never write layout words (comic, panel, panels, page, grid, multiple views).
 PANEL DISCIPLINE (binding rules for every panel):
-- At most TWO named characters drawn per panel; pick the beat's principals. Solo close-ups bind a character's look perfectly — prefer them for reaction beats.
-- Open each panel prompt with explicit count tags (1boy / 1girl / 1boy, 1girl / 2girls ...), then immediately the primary character's FULL cast tag set, then the second character's FULL set. Never interleave two characters' traits.
+- Panels are the SCENE's beats in strict chronological order, first key moment to last — and the climax action itself (the strike, the explosion, the reveal) MUST be one of the panels; a strip that skips its own climax is a failed strip.
+- CONTINUITY: consecutive panels are one continuous moment in one place — carry the previous panel's consequences forward (smoke from a blast lingers in the next panel; wounds, debris, and damage persist; light and weather never change mid-scene). No panel may contradict a state an earlier panel established.
+- When someone acts ON another person (healing, striking, carrying, restraining), the panel shows BOTH — the object of the action is never cropped out. A medic kneels beside a VISIBLE patient.
+- Up to FOUR named characters per panel when the beat genuinely needs them; prefer the fewest that carry it — solo close-ups bind a character's look perfectly. Open with exact danbooru count tags (1boy / 1girl / 2boys, 1girl / multiple boys ...), then each character's FULL cast tag set as one contiguous block, primary character first. Never interleave two characters' traits.
 - Clothing comes ONLY from cast tags and explicit scene wording. NEVER derive clothing or armor from rank/role words: 'officer', 'captain', 'soldier', 'guard', 'division' are jobs, not outfits — writing 'military uniform' because the scene says 'officers' is a failed panel.
 - A background crowd is scenery: give it ONE collective emotion and describe its dress by copying the scene's world (what these people canonically wear), never by role words.
 - The panel's speaker (if it has a bubble) is drawn mid-speech, body and face oriented toward whoever they address — a speaker addressing a crowd faces the crowd, not the camera.
 - Actions are single concrete danbooru tags (clapping, arms crossed, pointing, hand on own chest) — never compound phrases like 'hands clapping together', which image models misread.
 - A line spoken to a group is drawn as the speaker prominent with the addressed group visible and attending — never a private two-shot for a public address.
-WORLD (derive once, as data): from the SCENE text and CAST tags, infer this world's shared clothing style and this scene's physical setting. Never modernize: no modern uniforms, coats, neckties, or architecture unless cast tags or scene text explicitly describe them. Output both as flat tag lists in the top-level "dress" and "setting" fields — the extension stamps them onto every panel itself, so do NOT restate them inside panel prompts.${bubblesOn ? '\n\n' + BUBBLE_RULES : ''}\nOUTPUT (replaces the single-line requirement above): strict JSON only — no reasoning, no commentary, no markdown: {"setting":"<location/environment tags for this scene>","dress":"<what people of this world wear, as tags>","panels":[{"prompt":"<one prompt following all rules above>"${bubbleSchema}}]}`;
+WORLD (derive once, as data): from the SCENE text and CAST tags, infer this world's shared clothing style and this scene's physical setting. "dress" is ONLY the universal base outfit every ordinary person wears — never rank- or status-specific garments (captain's coats/haori, armbands, crowns, insignia): those belong exclusively to the cast tags of whoever holds the rank. Never modernize: no modern uniforms, coats, neckties, or architecture unless cast tags or scene text explicitly describe them. Output both as flat tag lists in the top-level "dress" and "setting" fields — the extension stamps them onto every panel itself, so do NOT restate them inside panel prompts.${bubblesOn ? '\n\n' + BUBBLE_RULES : ''}\nOUTPUT (replaces the single-line requirement above): strict JSON only — no reasoning, no commentary, no markdown: {"setting":"<location/environment tags for this scene>","dress":"<what people of this world wear, as tags>","panels":[{"prompt":"<one prompt following all rules above>"${bubbleSchema}}]}`;
     } else if (bubblesOn) {
         fullSystem += `\n\n${BUBBLE_RULES}\nOUTPUT (replaces the single-line requirement above): strict JSON only — no reasoning, no commentary, no markdown, exactly one panel: {"panels":[{"prompt":"<one prompt following all rules above>"${bubbleSchema}}]}`;
     }

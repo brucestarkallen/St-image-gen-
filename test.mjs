@@ -250,6 +250,46 @@ function defaultPatterns() { return '<details>[\\s\\S]*?</details>\n\\{[A-Z_]+\\
     check('explain: empty tolerated', S.explainError(null) === '');
 }
 
+// ---------------------------------------------------------------- world anchor stamping
+{
+    check('anchor: appended without duplicating existing tokens',
+        S.appendAnchor('1girl, barracks courtyard, snow', 'barracks courtyard, black kimono, snow, white sash')
+            === '1girl, barracks courtyard, snow, black kimono, white sash');
+    check('anchor: empty anchor is a no-op', S.appendAnchor('1boy, smile', '') === '1boy, smile');
+    check('anchor: case-insensitive dedupe', S.appendAnchor('1girl, Black Kimono', 'black kimono') === '1girl, Black Kimono');
+
+    const cast = 'Jovan Oda: man, medium white hair, black kosode, no insignia\nRukia Kuchiki: woman, violet eyes, shinigami uniform, lieutenant armband\nShunsui: man, pink flowered kimono, captain haori, eyepatch';
+    const mined = S.mineDressTags(cast);
+    check('mine: garment tags collected, non-garments excluded',
+        mined.includes('black kosode') && mined.includes('shinigami uniform')
+        && mined.includes('pink flowered kimono') && !/violet eyes|white hair|eyepatch/.test(mined));
+    check('mine: rank garments never become world dress (the haori-on-everyone field bug)',
+        !/captain haori|lieutenant armband/.test(mined));
+    check('mine: names never leak (only post-colon tags scanned)', !/Jovan|Rukia|Shunsui/.test(mined));
+    check('mine: empty cast tolerated', S.mineDressTags('') === '');
+}
+
+// ---------------------------------------------------------------- layout-meta scrub
+{
+    const leaked = 'comic strip, 4 panels, vertical layout, panel 1: wide shot, 1boy, medium white hair, black kosode, crowd, barracks courtyard';
+    const clean = S.stripLayoutMeta(leaked);
+    check('layout: leaked page language scrubbed, scene tags intact',
+        !/comic|panel|layout/i.test(clean) && clean.includes('wide shot, 1boy, medium white hair') && clean.includes('barracks courtyard'));
+    check('layout: normal prompts untouched',
+        S.stripLayoutMeta('1girl, short black hair, violet eyes, courtyard, snow') === '1girl, short black hair, violet eyes, courtyard, snow');
+    check('layout: multiple views and manga page variants scrubbed',
+        !/multiple views|manga page|4koma/i.test(S.stripLayoutMeta('multiple views, manga page, 4koma, 1boy, smile')));
+}
+
+// ---------------------------------------------------------------- stale-session guard
+{
+    const LIVE_403 = '<!DOCTYPE html>\n<html lang="en">\n<head>\n<meta charset="utf-8">\n<title>Error</title>\n</head>\n<body>\n<pre>ForbiddenError: Invalid CSRF token. Please refresh the page and try again.</pre>\n</body>\n</html>\n';
+    check('stale: live ST 403 body detected', S.isStaleSession(403, LIVE_403));
+    check('stale: other 403s not misclassified', !S.isStaleSession(403, 'Forbidden: whitelist'));
+    check('stale: marker without 403 not misclassified', !S.isStaleSession(500, LIVE_403));
+    check('stale: empty tolerated', !S.isStaleSession(403, ''));
+}
+
 // ---------------------------------------------------------------- source-level invariants
 {
     check('src: single-panel bubble mode requests strict JSON', src.includes('exactly one panel'));
@@ -276,11 +316,17 @@ function defaultPatterns() { return '<details>[\\s\\S]*?</details>\n\\{[A-Z_]+\\
         && src.includes('mineDressTags(getActiveCastSheet())'));
     check('src: public address is speaker + attending group, never a private two-shot',
         src.includes('never a private two-shot for a public address'));
-    check('src: panel discipline — count tags, two-character cap, no role-word clothing, speaker orientation, concrete actions',
-        src.includes('At most TWO named characters drawn per panel')
+    check('src: panel discipline v3 — chronology+climax, continuity, both parties, four-cap, role-word ban, speaker orientation',
+        src.includes('MUST be one of the panels') && src.includes('strict chronological order')
+        && src.includes("carry the previous panel's consequences forward")
+        && src.includes('the object of the action is never cropped out')
+        && src.includes('Up to FOUR named characters per panel')
         && src.includes('jobs, not outfits')
-        && src.includes('oriented toward whoever they address')
-        && src.includes("never compound phrases like 'hands clapping together'"));
+        && src.includes('oriented toward whoever they address'));
+    check('src: explicit scenes are tagged explicitly, anatomy locked to cast sheet',
+        src.includes('EXPLICIT SCENES:') && src.includes('never euphemize') && src.includes('fullSystem += NSFW_RULE;'));
+    check('src: dress field excludes rank garments by contract',
+        src.includes('never rank- or status-specific garments'));
     check('src: panel prompts are single frames by contract (rule + scrub wired)',
         src.includes('never write layout words') && src.includes('stripLayoutMeta(t.replace'));
     check('src: SceneSnap media renders full-bleed and survives reloads',
