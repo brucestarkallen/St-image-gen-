@@ -30,7 +30,7 @@ const FUNCS = [
     'parsePanels', 'parseCastSheet', 'mergeCastLines', 'effectiveForcedTags',
     'composePositive', 'scanPresenceIn', 'markerDetails', 'ledgerStateLines',
     'stripScene', 'explainError', 'isStaleSession', 'stripLayoutMeta', 'appendAnchor', 'mineDressTags', 'normalizeCountTags', 'filterRankGarments', 'assembleIdentity', 'scrubState', 'seedForPanel', 'replaceNamesInSentence', 'capTagSafe', 'antiModernNegative', 'isPlaceholderTags', 'stripPlaceholderLines', 'getSize',
-    'backgroundFigureTag', 'dedupeAgainstAnchor',
+    'backgroundFigureTag', 'dedupeAgainstAnchor', 'neutralizeRoleUniforms',
 ];
 
 const prelude = `
@@ -758,6 +758,35 @@ function defaultPatterns() { return '<details>[\\s\\S]*?</details>\n\\{[A-Z_]+\\
     check('dedupe: empty prompt tolerated', S.dedupeAgainstAnchor('', anchor) === '');
 }
 
+// ---------------------------------------------------------------- role-uniform neutralization (0.23.0)
+{
+    const tradDress = 'black shihakusho, black kosode';
+    const modernDress = 'blazer, necktie, school uniform';
+    // Field bug: 'shinigami uniform' in the cast block rendered a black gakuran with
+    // gold buttons over a black-shihakusho world.
+    check('uniform: role-uniform stripped in a traditional world',
+        S.neutralizeRoleUniforms('man, gray hair, shinigami uniform, spotted hands', tradDress) === 'man, gray hair, spotted hands');
+    check('uniform: untouched in a modern world',
+        S.neutralizeRoleUniforms('man, gray hair, shinigami uniform', modernDress) === 'man, gray hair, shinigami uniform');
+    check('uniform: plain garments survive', /black kosode/.test(S.neutralizeRoleUniforms('man, black kosode', tradDress)));
+    check('uniform: empty tolerated', S.neutralizeRoleUniforms('', tradDress) === '');
+    // End-to-end at the weld: the neutralized block picks up the world's garment.
+    const sheet = 'Rukia Kuchiki: woman, short black hair, violet eyes, petite, shinigami uniform, lieutenant armband';
+    const id = S.assembleIdentity([{ name: 'Rukia Kuchiki', state: 'hands folded at front, tears forming' }], sheet,
+        { dress: 'black shihakusho', worldDress: tradDress });
+    check('weld: uniform and rank armband gone, world garment welded, face intact',
+        !/uniform|armband/.test(id.blocks[0]) && /black shihakusho/.test(id.blocks[0])
+        && /short black hair/.test(id.blocks[0]) && /violet eyes/.test(id.blocks[0]));
+    // A plain visible armband is a garment, not a rank decoration — it stays.
+    check('insignia: rank+armband dropped, plain armband kept',
+        S.stripRankInsignia('white armband on left arm') === 'white armband on left arm'
+        && !/armband/.test(S.stripRankInsignia('lieutenant armband')));
+    // The demoted figure's action no longer doubles the locative.
+    const bg = S.backgroundFigureTag([{ name: 'J', state: 'arm raised high, seen from behind and below in the background' }], 'J: man, tall');
+    check('bg: locatives owned by the wrapper, never doubled',
+        (bg.match(/in the background/g) || []).length === 1 && !/seen from/.test(bg) && /arm raised high/.test(bg));
+}
+
 // ---------------------------------------------------------------- source-level invariants
 {
     check('src: single-panel bubble mode requests strict JSON', src.includes('exactly one panel'));
@@ -944,7 +973,7 @@ function defaultPatterns() { return '<details>[\\s\\S]*?</details>\n\\{[A-Z_]+\\
         src.includes('WHO writes identity AND owns state, and WHO is not you')
         && src.includes('one contiguous run per character')
         && src.includes('a climax panel whose victim is missing from "who" is a failed panel')
-        && src.includes('assembleIdentity(principals, activeSheet, { dress: firstGarmentTag(dress) })')
+        && src.includes('assembleIdentity(principals, activeSheet, { dress: firstGarmentTag(dress), worldDress: dress })')
         && src.includes('Never blend two people into one')
         && src.includes('never render anyone as a child unless their cast tags say so'));
     check('src: scene population is setting-state with continuity',

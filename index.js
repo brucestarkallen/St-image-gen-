@@ -12,7 +12,7 @@ import { getBase64Async, saveBase64AsFile } from '../../../utils.js';
 import { callGenericPopup, POPUP_TYPE } from '../../../popup.js';
 
 const MODULE = 'sceneSnap';
-const VERSION = '0.22.0';
+const VERSION = '0.23.0';
 
 const defaultSettings = Object.freeze({
     enabled: true,
@@ -493,7 +493,7 @@ function normalizeCountTags(prompt) {
 // Rank garments are per-character, never world dress — filter them from ANY dress
 // source (builder field or mined backstop), so the anchor can't dress everyone up.
 const RANK_WORD = /\b(?:captain|lieutenant|commander|general|sergeant|colonel|major|marshal|officer|admiral)\b/i;
-const DECORATION_WORD = /\b(?:badge|insignia|pin|medal|medals|star|stars|stripe|stripes|epaulettes?|braid|patch|emblem|crest|rank|bars?|chevrons?)\b/i;
+const DECORATION_WORD = /\b(?:badge|insignia|pin|medal|medals|star|stars|stripe|stripes|epaulettes?|braid|patch|emblem|crest|rank|bars?|chevrons?|armband)\b/i;
 
 // Drop a cast tag that names a rank AND a decoration. This runs on the welded block,
 // not just the world dress: the field run kept rendering a lieutenant in a black
@@ -651,8 +651,12 @@ function backgroundFigureTag(background, sheetText) {
     const bits = [];
     for (const w of (background || []).slice(0, 2)) {
         const hit = byName.get(String(w?.name || '').trim().toLowerCase());
-        const action = scrubState(String(w?.state || ''), hit ? hit.tags : '');
-        if (action) bits.push(action);
+        // Locatives belong to the wrapper, not the action — the field run shipped
+        // "seen from behind and below in the background in the background".
+        const action = scrubState(String(w?.state || ''), hit ? hit.tags : '')
+            .split(',').map(t => t.trim())
+            .filter(t => t && !/\bbackground\b/i.test(t) && !/^seen from\b/i.test(t));
+        if (action.length) bits.push(action.join(', '));
     }
     const act = capTagSafe(bits.join(', '), 120);
     return act ? `distant figure ${act} in the background` : 'distant figure in the background';
@@ -698,7 +702,7 @@ function assembleIdentity(who, sheetText, opts = {}) {
         const state = typeof entry === 'object' && entry ? String(entry.state ?? '').trim() : '';
         const hit = byName.get(name.trim().toLowerCase());
         if (hit && !isPlaceholderTags(hit.tags)) {
-            const tags = stripRankInsignia(stripNameTags(hit.tags, hit.name));
+            const tags = neutralizeRoleUniforms(stripRankInsignia(stripNameTags(hit.tags, hit.name)), opts.worldDress || opts.dress);
             const scrubbed = stripRankInsignia(scrubState(state, tags));
             // Clothing is identity too: if neither the sheet nor the state dresses this
             // character, the world's base outfit is welded in rather than left to priors.
@@ -771,6 +775,22 @@ function antiModernNegative(dress) {
             + 'nazi, swastika, iron cross, wehrmacht, ss uniform, gestapo, armband with emblem, military cap';
     }
     return '';
+}
+
+// A 'uniform' token names a role, not a garment. In a traditional-dress world it is
+// the modern-military blend engine — the field run welded the auto-built cast's
+// 'shinigami uniform' into every block and rendered black gakuran with gold buttons
+// over a 'black shihakusho' world, positive overriding the anti-modern negative.
+// scrubState already drops role-uniforms from STATE (uniform is a garment word);
+// the cast block had no such guard. When the anti-modern gate fires for the world,
+// 'uniform'-bearing tokens are removed from welded cast blocks in code; the world's
+// own first garment takes their place via the existing undressed-principal weld.
+// A plain visible garment survives: only the word 'uniform' triggers this.
+function neutralizeRoleUniforms(tags, worldDress) {
+    if (!antiModernNegative(worldDress)) return String(tags || '');
+    return String(tags || '').split(',').map(t => t.trim())
+        .filter(t => t && !/\buniforms?\b/i.test(t))
+        .join(', ');
 }
 
 function seedForPanel(runSeed, whoNames, identityWelded) {
@@ -1278,7 +1298,7 @@ ${FRAME_LAWS}${bubblesOn ? '\n\n' + BUBBLE_RULES : ''}\nOUTPUT (replaces the sin
         }
         const { principals, background } = splitPrincipals(p.who);
         if (background.length) console.warn('[SceneSnap] background figure(s) demoted out of who:', background.map(w => w.name));
-        const id = assembleIdentity(principals, activeSheet, { dress: firstGarmentTag(dress) });
+        const id = assembleIdentity(principals, activeSheet, { dress: firstGarmentTag(dress), worldDress: dress });
         if (id.missing.length) console.warn('[SceneSnap] panel "who" names still not in cast sheet:', id.missing);
         const bgTag = background.length ? backgroundFigureTag(background, activeSheet) : '';
         p.prompt = enforceShotGrammar([id.counts, ...id.blocks, bgTag, dedupeAgainstAnchor(p.prompt, anchorText)].filter(Boolean).join(', '));
