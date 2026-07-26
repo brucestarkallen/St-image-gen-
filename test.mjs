@@ -27,7 +27,7 @@ const FUNCS = [
     'normalizeForMatch', 'sanitizeBubbles', 'sanitizeBuilderOutput', 'softSanitize',
     'parsePanels', 'parseCastSheet', 'mergeCastLines', 'effectiveForcedTags',
     'composePositive', 'scanPresenceIn', 'markerDetails', 'ledgerStateLines',
-    'stripScene', 'explainError', 'isStaleSession', 'stripLayoutMeta', 'appendAnchor', 'mineDressTags', 'getSize',
+    'stripScene', 'explainError', 'isStaleSession', 'stripLayoutMeta', 'appendAnchor', 'mineDressTags', 'normalizeCountTags', 'filterRankGarments', 'getSize',
 ];
 
 const prelude = `
@@ -269,6 +269,20 @@ function defaultPatterns() { return '<details>[\\s\\S]*?</details>\n\\{[A-Z_]+\\
     check('mine: empty cast tolerated', S.mineDressTags('') === '');
 }
 
+// ---------------------------------------------------------------- count-tag normalization
+{
+    check('counts: stacked alternatives collapse to first-of-class (the field 2boys,1boy,1other bug)',
+        S.normalizeCountTags('2boys, 1boy, 1other, man, white hair, sword') === '2boys, 1other, man, white hair, sword');
+    check('counts: non-danbooru gender words canonicalized', S.normalizeCountTags('1man, 1woman, tall, scar') === '1boy, 1girl, tall, scar');
+    check('counts: prompts without leading counts untouched',
+        S.normalizeCountTags('wide shot, 1boy, smile') === 'wide shot, 1boy, smile');
+
+    check('rank-filter: haori and armband never survive into the anchor',
+        S.filterRankGarments('shihakusho, kosode, captain haori, hakama, lieutenant armband') === 'shihakusho, kosode, hakama');
+    check('rank-filter: empty and clean lists pass through',
+        S.filterRankGarments('') === '' && S.filterRankGarments('black kimono, sash') === 'black kimono, sash');
+}
+
 // ---------------------------------------------------------------- layout-meta scrub
 {
     const leaked = 'comic strip, 4 panels, vertical layout, panel 1: wide shot, 1boy, medium white hair, black kosode, crowd, barracks courtyard';
@@ -325,6 +339,15 @@ function defaultPatterns() { return '<details>[\\s\\S]*?</details>\n\\{[A-Z_]+\\
         && src.includes('oriented toward whoever they address'));
     check('src: explicit scenes are tagged explicitly, anatomy locked to cast sheet',
         src.includes('EXPLICIT SCENES:') && src.includes('never euphemize') && src.includes('fullSystem += NSFW_RULE;'));
+    check('src: contract v4 — effect ownership, spatial relations, placement tags, verbatim cast, no child, one count expression',
+        src.includes('an exploding sword detonates in its holder')
+        && src.includes('explicit spatial-relation tags')
+        && src.includes('END every character block with a placement tag')
+        && src.includes('never blend two people into one')
+        && src.includes('never render anyone as a child unless their cast tags say so')
+        && src.includes("never stack alternatives like '2boys, 1boy'"));
+    check('src: counts normalized and anchor rank-filtered in code, not just by contract',
+        src.includes('normalizeCountTags(softSanitize(') && src.includes('filterRankGarments(panels.dress)'));
     check('src: dress field excludes rank garments by contract',
         src.includes('never rank- or status-specific garments'));
     check('src: panel prompts are single frames by contract (rule + scrub wired)',

@@ -114,6 +114,12 @@ Stella: girl, long crimson hair, red eyes, large breasts, hair ribbon, school un
 
 ## Changelog
 
+### 0.10.2
+- **Effects belong to their victim.** New contract: explosion/impact/glow/wound tags live inside the block of the character they happen TO — the exploding sword detonates in its holder's hands, never in the observer's block — and that character is the panel's primary. Characters not in contact must carry explicit spatial-relation tags, and with 3+ characters every block ends with a placement tag (left/center/right/foreground/background) so the model can keep people apart.
+- **No substitutions, no hybrids, no children.** Only beat-named characters may appear, each copied verbatim from the cast; blending two people into one and rendering anyone as a child (unless their sheet says so) are contract violations. More than four foregrounded → fold extras into the crowd.
+- **Malformed count tags fixed in code**: stacked alternatives ("2boys, 1boy, 1other") collapse to one expression per class, and non-danbooru forms ("1man") canonicalize — the field bug, negative-tested.
+- **Rank garments can no longer ride the anchor from ANY source**: the builder's dress field is now rank-filtered in code, same as the mined backstop.
+
 ### 0.10.1
 - **Explicit scenes are tagged explicitly.** New builder law: sexual/nude beats get concrete danbooru anatomy tags per character (undress state, exposed anatomy with size/texture descriptors, exact position by its danbooru name, contact state, fluids), with proportions locked to each character's cast tags across every image. Tip: fix sizes/marks in the cast sheet once and they stay identical everywhere. Vague NSFW was the worst-case of the general problem — body position accuracy — so precision here lifts every scene.
 - **Strips are chronological and complete**: panels follow the scene's beats in strict order and the climax action (the strike, the explosion) MUST be one of them.

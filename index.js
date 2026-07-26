@@ -12,7 +12,7 @@ import { getBase64Async, saveBase64AsFile } from '../../../utils.js';
 import { callGenericPopup, POPUP_TYPE } from '../../../popup.js';
 
 const MODULE = 'sceneSnap';
-const VERSION = '0.10.1';
+const VERSION = '0.10.2';
 
 const defaultSettings = Object.freeze({
     enabled: true,
@@ -347,7 +347,7 @@ function parsePanels(raw, style, maxPanels, opts = {}) {
                 const arr = Array.isArray(obj?.panels) ? obj.panels : [];
                 const panels = arr
                     .map(p => ({
-                        prompt: softSanitize(String(p?.prompt ?? p ?? ''), style),
+                        prompt: normalizeCountTags(softSanitize(String(p?.prompt ?? p ?? ''), style)),
                         bubbles: wantBubbles ? sanitizeBubbles(p?.bubbles, sceneText) : [],
                     }))
                     .filter(p => p.prompt)
@@ -372,6 +372,33 @@ function parsePanels(raw, style, maxPanels, opts = {}) {
         if (recovered.length) return recovered.slice(0, maxPanels);
     }
     return [{ prompt: sanitizeBuilderOutput(cleaned, style), bubbles: [] }];
+}
+
+// Builders emit malformed leading counts ('2boys, 1boy, 1other', '1man') — collapse to
+// one canonical expression: first occurrence per class, danbooru gender forms.
+function normalizeCountTags(prompt) {
+    const toks = String(prompt || '').split(',').map(t => t.trim());
+    const isCount = t => /^(?:\d+|multiple)\s*(?:boys?|girls?|others?|men|man|women|woman)$/i.test(t);
+    const canon = t => t.toLowerCase().replace(/\s+/g, '')
+        .replace(/women$/, 'girls').replace(/woman$/, 'girl')
+        .replace(/men$/, 'boys').replace(/man$/, 'boy');
+    const classOf = t => /boys?$/.test(canon(t)) ? 'b' : /girls?$/.test(canon(t)) ? 'g' : 'o';
+    let i = 0; const seen = new Set(); const head = [];
+    while (i < toks.length && isCount(toks[i])) {
+        const c = classOf(toks[i]);
+        if (!seen.has(c)) { seen.add(c); head.push(canon(toks[i])); }
+        i++;
+    }
+    if (!head.length) return String(prompt || '');
+    return [...head, ...toks.slice(i)].filter(Boolean).join(', ');
+}
+
+// Rank garments are per-character, never world dress — filter them from ANY dress
+// source (builder field or mined backstop), so the anchor can't dress everyone up.
+function filterRankGarments(tagList) {
+    return String(tagList || '').split(',').map(t => t.trim())
+        .filter(t => t && !/captain|lieutenant|commander|general|sergeant|king|queen|royal/i.test(t))
+        .join(', ');
 }
 
 // Append anchor tags to a prompt without duplicating tokens the prompt already has.
@@ -629,6 +656,10 @@ PANEL DISCIPLINE (binding rules for every panel):
 - CONTINUITY: consecutive panels are one continuous moment in one place — carry the previous panel's consequences forward (smoke from a blast lingers in the next panel; wounds, debris, and damage persist; light and weather never change mid-scene). No panel may contradict a state an earlier panel established.
 - When someone acts ON another person (healing, striking, carrying, restraining), the panel shows BOTH — the object of the action is never cropped out. A medic kneels beside a VISIBLE patient.
 - Up to FOUR named characters per panel when the beat genuinely needs them; prefer the fewest that carry it — solo close-ups bind a character's look perfectly. Open with exact danbooru count tags (1boy / 1girl / 2boys, 1girl / multiple boys ...), then each character's FULL cast tag set as one contiguous block, primary character first. Never interleave two characters' traits.
+- The character an effect happens TO owns it: explosion, impact, glow, and wound tags live inside THAT character's block — an exploding sword detonates in its holder's hands, not in the observer's block. The panel's PRIMARY character is whoever the beat happens to.
+- Characters not in physical contact get explicit spatial-relation tags (distance between them, one in far background, facing from across the field); with THREE or more characters, END every character block with a placement tag (left / center / right / foreground / background) so the image model can keep them apart.
+- Only characters the beat names may appear, each copied VERBATIM from CAST — never substitute one cast member's traits for another, never blend two people into one, and never render anyone as a child unless their cast tags say so. If more than four people are foregrounded, keep the four most central and fold the rest into the crowd.
+- Exactly ONE count expression opens the prompt and matches the characters listed, danbooru forms only (1boy / 1girl / 2boys, 1girl / 1other) — never stack alternatives like '2boys, 1boy'.
 - Clothing comes ONLY from cast tags and explicit scene wording. NEVER derive clothing or armor from rank/role words: 'officer', 'captain', 'soldier', 'guard', 'division' are jobs, not outfits — writing 'military uniform' because the scene says 'officers' is a failed panel.
 - A background crowd is scenery: give it ONE collective emotion and describe its dress by copying the scene's world (what these people canonically wear), never by role words.
 - The panel's speaker (if it has a bubble) is drawn mid-speech, body and face oriented toward whoever they address — a speaker addressing a crowd faces the crowd, not the camera.
@@ -652,7 +683,7 @@ WORLD (derive once, as data): from the SCENE text and CAST tags, infer this worl
     // World anchor: builder-derived, cast-mined as backstop. Stamped onto every panel by
     // the extension (appendAnchor) — per-panel drift to modern dress/architecture becomes
     // structurally impossible instead of being a memory test for the builder.
-    const dress = panels.dress || mineDressTags(getActiveCastSheet());
+    const dress = filterRankGarments(panels.dress) || mineDressTags(getActiveCastSheet());
     return { panels, style, raw: String(raw), setting: panels.setting || '', dress };
 }
 
