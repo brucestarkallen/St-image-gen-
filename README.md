@@ -114,6 +114,11 @@ Stella: girl, long crimson hair, red eyes, large breasts, hair ribbon, school un
 
 ## Changelog
 
+### 0.12.7 — the wiki feeds the cast
+- **Canon Grounding integration.** SceneSnap's cast author now reads the sibling Canon Grounding extension's cache (`chatMetadata.canon_grounding_cache`) — the fandom wiki's extracted appearance text per character — as the PRIMARY appearance source, converted faithfully into danbooru tags. Fully automatic, read-only, guarded.
+- **Canon characters are never "unknown".** Source order is law: wiki data → story text → the builder's own canonical knowledge for established fandom characters. `(appearance unknown — fill in)` is reserved strictly for original characters no source describes.
+- Doctrine recorded: manual sheet edits are never the suggested fix — the automatic chain (wiki → author → per-chat seeding → one-line-delete refresh) is the system.
+
 ### 0.12.6
 - **No more subject-less panels.** A who-name missing from the cast used to ship a prompt with zero people in it — an empty courtyard where a character belonged. Missing names now trigger one targeted cast-seeding (the builder must output lines for exactly those characters from story memory) before assembly.
 - **Sentences speak in role words, enforced in code**: any cast name leaking into a composition sentence is substituted with the character's gender word — names are semantic zeros to tag-native models.

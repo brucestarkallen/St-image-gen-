@@ -12,7 +12,7 @@ import { getBase64Async, saveBase64AsFile } from '../../../utils.js';
 import { callGenericPopup, POPUP_TYPE } from '../../../popup.js';
 
 const MODULE = 'sceneSnap';
-const VERSION = '0.12.6';
+const VERSION = '0.12.7';
 
 const defaultSettings = Object.freeze({
     enabled: true,
@@ -104,6 +104,7 @@ Name: girl|boy|woman|man, hair length + hair color, eye color, 2-5 distinctive p
 Example:
 Akane: girl, long black hair, ponytail, brown eyes, athletic build, school uniform, red ribbon
 Rules: visual traits only — never personality, locations, positions, or current actions. Max 12 tags per character, Danbooru-style tags, prefer information from character tracker blocks when present, skip characters already listed in EXISTING SHEET.
+APPEARANCE SOURCE ORDER: 1) CANON WIKI DATA when present — it is authoritative; convert its prose faithfully into danbooru tags. 2) Story memory and chat text. 3) For an ESTABLISHED CANON CHARACTER of the story's fandom that neither source describes, use their widely known canonical appearance in standard danbooru tags — canon characters are never "unknown". Reserve "Name: gender, (appearance unknown — fill in)" strictly for ORIGINAL characters no source describes.
 COPY, never compose: take each trait's wording from the story/memory VERBATIM where it appears — never synonymize or re-style ('lieutenant armband' stays 'armband', never 'badge'; 'medium white hair' never becomes 'short white hair'). Adults are 'man'/'woman'; 'boy'/'girl' ONLY for characters the story marks as children or child-statured. Always include eye color and exact hair length when the story states them; never drop a distinguishing trait the memory contains; base clothing (uniform/kimono) is listed per character, not assumed. ALWAYS include the story's protagonist/viewpoint character — the player's character counts as a character. If a required character's appearance is never described, still output their line as: Name: gender, (appearance unknown — fill in). If there are no new characters at all, output NONE.`;
 
 // One canonical dialogue-bubble contract, cited by both builder paths — never restated.
@@ -1344,6 +1345,25 @@ const sheetWarned = new Set();
 
 // ------------------------------------------------------------------ cast auto-build
 
+// Canon Grounding (sibling extension) caches wiki-extracted per-character facts at
+// chatMetadata.canon_grounding_cache — entries { found, name, aliases, sections: { physical } }.
+// sections.physical is the fandom wiki's APPEARANCE text: the authoritative automatic
+// source for canon characters the prose never re-describes. Read-only, fully guarded.
+function collectCanonWikiAppearances() {
+    try {
+        const cacheObj = getContext().chatMetadata?.canon_grounding_cache;
+        if (!cacheObj || typeof cacheObj !== 'object') return '';
+        const lines = [];
+        for (const [key, e] of Object.entries(cacheObj)) {
+            const physical = e?.found && e?.sections?.physical;
+            if (!physical) continue;
+            lines.push(`${e.name || key}: ${String(physical).replace(/\s+/g, ' ').trim().slice(0, 300)}`);
+            if (lines.join('\n').length > 4000) break;
+        }
+        return lines.join('\n');
+    } catch (e) { return ''; }
+}
+
 async function autoBuildCast({ silent = false, requiredNames = [] } = {}) {
     const ctx = getContext();
     const memory = collectStoryMemory().slice(0, 14000);
@@ -1362,7 +1382,8 @@ async function autoBuildCast({ silent = false, requiredNames = [] } = {}) {
     try {
         const user = [
             `PLAYER CHARACTER HINT: the human player's persona is named "${ctx.name1 || 'User'}" — the protagonist may appear under this or another in-story name; include the protagonist either way.`,
-            requiredNames.length ? `REQUIRED CHARACTERS (output a line for EACH of these, using their appearance from story memory/chat): ${requiredNames.join(', ')}` : '',
+            requiredNames.length ? `REQUIRED CHARACTERS (output a line for EACH of these): ${requiredNames.join(', ')}` : '',
+            (() => { const w = collectCanonWikiAppearances(); return w ? `CANON WIKI DATA (authoritative appearances from the fandom wiki — convert faithfully into danbooru tags):\n${w}` : ''; })(),
             `EXISTING SHEET (skip these characters):\n${getActiveCastSheet() || '(empty)'}`,
             memory ? `STORY MEMORY:\n${memory}` : '',
             excerpt ? `RECENT CHAT EXCERPT:\n${excerpt}` : '',

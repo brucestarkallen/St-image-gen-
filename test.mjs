@@ -432,6 +432,12 @@ function defaultPatterns() { return '<details>[\\s\\S]*?</details>\n\\{[A-Z_]+\\
         src.includes('.filter(w => w.name).slice(0, 2) : [],'));
     check('src: explicit scenes are tagged explicitly, anatomy locked to cast sheet',
         src.includes('EXPLICIT SCENES:') && src.includes('never euphemize') && src.includes('fullSystem += NSFW_RULE;'));
+    check('src: Canon Grounding wiki appearances feed the cast author, guarded and read-only',
+        src.includes('canon_grounding_cache') && src.includes('e?.sections?.physical')
+        && src.includes('CANON WIKI DATA (authoritative appearances'));
+    check('src: appearance source order — wiki, then story, then canon knowledge; unknown reserved for OCs',
+        src.includes('APPEARANCE SOURCE ORDER') && src.includes('canon characters are never "unknown"')
+        && src.includes('strictly for ORIGINAL characters'));
     check('src: missing who-names trigger targeted seeding, then names are scrubbed from sentences',
         src.includes('REQUIRED CHARACTERS (output a line for EACH')
         && src.includes('autoBuildCast({ silent: true, requiredNames: [...missingAll] })')
