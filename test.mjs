@@ -27,7 +27,7 @@ const FUNCS = [
     'normalizeForMatch', 'sanitizeBubbles', 'sanitizeBuilderOutput', 'softSanitize',
     'parsePanels', 'parseCastSheet', 'mergeCastLines', 'effectiveForcedTags',
     'composePositive', 'scanPresenceIn', 'markerDetails', 'ledgerStateLines',
-    'stripScene',
+    'stripScene', 'isCorsProxyDisabled',
 ];
 
 const prelude = `
@@ -223,10 +223,25 @@ function defaultPatterns() { return '<details>[\\s\\S]*?</details>\n\\{[A-Z_]+\\
         S.sanitizeBuilderOutput('<think>x</think>```\n1girl, red eyes, alley, night\n```', 'tags') === '1girl, red eyes, alley, night');
 }
 
+// ---------------------------------------------------------------- CORS-proxy guard
+{
+    check('cors-guard: ST disabled-proxy 404 detected',
+        S.isCorsProxyDisabled(404, 'CORS proxy is disabled. Enable it in config.yaml or use the --corsProxy flag.'));
+    check('cors-guard: real upstream 404 not misclassified',
+        !S.isCorsProxyDisabled(404, '{"statusCode":404,"message":"Not Found"}'));
+    check('cors-guard: message without 404 status not misclassified',
+        !S.isCorsProxyDisabled(500, 'CORS proxy is disabled'));
+    check('cors-guard: empty body tolerated', !S.isCorsProxyDisabled(404, ''));
+}
+
 // ---------------------------------------------------------------- source-level invariants
 {
     check('src: single-panel bubble mode requests strict JSON', src.includes('exactly one panel'));
     check('src: overlay failures ship the clean panel', src.includes('bubble overlay failed, shipping the clean panel'));
+    check('src: no direct cross-origin fetch to NovelAI remains',
+        !src.includes("fetch('https://image.novelai.net"));
+    check('src: multi-char rides the same-origin ST CORS proxy route',
+        src.includes('/proxy/${NAI_IMAGE_ENDPOINT}'));
     check('src: generateRaw fallback precedes quiet prompt',
         src.indexOf('ctx.generateRaw') !== -1 && src.indexOf('ctx.generateRaw') < src.indexOf('ctx.generateQuietPrompt'));
     check('src: version stamp matches manifest', (() => {

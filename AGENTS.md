@@ -32,3 +32,4 @@ Version discipline: `manifest.json` version and the `const VERSION` stamp in `in
 3. Bubbles OFF means zero bubbles regardless of what the builder returns (gating — negative-tested).
 4. Presets and briefs stay model-agnostic; nothing assumes a specific text or image model beyond declared backend prompt styles.
 5. Sheetless generation is allowed but never silent (one warning per chat).
+6. Every backend HTTP call is same-origin — an ST API route or ST's `/proxy/<url>` CORS proxy. Direct cross-origin `fetch()` is forbidden: the browser blocks it (no CORS headers on NAI et al.) and it fails as an opaque "Failed to fetch" — the exact 0.7.0 multi-char defect. WebSocket backends (Runware) are exempt (no CORS preflight). The harness asserts no direct NovelAI fetch exists.

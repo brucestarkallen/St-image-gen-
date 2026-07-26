@@ -12,7 +12,7 @@ import { getBase64Async, saveBase64AsFile } from '../../../utils.js';
 import { callGenericPopup, POPUP_TYPE } from '../../../popup.js';
 
 const MODULE = 'sceneSnap';
-const VERSION = '0.8.0';
+const VERSION = '0.8.1';
 
 const defaultSettings = Object.freeze({
     enabled: true,
@@ -753,6 +753,14 @@ async function generatePollinations(positive, negative) {
     return { format: data?.format || 'jpg', data: data.image };
 }
 
+const NAI_IMAGE_ENDPOINT = 'https://image.novelai.net/ai/generate-image';
+
+// ST's disabled-proxy route answers 404 with this exact message; a real upstream 404
+// arrives with NAI's own body. Both conditions required so neither masquerades as the other.
+function isCorsProxyDisabled(status, bodyText) {
+    return status === 404 && /cors proxy is disabled/i.test(String(bodyText || ''));
+}
+
 async function generateNovelAIMulti(base, charTags, negative) {
     const token = String(settings.naiToken || '').trim();
     if (!token) throw new Error('NovelAI persistent token not set — needed for multi-character mode (get it at NovelAI → User Settings → Account → Get Persistent API Token)');
@@ -812,17 +820,26 @@ async function generateNovelAIMulti(base, charTags, negative) {
         },
     };
 
-    const res = await fetch('https://image.novelai.net/ai/generate-image', {
+    // Same-origin only: browsers block direct calls to image.novelai.net (NAI's API sends
+    // no CORS headers), so this must ride SillyTavern's CORS proxy. ST's own headers carry
+    // the CSRF token; the proxy strips it (with all browser-identity headers) before forwarding.
+    const res = await fetch(`/proxy/${NAI_IMAGE_ENDPOINT}`, {
         method: 'POST',
         headers: {
-            'Content-Type': 'application/json',
+            ...getRequestHeaders(),
             'Authorization': `Bearer ${token}`,
         },
         body: JSON.stringify(body),
     });
     if (!res.ok) {
         const text = await res.text().catch(() => '');
-        if (res.status === 401) throw new Error('NovelAI rejected the token (401) — use a Persistent API Token, not your password');
+        if (isCorsProxyDisabled(res.status, text)) {
+            const err = new Error("Multi-character mode needs SillyTavern's CORS proxy: config.yaml → enableCorsProxy: true, then restart ST (or launch with --corsProxy). Generating single-prompt for now.");
+            err.corsProxyDisabled = true;
+            throw err;
+        }
+        // ST rewrites upstream 401 to 400 and forwards NAI's error body either way.
+        if (res.status === 400 || res.status === 401) throw new Error(`NovelAI rejected the request (${text.slice(0, 160) || res.status}) — check the Persistent API Token (not your password) and subscription tier`);
         throw new Error(`NovelAI multi-char: ${res.status} ${text.slice(0, 200)}`);
     }
     // Response is a zip containing image_0.png — extract the first PNG.
@@ -1032,6 +1049,7 @@ async function illustrateMessage(mesId, { force = false } = {}) {
         let debugRaw = '';
         let debugPrompts = [];
 
+        let multiRan = false;
         if (useMultiChar) {
             // NovelAI native multi-character: base scene + per-character panels, single generation.
             const scene = await getSceneText(mesId);
@@ -1040,16 +1058,26 @@ async function illustrateMessage(mesId, { force = false } = {}) {
             debugPrompts = [`BASE: ${spec.base}`, ...spec.chars.map((c, i) => `CHAR ${i + 1}: ${c}`)];
             spec.bubbles.forEach(b => debugPrompts.push(`BUBBLE — ${b.speaker || '?'}: "${b.text}"`));
             positive = debugPrompts.join('\n');
-            const result = await generateNovelAIMulti(spec.base, spec.chars, negative);
-            panelFormat = result.format || 'png';
-            let imageB64 = result.data;
-            if (spec.bubbles.length) {
-                try { imageB64 = await overlayBubbles(imageB64, panelFormat, spec.bubbles); }
-                catch (e) { console.warn('[SceneSnap] bubble overlay failed, shipping the clean image:', e); }
+            try {
+                const result = await generateNovelAIMulti(spec.base, spec.chars, negative);
+                panelFormat = result.format || 'png';
+                let imageB64 = result.data;
+                if (spec.bubbles.length) {
+                    try { imageB64 = await overlayBubbles(imageB64, panelFormat, spec.bubbles); }
+                    catch (e) { console.warn('[SceneSnap] bubble overlay failed, shipping the clean image:', e); }
+                }
+                panelImages = [imageB64];
+                multiRan = true;
+                console.log(`[SceneSnap] NAI multi-char: 1 base + ${spec.chars.length} character panels`);
+            } catch (e) {
+                if (!e?.corsProxyDisabled) throw e;
+                // Same degradation ladder as a missing token/cast: the image still ships,
+                // the exact fix is named once per session.
+                if (!corsWarned) { corsWarned = true; toastr.warning(e.message, 'SceneSnap', { timeOut: 15000 }); }
+                console.warn('[SceneSnap] multi-char unavailable (CORS proxy disabled) — falling back to single prompt');
             }
-            panelImages = [imageB64];
-            console.log(`[SceneSnap] NAI multi-char: 1 base + ${spec.chars.length} character panels`);
-        } else {
+        }
+        if (!multiRan) {
             const { panels, style, raw } = await buildScenePrompt(mesId);
             const finals = panels.map(p => composePositive(p.prompt, style));
             debugRaw = raw;
@@ -1070,7 +1098,7 @@ async function illustrateMessage(mesId, { force = false } = {}) {
         }
 
 
-        lastDebug = { time: new Date().toLocaleTimeString(), backend: settings.backend + (useMultiChar ? ' (multi-char)' : ''), style: useMultiChar ? 'nai-multichar' : resolveStyle(), raw: debugRaw, prompts: debugPrompts, negative, error: null };
+        lastDebug = { time: new Date().toLocaleTimeString(), backend: settings.backend + (multiRan ? ' (multi-char)' : ''), style: multiRan ? 'nai-multichar' : resolveStyle(), raw: debugRaw, prompts: debugPrompts, negative, error: null };
 
         const base64 = panelImages.length > 1
             ? await stitchPanels(panelImages, panelFormat)
@@ -1220,6 +1248,7 @@ function mergeCastLines(existing, incoming) {
 
 const castBootstrapAttempted = new Set();
 const sheetWarned = new Set();
+let corsWarned = false;
 
 // ------------------------------------------------------------------ cast auto-build
 
@@ -1331,7 +1360,7 @@ function settingsHtml() {
                     </div>
                     <small class="snapshot_hint">Steps capped at 28 — the free-generation limit on Opus. Scale = prompt adherence, ~5 for V4.5.</small>
                     <label class="checkbox_label"><input id="snapshot_nai_multichar" type="checkbox"><span>Multi-character mode (per-character panels)</span></label>
-                    <small class="snapshot_hint">The big accuracy upgrade: sends each named character in the scene as its own NAI character panel (base scene + separate appearance per person), eliminating trait-bleed — the same structure that produces clean multi-person images in NAI's web UI. Needs the persistent token below and a cast sheet with the characters. Falls back to a single prompt when either is missing. Single-frame only (no comic panels).</small>
+                    <small class="snapshot_hint">The big accuracy upgrade: sends each named character in the scene as its own NAI character panel (base scene + separate appearance per person), eliminating trait-bleed — the same structure that produces clean multi-person images in NAI's web UI. Needs the persistent token below, a cast sheet with the characters, and SillyTavern's CORS proxy (config.yaml → <code>enableCorsProxy: true</code>, restart ST). Falls back to a single prompt when any of the three is missing. Single-frame only (no comic panels).</small>
                     <label for="snapshot_nai_token">NovelAI persistent token (for multi-character mode)</label>
                     <input id="snapshot_nai_token" type="password" class="text_pole" placeholder="pst-..." autocomplete="off">
                     <small class="snapshot_hint">NovelAI → User Settings → Account → Get Persistent API Token. Different from the key ST uses for single-prompt mode. Only needed for multi-character mode.</small>
