@@ -12,7 +12,7 @@ import { getBase64Async, saveBase64AsFile } from '../../../utils.js';
 import { callGenericPopup, POPUP_TYPE } from '../../../popup.js';
 
 const MODULE = 'sceneSnap';
-const VERSION = '0.13.0';
+const VERSION = '0.14.0';
 
 const defaultSettings = Object.freeze({
     enabled: true,
@@ -130,9 +130,11 @@ const FRAME_LAWS = `PANEL DISCIPLINE (binding rules for every panel):
 - When someone acts ON another person (healing, striking, carrying, restraining), the panel shows BOTH — the object of the action is never cropped out. A medic kneels beside a VISIBLE patient.
 - WHO writes identity AND owns state, and WHO is not you: list each panel's characters in "who" as {"name": exact cast-sheet name, "state": THAT character's pose, expression, wounds, and action tags} — primary first, AT MOST TWO. Two is model physics, not preference: single-prompt tag binding cannot reliably assign a garment or a wound across three people, so a frame never holds more than two principals — everyone else is crowd. The extension enforces the cap.
 - USE both slots when the beat has two people: a spoken line addressed to a present character is a TWO-shot (speaker AND addressee in "who") — solo frames are for reactions and for beats where a character is genuinely alone.
-- A panel that carries a dialogue bubble must SHOW ITS SPEAKER'S FACE: dialogue never rides a from-behind, neck-down, or faceless framing of its own speaker. The extension inserts each character's appearance block VERBATIM from the cast sheet, welds their state onto it, and computes the counts — one contiguous run per character, so the image model cannot give one character's laugh or wound to another. The panel "prompt" therefore contains ONLY what is shared: camera, lighting, atmosphere, environment, and scene-wide effects. A per-character detail in the shared prompt, or any appearance trait anywhere, is a failed panel.
+- A panel that carries a dialogue bubble must SHOW ITS SPEAKER'S FACE: dialogue never rides a from-behind, neck-down, or faceless framing of its own speaker. Only a character in THIS panel's "who" may speak in this panel — a line belonging to anyone else moves to the panel that draws them, or is dropped. The extension enforces this. The extension inserts each character's appearance block VERBATIM from the cast sheet, welds their state onto it, and computes the counts — one contiguous run per character, so the image model cannot give one character's laugh or wound to another. The panel "prompt" therefore contains ONLY what is shared: camera, lighting, atmosphere, environment, and scene-wide effects. A per-character detail in the shared prompt, or any appearance trait anywhere, is a failed panel.
 - The character an effect happens TO carries it in their OWN "state": the exploding sword detonates in its holder's state, the wound bleeds in the wounded one's state — a climax panel whose victim is missing from "who" is a failed panel. Healing, striking, carrying, restraining: BOTH parties in "who", each with their own state; "hand on patient" with no patient listed is a failed panel.
-- Characters not in physical contact get explicit spatial-relation tags in the prompt (distance between them, one far in the background, facing from across the field). With three or more in "who", the extension appends a placement tag to each block automatically in "who" order.
+- Characters not in physical contact get explicit spatial-relation tags in the prompt (distance between them, one far in the background, facing from across the field).
+- WHO IS PRINCIPALS ONLY — the people this frame is ABOUT, drawn at readable size. A character who is far away, tiny, a silhouette, or seen from behind at a distance is NOT a principal and does NOT go in "who": name them in the prompt as an environment element ("a distant figure on the far side of the courtyard"). Listing a background figure in "who" spends a subject slot and a count tag on someone three pixels tall, and the model splits its attention — both people come out degraded. The extension demotes them.
+- BOTH principals must share ONE interaction: two people in a frame are looking at, speaking to, touching, or reacting to EACH OTHER. Two people doing unrelated things in different parts of the location are TWO panels, never one frame — a single prompt cannot bind separate actions to separate distant bodies, and the model fuses them into one person carrying both.
 - SHOT GRAMMAR (every panel's "prompt", mandatory): exactly ONE framing tag (close-up / upper body / cowboy shot / full body / wide shot) + exactly ONE angle tag (from below / from behind / from side / eye level / dutch angle) + lighting and atmosphere tags (dramatic lighting, sunlight, lens flare, backlighting, wind, dust motes, motion blur where there is motion).
 - ACTING DENSITY: each character's "state" is 4-8 concrete tags — pose AND expression AND gaze AND one physical emotive detail (tears streaming, clenched fist at chest, open mouth shouting, trembling hands). A two-tag state is a failed panel.
 - "sentence" is where natural language earns its keep: ONE short plain-English sentence per panel stating the spatial arrangement and interaction ("She kneels beside him at the crater's center, pressing both hands to his chest while the crowd watches from the stands."). Relations only — any appearance word there is a failed panel.
@@ -142,7 +144,7 @@ const FRAME_LAWS = `PANEL DISCIPLINE (binding rules for every panel):
 - The panel's speaker (if it has a bubble) is drawn mid-speech, body and face oriented toward whoever they address — a speaker addressing a crowd faces the crowd, not the camera.
 - Actions are single concrete danbooru tags (clapping, arms crossed, pointing, hand on own chest) — never compound phrases like 'hands clapping together', which image models misread.
 - A line spoken to a group is drawn as the speaker prominent with the addressed group visible and attending — never a private two-shot for a public address.
-WORLD (derive once, as data): from the SCENE text and CAST tags, infer this world's shared clothing style and this scene's physical setting. "dress" is ONLY the universal base outfit every ordinary person wears — never rank- or status-specific garments (captain's coats/haori, armbands, crowns, insignia): those belong exclusively to the cast tags of whoever holds the rank. Never modernize: no modern uniforms, coats, neckties, or architecture unless cast tags or scene text explicitly describe them. "setting" also names the scene's standing population AND that population's dress ("packed stands of shinigami in black shihakushō", "crowd of villagers in gray work clothes") — an unnamed crowd dress is how background people modernize: an arena full of watchers shows watchers in every panel that shows the surroundings, and established spectators never vanish (that is a continuity violation). Output both as flat tag lists in the top-level "dress" and "setting" fields — the extension stamps them onto every panel itself, so do NOT restate them inside panel prompts.`;
+WORLD (derive once, as data): from the SCENE text and CAST tags, infer this world's shared clothing style and this scene's physical setting. "dress" is ONLY the universal base outfit every ordinary person wears — never rank- or status-specific garments (captain's coats/haori, armbands, crowns, insignia): those belong exclusively to the cast tags of whoever holds the rank. Never modernize: no modern uniforms, coats, neckties, or architecture unless cast tags or scene text explicitly describe them. "setting" also names the scene's standing population AND that population's dress ("packed stands of shinigami in black shihakushō", "crowd of villagers in gray work clothes") — an unnamed crowd dress is how background people modernize: an arena full of watchers shows watchers in every panel that shows the surroundings, and established spectators never vanish (that is a continuity violation). "setting" is a STANDING description stamped unchanged onto EVERY panel: it names the place and its population and what that population wears — never what the population is momentarily doing. A transient verb there ("dispersing crowd", "crowd leaving") contradicts every panel of the scene and is a failed strip; the crowd's current action belongs in each panel's own prompt. Output both as flat tag lists in the top-level "dress" and "setting" fields — the extension stamps them onto every panel itself, so do NOT restate them inside panel prompts.`;
 
 // Same default presence-marker patterns as Summaryception's ledger: a preset's
 // [IST: name|state] in-scene tracker and [ACW: name|...] off-screen watchlist.
@@ -330,8 +332,20 @@ function normalizeForMatch(text) {
 // scene — invented dialogue can never reach the image. Order matters: verify
 // FIRST, length-trim SECOND (a prefix of verified text is still verbatim; a
 // trimmed string checked against the scene is not the same guarantee).
-function sanitizeBubbles(list, sceneText) {
+// The speaker's-face law is only enforceable if this function knows who is in the
+// frame. It never received `who`, so a panel could carry a line shouted by someone who
+// was never drawn — a balloon with a tail pointing at nobody.
+function sanitizeBubbles(list, sceneText, who) {
     if (!Array.isArray(list)) return [];
+    const present = (who || []).map(w => String(w?.name ?? w ?? '').trim().toLowerCase()).filter(Boolean);
+    const presentParts = new Set(present.flatMap(n => [n, ...n.split(/\s+/)]).filter(p => p.length >= 3));
+    const speakerPresent = (s) => {
+        const low = String(s || '').trim().toLowerCase();
+        if (!present.length) return true;
+        if (!low) return present.length === 1;
+        if (presentParts.has(low)) return true;
+        return low.split(/\s+/).some(p => p.length >= 3 && presentParts.has(p));
+    };
     const sceneNorm = normalizeForMatch(sceneText);
     const out = [];
     for (const b of list) {
@@ -344,6 +358,7 @@ function sanitizeBubbles(list, sceneText) {
             .trim();
         if (!text) continue;
         if (!sceneNorm || !sceneNorm.includes(normalizeForMatch(text))) continue;
+        if (!speakerPresent(speaker)) continue;
         if (text.length > 110) {
             const win = text.slice(0, 110);
             const sentenceEnd = Math.max(win.lastIndexOf('. '), win.lastIndexOf('! '), win.lastIndexOf('? '));
@@ -374,15 +389,20 @@ function parsePanels(raw, style, maxPanels, opts = {}) {
                 const obj = JSON.parse(match[0]);
                 const arr = Array.isArray(obj?.panels) ? obj.panels : [];
                 const panels = arr
-                    .map(p => ({
-                        sentence: stripLayoutMeta(String(p?.sentence ?? '').replace(/["`\n]+/g, ' ')).replace(/\s{2,}/g, ' ').trim().slice(0, 220),
-                        who: Array.isArray(p?.who) ? p.who.map(w => {
+                    .map(p => {
+                        // `who` is built first: bubble sanitation needs it to enforce the
+                        // speaker's-face law (a line may only be spoken by someone drawn).
+                        const who = Array.isArray(p?.who) ? p.who.map(w => {
                             if (w && typeof w === 'object') return { name: String(w.name ?? '').trim(), state: capTagSafe(stripLayoutMeta(String(w.state ?? '')), 500) };
                             return { name: String(w ?? '').trim(), state: '' };
-                        }).filter(w => w.name).slice(0, 2) : [],
-                        prompt: normalizeCountTags(softSanitize(typeof p === 'string' ? p : String(p?.prompt ?? ''), style)),
-                        bubbles: wantBubbles ? sanitizeBubbles(p?.bubbles, sceneText) : [],
-                    }))
+                        }).filter(w => w.name).slice(0, 2) : [];
+                        return {
+                            sentence: stripLayoutMeta(String(p?.sentence ?? '').replace(/["`\n]+/g, ' ')).replace(/\s{2,}/g, ' ').trim().slice(0, 220),
+                            who,
+                            prompt: normalizeCountTags(softSanitize(typeof p === 'string' ? p : String(p?.prompt ?? ''), style)),
+                            bubbles: wantBubbles ? sanitizeBubbles(p?.bubbles, sceneText, who) : [],
+                        };
+                    })
                     .filter(p => p.prompt)
                     .slice(0, maxPanels);
                 if (panels.length) {
@@ -450,6 +470,10 @@ function filterRankGarments(tagList) {
 function scrubState(state, blockTags) {
     const blockToks = String(blockTags || '').split(',').map(t => t.trim()).filter(Boolean);
     const blockSet = new Set(blockToks.map(t => t.toLowerCase()));
+    // A builder that re-states appearance without commas ("tall lean sharp-featured")
+    // produces ONE token that matches no single block tag, so exact-token comparison
+    // let the whole appearance block through twice. Compare on words, not tokens.
+    const blockWords = new Set(blockToks.flatMap(t => t.toLowerCase().split(/[\s-]+/)).filter(Boolean));
     const out = [];
     let used = 0;
     for (const raw of String(state || '').split(',')) {
@@ -458,6 +482,8 @@ function scrubState(state, blockTags) {
         const low = t.toLowerCase();
         if (blockSet.has(low)) continue;
         if (low.length >= 4 && blockToks.some(b => b.toLowerCase() !== low && b.toLowerCase().startsWith(low))) continue;
+        const words = low.split(/[\s-]+/).filter(Boolean);
+        if (words.length >= 2 && words.every(w => blockWords.has(w))) continue;
         if (low.length < 3) continue;
         if (used + t.length + 2 > 200) break;
         out.push(t);
@@ -486,20 +512,34 @@ function stripPlaceholderLines(sheetText) {
     return String(sheetText || '').split('\n').filter(l => !isPlaceholderTags(l)).join('\n');
 }
 
-function assembleIdentity(who, sheetText) {
+// A figure the builder itself placed far away is scenery, not a principal. Welding a
+// full verbatim appearance block onto it spends a subject slot and a count on someone
+// the frame renders three pixels tall — the model answers by splitting its attention
+// and both subjects come out degraded.
+const BACKGROUND_STATE = /\b(?:in the (?:far )?(?:background|distance)|at a distance|at distance|far (?:away|off|behind|in the)|distant|from afar|tiny in|small in the frame)\b/i;
+
+// Principals get identity blocks and counts; background figures get one shared tag.
+// Never returns zero principals: a frame with no subject is not a frame.
+function splitPrincipals(who) {
+    const list = (who || []).filter(w => w && String(w.name || '').trim());
+    const fore = list.filter(w => !BACKGROUND_STATE.test(String(w.state || '')));
+    const back = list.filter(w => BACKGROUND_STATE.test(String(w.state || '')));
+    if (!fore.length && back.length) return { principals: [back[0]], background: back.slice(1) };
+    return { principals: fore, background: back };
+}
+
+function assembleIdentity(who, sheetText, opts = {}) {
     const cast = parseCastSheet(sheetText);
     const byName = new Map(cast.map(c => [c.name.toLowerCase(), c]));
     const blocks = [];
     const missing = [];
-    for (const entry of (who || []).slice(0, 4)) {
+    for (const entry of (who || []).slice(0, 2)) {
         const name = typeof entry === 'object' && entry ? String(entry.name ?? '') : String(entry ?? '');
         const state = typeof entry === 'object' && entry ? String(entry.state ?? '').trim() : '';
         const hit = byName.get(name.trim().toLowerCase());
         if (hit && !isPlaceholderTags(hit.tags)) blocks.push(scrubState(state, hit.tags) ? `${hit.tags}, ${scrubState(state, hit.tags)}` : hit.tags);
         else missing.push(name.trim() || '(unnamed)');
     }
-    const places = ['foreground left', 'center', 'foreground right', 'background'];
-    const placed = blocks.length >= 3 ? blocks.map((b, i) => `${b}, ${places[i]}`) : blocks;
     let boys = 0, girls = 0, others = 0;
     for (const b of blocks) {
         const first = String(b).split(',')[0].trim().toLowerCase();
@@ -507,12 +547,20 @@ function assembleIdentity(who, sheetText) {
         else if (/\b(?:man|boy|male)\b/.test(first)) boys++;
         else others++;
     }
+    // Count tags are an exhaustive claim about the frame's population: "1boy, 1girl"
+    // asserts a two-person world. Stamping that onto a frame whose own anchor names a
+    // packed courtyard is a contradiction, and the model resolves it the only way it
+    // can — by rendering everyone who is not counted as shapeless mass, or by dropping
+    // a principal outright. `crowd` is the danbooru term for uncounted background
+    // people; with it the counts stop lying and the crowd becomes a subject the model
+    // is actually asked to draw.
     const counts = [
         boys ? `${boys === 1 ? '1boy' : boys + 'boys'}` : '',
         girls ? `${girls === 1 ? '1girl' : girls + 'girls'}` : '',
         others ? `${others === 1 ? '1other' : others + 'others'}` : '',
+        opts.crowd ? 'crowd' : '',
     ].filter(Boolean).join(', ');
-    return { counts, blocks: placed, missing };
+    return { counts, blocks, missing };
 }
 
 // Escape a name for RegExp embedding. Top-level on purpose: this class once
@@ -565,6 +613,12 @@ function seedForPanel(runSeed, whoNames) {
 }
 
 // Append anchor tags to a prompt without duplicating tokens the prompt already has.
+// Does this frame's own text put a crowd in it? Read from the stamped anchor and the
+// panel's shared prompt — the same words the image model will read.
+function framesCrowd(text) {
+    return /\b(?:crowds?|crowded|audience|spectators?|onlookers?|bystanders?|throngs?|thronged|mob|multitude|packed|rows of|ranks of|lined with|standing officers|three hundred)\b/i.test(String(text || ''));
+}
+
 function appendAnchor(prompt, anchor) {
     const base = String(prompt || '');
     const have = new Set(base.split(',').map(t => t.trim().toLowerCase()).filter(Boolean));
@@ -878,11 +932,17 @@ ${FRAME_LAWS}${bubblesOn ? '\n\n' + BUBBLE_RULES : ''}\nOUTPUT (replaces the sin
             try { await autoBuildCast({ silent: true, requiredNames: [...missingAll] }); activeSheet = getActiveCastSheet(); } catch (e) { console.warn('[SceneSnap] targeted seeding failed:', e); }
         }
     }
+    const anchorText = [panels.setting || '', dress].filter(Boolean).join(', ');
     for (const p of panels) {
         if (!p.who || !p.who.length) continue;
-        const id = assembleIdentity(p.who, activeSheet);
+        const { principals, background } = splitPrincipals(p.who);
+        if (background.length) console.warn('[SceneSnap] background figure(s) demoted out of who:', background.map(w => w.name));
+        const crowd = framesCrowd(anchorText) || framesCrowd(p.prompt);
+        const id = assembleIdentity(principals, activeSheet, { crowd });
         if (id.missing.length) console.warn('[SceneSnap] panel "who" names still not in cast sheet:', id.missing);
-        p.prompt = [id.counts, ...id.blocks, p.prompt].filter(Boolean).join(', ');
+        const bgTag = background.length ? 'distant figure in the background' : '';
+        p.prompt = [id.counts, ...id.blocks, bgTag, p.prompt].filter(Boolean).join(', ');
+        p.who = principals;
         p.sentence = replaceNamesInSentence(p.sentence, activeSheet);
     }
     return { panels, style, raw: String(raw), setting: panels.setting || '', dress, schemaSent };

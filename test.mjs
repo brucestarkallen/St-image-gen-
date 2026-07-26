@@ -24,6 +24,7 @@ function extract(name) {
 }
 
 const FUNCS = [
+    'splitPrincipals', 'framesCrowd',
     'normalizeForMatch', 'sanitizeBubbles', 'sanitizeBuilderOutput', 'softSanitize',
     'parsePanels', 'parseCastSheet', 'mergeCastLines', 'effectiveForcedTags',
     'composePositive', 'scanPresenceIn', 'markerDetails', 'ledgerStateLines',
@@ -53,7 +54,7 @@ function extractConst(name) {
     if (!line) throw new Error(`extractConst: ${name} not found`);
     return line;
 }
-const CONSTS = ['escRe'];
+const CONSTS = ['escRe', 'BACKGROUND_STATE'];
 
 const sandboxPath = '/tmp/ss_sandbox_' + process.pid + '.mjs';
 writeFileSync(sandboxPath, prelude + '\n' + CONSTS.map(extractConst).join('\n') + '\n' + FUNCS.map(extract).join('\n\n')
@@ -372,13 +373,48 @@ function defaultPatterns() { return '<details>[\\s\\S]*?</details>\n\\{[A-Z_]+\\
     const trio = S.assembleIdentity([
         { name: 'Jovan Oda', state: 'standing' }, { name: 'Rukia Kuchiki', state: '' }, { name: 'Isane Kotetsu', state: 'running' },
     ], sheet);
-    check('identity: three-plus get placement tags after state, in who order',
-        trio.blocks[0].endsWith('standing, foreground left') && trio.blocks[1].endsWith(', center') && trio.blocks[2].endsWith('running, foreground right'));
+    check('identity: the two-cap is uniform — assembleIdentity never welds a third subject',
+        trio.blocks.length === 2 && !/foreground left|foreground right/.test(trio.blocks.join(' ')));
 
     const bad = S.assembleIdentity([{ name: 'Elderly Stranger', state: 'watching' }, 'Jovan Oda'], sheet);
     check('identity: unknown names reported, never invented',
         bad.missing.length === 1 && bad.missing[0] === 'Elderly Stranger' && bad.blocks.length === 1);
     check('identity: empty who tolerated', S.assembleIdentity([], sheet).counts === '');
+
+    // Field regression, snap_31: a courtyard of 300 rendered as gray mass and a
+    // principal vanished, because the counts claimed a two-person world.
+    check('counts: a frame with a crowd admits the crowd (counts stop asserting a two-person world)',
+        S.assembleIdentity([{ name: 'Jovan Oda', state: 'standing' }, { name: 'Rukia Kuchiki', state: 'shouting' }], sheet, { crowd: true }).counts === '1boy, 1girl, crowd');
+    check('counts: no crowd claimed when the frame has none',
+        S.assembleIdentity([{ name: 'Jovan Oda', state: 'standing' }], sheet, { crowd: false }).counts === '1boy'
+        && S.assembleIdentity([{ name: 'Jovan Oda', state: 'standing' }], sheet).counts === '1boy');
+    check('crowd: detected from the words the image model reads, not guessed',
+        S.framesCrowd('dispersing crowd of shinigami in black shihakusho') && S.framesCrowd('tile roofs with standing officers')
+        && S.framesCrowd('packed courtyard') && S.framesCrowd('ranks of soldiers')
+        && !S.framesCrowd('empty stone courtyard, memorial stone, bare plum tree'));
+
+    // Field regression, snap_31 panel 2: a figure the builder itself put across the
+    // courtyard got a full principal block and half the frame's attention.
+    {
+        const split = S.splitPrincipals([
+            { name: 'Ashida Tetsuzan', state: 'right hand raised in salute to brow' },
+            { name: 'Jovan Oda', state: 'arm raised overhead, seen from behind at distance' },
+        ]);
+        check('who: a distant figure is demoted out of principals',
+            split.principals.length === 1 && split.principals[0].name === 'Ashida Tetsuzan' && split.background.length === 1);
+        check('who: background phrasings are all caught',
+            S.splitPrincipals([{ name: 'A', state: 'far away in the background' }, { name: 'B', state: 'tiny in the frame' }, { name: 'C', state: 'standing' }]).principals.length === 1);
+        check('who: a frame is never left with zero subjects',
+            S.splitPrincipals([{ name: 'A', state: 'in the distance' }]).principals.length === 1);
+    }
+
+    // Field regression, snap_31 panel 2: the builder restated appearance without
+    // commas, so the whole block rode into the prompt a second time.
+    check('scrub: a space-joined restatement of appearance is still a duplicate',
+        S.scrubState('tall lean sharp-featured, arm raised overhead holding sky-blue katana', 'man, white hair, tall, lean, sharp-featured, black kosode')
+            === 'arm raised overhead holding sky-blue katana');
+    check('scrub: real action tags that reuse one appearance word survive',
+        S.scrubState('white hair blowing in wind, teeth clenched', 'man, white hair, tall').includes('blowing'));
 }
 
 // ---------------------------------------------------------------- count-tag normalization
@@ -506,7 +542,21 @@ function defaultPatterns() { return '<details>[\\s\\S]*?</details>\n\\{[A-Z_]+\\
         && src.includes('jobs, not outfits')
         && src.includes('oriented toward whoever they address'));
     check('src: the two-cap is enforced in code at parse',
-        src.includes('.filter(w => w.name).slice(0, 2) : [],'));
+        src.includes('.filter(w => w.name).slice(0, 2) : [];')
+        && src.includes('for (const entry of (who || []).slice(0, 2))'));
+    check('src: bubbles can only be spoken by someone drawn in the frame',
+        src.includes('function sanitizeBubbles(list, sceneText, who)')
+        && src.includes('if (!speakerPresent(speaker)) continue;')
+        && src.includes('sanitizeBubbles(p?.bubbles, sceneText, who)'));
+    check('src: counts are crowd-aware and background figures are demoted before the weld',
+        src.includes("opts.crowd ? 'crowd' : ''")
+        && src.includes('const crowd = framesCrowd(anchorText) || framesCrowd(p.prompt);')
+        && src.includes('const { principals, background } = splitPrincipals(p.who);'));
+    check('src: laws match enforcement — principals-only, shared interaction, standing setting',
+        src.includes('WHO IS PRINCIPALS ONLY') && src.includes('BOTH principals must share ONE interaction')
+        && src.includes('Only a character in THIS panel\'s "who" may speak in this panel')
+        && src.includes('"setting" is a STANDING description')
+        && !src.includes('the extension appends a placement tag'));
     check('src: explicit scenes are tagged explicitly, anatomy locked to cast sheet',
         src.includes('EXPLICIT SCENES:') && src.includes('never euphemize') && src.includes('fullSystem += NSFW_RULE;'));
     check('src: placeholders are empty slots at every gate — detection, author skip-list, merge',
@@ -569,7 +619,7 @@ function defaultPatterns() { return '<details>[\\s\\S]*?</details>\n\\{[A-Z_]+\\
         src.includes('WHO writes identity AND owns state, and WHO is not you')
         && src.includes('one contiguous run per character')
         && src.includes('a climax panel whose victim is missing from "who" is a failed panel')
-        && src.includes('assembleIdentity(p.who, activeSheet)')
+        && src.includes('assembleIdentity(principals, activeSheet, { crowd })')
         && src.includes('Never blend two people into one')
         && src.includes('never render anyone as a child unless their cast tags say so'));
     check('src: scene population is setting-state with continuity',
