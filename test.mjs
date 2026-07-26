@@ -129,6 +129,13 @@ check('normalize: curly quotes + case + whitespace',
     check('parse: legacy line mode picks tag-dense line, shape {prompt,bubbles}',
         legacy.length === 1 && legacy[0].prompt.startsWith('1girl') && Array.isArray(legacy[0].bubbles) && legacy[0].bubbles.length === 0);
 
+    // Hybrid sentence: captured, cleaned, capped.
+    const withSentence = S.parsePanels(JSON.stringify({
+        panels: [{ prompt: 'wide shot, dust', sentence: 'She kneels beside him at the crater\'s center, pressing both hands to his chest.', who: [] }],
+    }), 'tags', 2, { bubbles: false });
+    check('parse: composition sentence captured and cleaned',
+        withSentence[0].sentence === "She kneels beside him at the crater's center, pressing both hands to his chest.");
+
     // JSON single panel with bubbles: invented line filtered, verbatim kept.
     const jsonSingle = S.parsePanels(JSON.stringify({
         panels: [{ prompt: '1boy, 1girl, kitchen, stove, grease', bubbles: [
@@ -394,6 +401,10 @@ function defaultPatterns() { return '<details>[\\s\\S]*?</details>\n\\{[A-Z_]+\\
         && src.includes('oriented toward whoever they address'));
     check('src: explicit scenes are tagged explicitly, anatomy locked to cast sheet',
         src.includes('EXPLICIT SCENES:') && src.includes('never euphemize') && src.includes('fullSystem += NSFW_RULE;'));
+    check('src: hybrid natural-language sentence — schema, contract, and tags-mode append',
+        src.includes('"sentence":"<ONE plain-English sentence')
+        && src.includes('where natural language earns its keep')
+        && src.includes("p.sentence && style === 'tags'"));
     check('src: state purity is enforced in code, not requested',
         src.includes('function scrubState(') && src.includes('scrubState(state, hit.tags)'));
     check('src: state is bound to its owner by schema and weld',

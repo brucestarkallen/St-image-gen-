@@ -114,6 +114,10 @@ Stella: girl, long crimson hair, red eyes, large breasts, hair ribbon, school un
 
 ## Changelog
 
+### 0.12.2 — hybrid prompting: natural language where it earns its keep
+- Why tags at all: anime-family models (NovelAI, Illustrious) are trained on Danbooru tag captions — tags are their native language, and tag runs are their only strong attribute-binding mechanism. Prose-native models (Gemini, GPT-image, FLUX) are a different species; the existing **Prompt style** setting already serves them (Auto/tags/natural).
+- What sentences DO beat tags at on NAI 4.5: spatial relationships. Each panel now carries one builder-written plain-English **composition sentence** (relations and interaction only, zero appearance words), appended after the tags in tags mode. Identity and state stay code-welded tags; arrangement gets grammar.
+
 ### 0.12.1
 - **State purity is enforced in code.** Builders were echoing each character's full appearance back into `state` (doubling identity per character) and long states were cut mid-word ("towering mus"), poisoning prompts with fragments. The weld now scrubs every state: tokens already in the owner's block are deleted, mid-word fragments (prefixes of block tokens) are deleted, and all caps are tag-safe — a disobedient builder becomes harmless. Negative-tested.
 
