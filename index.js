@@ -12,7 +12,7 @@ import { getBase64Async, saveBase64AsFile } from '../../../utils.js';
 import { callGenericPopup, POPUP_TYPE } from '../../../popup.js';
 
 const MODULE = 'sceneSnap';
-const VERSION = '0.12.7';
+const VERSION = '0.12.8';
 
 const defaultSettings = Object.freeze({
     enabled: true,
@@ -441,6 +441,16 @@ function scrubState(state, blockTags) {
     return out.join(', ');
 }
 
+// "(appearance unknown — fill in)" lines are empty slots, not entries: they must
+// never block re-seeding and never leak junk tags into a prompt.
+function isPlaceholderTags(tags) {
+    return /\(appearance unknown/i.test(String(tags || ''));
+}
+
+function stripPlaceholderLines(sheetText) {
+    return String(sheetText || '').split('\n').filter(l => !isPlaceholderTags(l)).join('\n');
+}
+
 function assembleIdentity(who, sheetText) {
     const cast = parseCastSheet(sheetText);
     const byName = new Map(cast.map(c => [c.name.toLowerCase(), c]));
@@ -450,7 +460,7 @@ function assembleIdentity(who, sheetText) {
         const name = typeof entry === 'object' && entry ? String(entry.name ?? '') : String(entry ?? '');
         const state = typeof entry === 'object' && entry ? String(entry.state ?? '').trim() : '';
         const hit = byName.get(name.trim().toLowerCase());
-        if (hit) blocks.push(scrubState(state, hit.tags) ? `${hit.tags}, ${scrubState(state, hit.tags)}` : hit.tags);
+        if (hit && !isPlaceholderTags(hit.tags)) blocks.push(scrubState(state, hit.tags) ? `${hit.tags}, ${scrubState(state, hit.tags)}` : hit.tags);
         else missing.push(name.trim() || '(unnamed)');
     }
     const places = ['foreground left', 'center', 'foreground right', 'background'];
@@ -820,7 +830,8 @@ WORLD (derive once, as data): from the SCENE text and CAST tags, infer this worl
         const missingAll = new Set();
         for (const p of panels) {
             for (const w of (p.who || [])) {
-                if (!parseCastSheet(activeSheet).some(c => c.name.toLowerCase() === String(w.name).toLowerCase())) missingAll.add(w.name);
+                const entry = parseCastSheet(activeSheet).find(c => c.name.toLowerCase() === String(w.name).toLowerCase());
+                if (!entry || isPlaceholderTags(entry.tags)) missingAll.add(w.name);
             }
         }
         if (missingAll.size && settings.autoCast) {
@@ -1384,7 +1395,7 @@ async function autoBuildCast({ silent = false, requiredNames = [] } = {}) {
             `PLAYER CHARACTER HINT: the human player's persona is named "${ctx.name1 || 'User'}" — the protagonist may appear under this or another in-story name; include the protagonist either way.`,
             requiredNames.length ? `REQUIRED CHARACTERS (output a line for EACH of these): ${requiredNames.join(', ')}` : '',
             (() => { const w = collectCanonWikiAppearances(); return w ? `CANON WIKI DATA (authoritative appearances from the fandom wiki — convert faithfully into danbooru tags):\n${w}` : ''; })(),
-            `EXISTING SHEET (skip these characters):\n${getActiveCastSheet() || '(empty)'}`,
+            `EXISTING SHEET (skip these characters):\n${stripPlaceholderLines(getActiveCastSheet()) || '(empty)'}`,
             memory ? `STORY MEMORY:\n${memory}` : '',
             excerpt ? `RECENT CHAT EXCERPT:\n${excerpt}` : '',
         ].filter(Boolean).join('\n\n');
@@ -1400,7 +1411,7 @@ async function autoBuildCast({ silent = false, requiredNames = [] } = {}) {
             return false;
         }
         const cast = getActiveCastName();
-        settings.casts[cast] = mergeCastLines(String(settings.casts[cast] || ''), cleaned);
+        settings.casts[cast] = mergeCastLines(stripPlaceholderLines(String(settings.casts[cast] || '')), cleaned);
         saveSettingsDebounced();
         $('#snapshot_cast_sheet').val(settings.casts[cast]);
         toastr.success(silent ? 'Cast sheet auto-built from story memory — review it in settings' : 'Cast sheet updated — review and edit it', 'SceneSnap');

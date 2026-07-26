@@ -27,7 +27,7 @@ const FUNCS = [
     'normalizeForMatch', 'sanitizeBubbles', 'sanitizeBuilderOutput', 'softSanitize',
     'parsePanels', 'parseCastSheet', 'mergeCastLines', 'effectiveForcedTags',
     'composePositive', 'scanPresenceIn', 'markerDetails', 'ledgerStateLines',
-    'stripScene', 'explainError', 'isStaleSession', 'stripLayoutMeta', 'appendAnchor', 'mineDressTags', 'normalizeCountTags', 'filterRankGarments', 'assembleIdentity', 'scrubState', 'seedForPanel', 'replaceNamesInSentence', 'antiModernNegative', 'getSize',
+    'stripScene', 'explainError', 'isStaleSession', 'stripLayoutMeta', 'appendAnchor', 'mineDressTags', 'normalizeCountTags', 'filterRankGarments', 'assembleIdentity', 'scrubState', 'seedForPanel', 'replaceNamesInSentence', 'antiModernNegative', 'isPlaceholderTags', 'stripPlaceholderLines', 'getSize',
 ];
 
 const prelude = `
@@ -284,6 +284,19 @@ function defaultPatterns() { return '<details>[\\s\\S]*?</details>\n\\{[A-Z_]+\\
         S.sanitizeBuilderOutput('1girl, snow, courtyard', 'tags') === '1girl, snow, courtyard');
 }
 
+// ---------------------------------------------------------------- placeholder = empty slot
+{
+    check('placeholder: detected', S.isPlaceholderTags('man, (appearance unknown — fill in)'));
+    check('placeholder: real lines are not placeholders', !S.isPlaceholderTags('man, medium white hair, black kosode'));
+    check('placeholder: stripped from sheets so the author re-outputs them',
+        S.stripPlaceholderLines('A: man, tall\nB: girl, (appearance unknown — fill in)\nC: woman, glasses')
+            === 'A: man, tall\nC: woman, glasses');
+    const sheet = 'Kiyone: girl, (appearance unknown — fill in)\nJovan Oda: man, medium white hair';
+    const r = S.assembleIdentity([{ name: 'Kiyone', state: 'running' }, 'Jovan Oda'], sheet);
+    check('placeholder: counts as MISSING at assembly — junk never enters a prompt, seeding re-fires',
+        r.missing.length === 1 && r.missing[0] === 'Kiyone' && r.blocks.length === 1 && !/appearance unknown/.test(r.blocks.join('|')));
+}
+
 // ---------------------------------------------------------------- sentence name scrub
 {
     const sheet = 'Jovan Oda: man, medium white hair\nRukia Kuchiki: woman, short black hair\nKiyone Kotetsu: woman, short blonde hair';
@@ -432,6 +445,10 @@ function defaultPatterns() { return '<details>[\\s\\S]*?</details>\n\\{[A-Z_]+\\
         src.includes('.filter(w => w.name).slice(0, 2) : [],'));
     check('src: explicit scenes are tagged explicitly, anatomy locked to cast sheet',
         src.includes('EXPLICIT SCENES:') && src.includes('never euphemize') && src.includes('fullSystem += NSFW_RULE;'));
+    check('src: placeholders are empty slots at every gate — detection, author skip-list, merge',
+        src.includes('if (!entry || isPlaceholderTags(entry.tags)) missingAll.add(w.name);')
+        && src.includes('stripPlaceholderLines(getActiveCastSheet())')
+        && src.includes('mergeCastLines(stripPlaceholderLines(String(settings.casts[cast]'));
     check('src: Canon Grounding wiki appearances feed the cast author, guarded and read-only',
         src.includes('canon_grounding_cache') && src.includes('e?.sections?.physical')
         && src.includes('CANON WIKI DATA (authoritative appearances'));

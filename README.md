@@ -114,6 +114,9 @@ Stella: girl, long crimson hair, red eyes, large breasts, hair ribbon, school un
 
 ## Changelog
 
+### 0.12.8
+- **Placeholder lines are empty slots, not entries.** `(appearance unknown — fill in)` no longer blocks anything: it counts as missing at assembly (junk tags can never enter a prompt), the cast author no longer sees it in the skip-list, and merging replaces it with the real line. The snap button heals them itself — from the wiki cache, story text, or canon knowledge — with zero manual steps, including no deleting.
+
 ### 0.12.7 — the wiki feeds the cast
 - **Canon Grounding integration.** SceneSnap's cast author now reads the sibling Canon Grounding extension's cache (`chatMetadata.canon_grounding_cache`) — the fandom wiki's extracted appearance text per character — as the PRIMARY appearance source, converted faithfully into danbooru tags. Fully automatic, read-only, guarded.
 - **Canon characters are never "unknown".** Source order is law: wiki data → story text → the builder's own canonical knowledge for established fandom characters. `(appearance unknown — fill in)` is reserved strictly for original characters no source describes.
