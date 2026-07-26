@@ -12,7 +12,7 @@ import { getBase64Async, saveBase64AsFile } from '../../../utils.js';
 import { callGenericPopup, POPUP_TYPE } from '../../../popup.js';
 
 const MODULE = 'sceneSnap';
-const VERSION = '0.17.0';
+const VERSION = '0.18.0';
 
 const defaultSettings = Object.freeze({
     enabled: true,
@@ -146,6 +146,33 @@ const FRAME_LAWS = `PANEL DISCIPLINE (binding rules for every panel):
 - Actions are single concrete danbooru tags (clapping, arms crossed, pointing, hand on own chest) — never compound phrases like 'hands clapping together', which image models misread.
 - A line spoken to a group is drawn as the speaker prominent with the addressed group visible and attending — never a private two-shot for a public address.
 WORLD (derive once, as data): from the SCENE text and CAST tags, infer this world's shared clothing style and this scene's physical setting. "dress" is ONLY the universal base outfit every ordinary person wears — never rank- or status-specific garments (captain's coats/haori, armbands, crowns, insignia): those belong exclusively to the cast tags of whoever holds the rank. Never modernize: no modern uniforms, coats, neckties, or architecture unless cast tags or scene text explicitly describe them. "setting" also names the scene's standing population AND that population's dress ("packed stands of shinigami in black shihakushō", "crowd of villagers in gray work clothes") — an unnamed crowd dress is how background people modernize: an arena full of watchers shows watchers in every panel that shows the surroundings, and established spectators never vanish (that is a continuity violation). "setting" is a STANDING description stamped unchanged onto EVERY panel: it names the place and its population and what that population wears — never what the population is momentarily doing. A transient verb there ("dispersing crowd", "crowd leaving") contradicts every panel of the scene and is a failed strip; the crowd's current action belongs in each panel's own prompt. Output both as flat tag lists in the top-level "dress" and "setting" fields — the extension stamps them onto every panel itself, so do NOT restate them inside panel prompts.`;
+
+// ---------------------------------------------------------------- the plan pass
+//
+// One call was choosing the beats, ordering them, assigning who was in each frame,
+// deriving the world, writing every tag, and obeying seven thousand characters of law.
+// Every field failure of the last six versions was a PLANNING failure — a beat spent
+// twice, two people packed into one frame, an all-solo strip, a population nobody
+// named — and code could not catch any of them, because the plan arrived already fused
+// to its own rendering. So the strip is planned first, in plain language, small enough
+// to check: the panel list is validated (and repaired) BEFORE a single tag is written.
+const PLAN_LAWS = `You are laying out a comic strip. Do NOT write image tags yet — plan the panels.
+
+PANELS: pick how many the scene's climax needs (2 to %MAX%). One DISTINCT beat each, in the order they happen, ending on the final beat, and the climax action itself MUST be one of them.
+- Every panel a different beat. One action stretched over two panels (a sword leaving its sheath, then that same sword held overhead) is ONE beat; pick the stronger image and spend the freed panel elsewhere.
+- More beats than panels: drop the weakest. Never merge two beats into one frame.
+
+WHO is the people the beat's action passes BETWEEN, and nobody else:
+- An action between two people (speaking to, striking, healing, standing at someone's shoulder, reacting to each other) lists BOTH — cropping the other one out is a failed panel.
+- A beat that happens inside ONE person (a private realization, a salute to a memory) lists that one name.
+- A beat belonging to the place or the crowd (the courtyard erupting, three hundred voices at once) lists NOBODY: "who": []. A scene whose crowd reacts needs one such frame; a strip of nothing but single faces has thrown the scene away.
+- Never more than two names: a single image prompt cannot bind a garment or a wound across three people. A third principal means the beat splits across two panels.
+- Never pad a frame to two, and never cut a frame to one. Use EXACT cast-sheet names.
+
+WORLD, derived once: "setting" is the standing description of the place stamped on every panel — location, architecture, weather, light, AND the scene's population with what that population wears ("packed stands of shinigami in black shihakusho"). Never what the population is momentarily doing. "dress" is ONLY the universal base outfit an ordinary person of this world wears — never rank- or status-specific garments.
+
+OUTPUT strict JSON only, no commentary, no markdown:
+{"setting":"<place tags + population + population's dress>","dress":"<the world's base outfit, as tags>","panels":[{"beat":"<one plain sentence: what this frame shows>","who":["Exact Cast Name"]}]}`;
 
 // Same default presence-marker patterns as Summaryception's ledger: a preset's
 // [IST: name|state] in-scene tracker and [ACW: name|...] off-screen watchlist.
@@ -462,6 +489,19 @@ function normalizeCountTags(prompt) {
 
 // Rank garments are per-character, never world dress — filter them from ANY dress
 // source (builder field or mined backstop), so the anchor can't dress everyone up.
+const RANK_WORD = /\b(?:captain|lieutenant|commander|general|sergeant|colonel|major|marshal|officer|admiral)\b/i;
+const DECORATION_WORD = /\b(?:badge|insignia|pin|medal|medals|star|stars|stripe|stripes|epaulettes?|braid|patch|emblem|crest|rank|bars?|chevrons?)\b/i;
+
+// Drop a cast tag that names a rank AND a decoration. This runs on the welded block,
+// not just the world dress: the field run kept rendering a lieutenant in a black
+// military tunic with collar tabs and an eagle because her own cast line said
+// "lieutenant's badge". The garment survives; only the rank decoration goes.
+function stripRankInsignia(tagList) {
+    return String(tagList || '').split(',').map(t => t.trim())
+        .filter(t => t && !(RANK_WORD.test(t) && DECORATION_WORD.test(t)))
+        .join(', ');
+}
+
 function filterRankGarments(tagList) {
     return String(tagList || '').split(',').map(t => t.trim())
         .filter(t => t && !/captain|lieutenant|commander|general|sergeant|king|queen|royal/i.test(t))
@@ -581,12 +621,13 @@ function assembleIdentity(who, sheetText, opts = {}) {
         const state = typeof entry === 'object' && entry ? String(entry.state ?? '').trim() : '';
         const hit = byName.get(name.trim().toLowerCase());
         if (hit && !isPlaceholderTags(hit.tags)) {
-            const scrubbed = scrubState(state, hit.tags);
+            const tags = stripRankInsignia(hit.tags);
+            const scrubbed = stripRankInsignia(scrubState(state, tags));
             // Clothing is identity too: if neither the sheet nor the state dresses this
             // character, the world's base outfit is welded in rather than left to priors.
             const worldDress = String(opts.dress || '').trim();
-            const clothing = (!hasGarment(hit.tags) && !hasGarment(scrubbed) && worldDress) ? `, ${worldDress}` : '';
-            blocks.push(scrubbed ? `${hit.tags}, ${scrubbed}${clothing}` : `${hit.tags}${clothing}`);
+            const clothing = (!hasGarment(tags) && !hasGarment(scrubbed) && worldDress) ? `, ${worldDress}` : '';
+            blocks.push(scrubbed ? `${tags}, ${scrubbed}${clothing}` : `${tags}${clothing}`);
         }
         else missing.push(name.trim() || '(unnamed)');
     }
@@ -651,7 +692,9 @@ function antiModernNegative(dress) {
     if (traditional.some(t => d.includes(t)) && !modern.some(m => d.includes(m))) {
         return 'modern military uniform, epaulettes, necktie, medals, dress shirt, buttons coat, peaked cap, '
             + 'school uniform, gakuran, blazer, pleated skirt, sailor collar, serafuku, business suit, hoodie, '
-            + 'glass building, concrete building, skyscraper, modern architecture, power lines, streetlight, asphalt road';
+            + 'glass building, concrete building, skyscraper, modern architecture, power lines, streetlight, asphalt road, '
+            + 'military uniform, shoulder boards, collar tabs, eagle insignia, aiguillette, sam browne belt, jodhpurs, '
+            + 'nazi, swastika, iron cross, wehrmacht, ss uniform, gestapo, armband with emblem, military cap';
     }
     return '';
 }
@@ -708,6 +751,71 @@ const TRANSIENT_ACTIVITY = /\b(?:dispersing|scattering|leaving|departing|exiting
 function stripTransientFromSetting(setting) {
     return String(setting || '').split(',').map(t => t.replace(TRANSIENT_ACTIVITY, '').trim())
         .filter(Boolean).join(', ');
+}
+
+// Parse the plan pass. Small, strict, and never throws — a plan that will not parse
+// simply means the caller falls back to the single-call builder.
+function parsePlan(raw, maxPanels) {
+    const cleaned = String(raw || '').replace(/<think>[\s\S]*?<\/think>/gi, '').replace(/```json\n?|```/gi, '').trim();
+    const match = cleaned.match(/\{[\s\S]*\}/);
+    if (!match) return null;
+    let obj;
+    try { obj = JSON.parse(match[0]); } catch { return null; }
+    const arr = Array.isArray(obj?.panels) ? obj.panels : [];
+    const panels = arr.map(p => ({
+        beat: stripLayoutMeta(String(p?.beat ?? '').replace(/["`\n]+/g, ' ')).replace(/\s{2,}/g, ' ').trim().slice(0, 200),
+        who: Array.isArray(p?.who) ? p.who.map(w => String(typeof w === 'object' && w ? w.name ?? '' : w ?? '').trim()).filter(Boolean).slice(0, 2) : null,
+    })).filter(p => p.beat).slice(0, maxPanels);
+    if (!panels.length) return null;
+    return { setting: String(obj?.setting ?? '').trim(), dress: String(obj?.dress ?? '').trim(), panels };
+}
+
+// Two beats are the same beat when their content words mostly coincide. This is the
+// check that catches a sword leaving its sheath followed by that same sword overhead.
+const BEAT_STOPWORD = /^(?:the|a|an|and|or|but|as|at|in|on|of|to|his|her|their|its|with|while|over|into|from|for|by|is|are|was|were|he|she|they|it|this|that|up|down|out)$/i;
+function beatWords(beat) {
+    return new Set(String(beat || '').toLowerCase().replace(/[^a-z0-9\s]/g, ' ').split(/\s+/)
+        .filter(w => w.length > 2 && !BEAT_STOPWORD.test(w)));
+}
+function beatsAreTheSame(a, b) {
+    const A = beatWords(a), B = beatWords(b);
+    if (A.size < 2 || B.size < 2) return false;
+    let shared = 0;
+    for (const w of A) if (B.has(w)) shared++;
+    return shared / Math.min(A.size, B.size) >= 0.6;
+}
+
+// Everything the plan can get wrong that a human would catch by reading the list. Each
+// problem is returned as a sentence the repair call can act on directly.
+function validatePlan(plan, castNames, maxPanels, opts = {}) {
+    const problems = [];
+    const known = new Set((castNames || []).map(n => n.toLowerCase()));
+    if (maxPanels > 1 && plan.panels.length < 2) problems.push('You returned fewer than 2 panels; a strip needs at least 2.');
+    for (let i = 0; i < plan.panels.length; i++) {
+        const p = plan.panels[i];
+        if (p.who === null) problems.push(`Panel ${i + 1} has no "who" field at all. Every panel must have one, even if it is [].`);
+        for (const n of (p.who || [])) {
+            if (known.size && !known.has(n.toLowerCase())) problems.push(`Panel ${i + 1} names "${n}", who is not in the cast sheet. Use an exact cast-sheet name or drop them.`);
+        }
+        for (let j = i + 1; j < plan.panels.length; j++) {
+            if (beatsAreTheSame(p.beat, plan.panels[j].beat)) problems.push(`Panels ${i + 1} and ${j + 1} are the same beat. Replace one with a beat the strip does not already cover.`);
+        }
+    }
+    // The all-solo strip: 0.16.0 shipped one and it threw the scene away.
+    const named = plan.panels.filter(p => (p.who || []).length);
+    if (named.length >= 3 && named.every(p => p.who.length === 1) && (castNames || []).length >= 2) {
+        problems.push('Every panel is a single person. If any beat in this scene is an action BETWEEN two people, that panel must list both.');
+    }
+    if (opts.crowd && plan.panels.length >= 3 && !plan.panels.some(p => (p.who || []).length === 0)) {
+        problems.push('This scene has a crowd reacting and no panel gives the crowd the frame. Make one panel "who": [].');
+    }
+    return problems;
+}
+
+// Render the approved plan back into the render call, so the second pass decides tags
+// and nothing else — the beats, the order, and the cast of each frame are settled.
+function planAsBrief(plan) {
+    return plan.panels.map((p, i) => `Panel ${i + 1} — beat: ${p.beat}\n  who: ${(p.who || []).length ? (p.who || []).join(', ') : '(nobody — the crowd or the place is the subject)'}`).join('\n');
 }
 
 function appendAnchor(prompt, anchor) {
@@ -1000,6 +1108,40 @@ ${FRAME_LAWS}${bubblesOn ? '\n\n' + BUBBLE_RULES : ''}\nOUTPUT (replaces the sin
     }
 
     const maxTokens = maxPanels > 1 ? Math.min(3600, 500 + 650 * maxPanels) : structuredSingle ? 1300 : (bubblesOn ? 1100 : 800);
+
+    // ---- pass 1: plan the strip, check the list, repair it once if it is wrong ----
+    let plan = null;
+    let planNotes = [];
+    if (maxPanels > 1) {
+        const planSystem = `${system}\n\n${PLAN_LAWS.replace('%MAX%', String(maxPanels))}`;
+        try {
+            const planRaw = await callLLM(planSystem, user, 900);
+            plan = parsePlan(planRaw, maxPanels);
+            if (plan) {
+                const castNames = parseCastSheet(getActiveCastSheet()).map(c => c.name);
+                const wantsCrowd = framesCrowd(plan.setting) || framesCrowd(scene);
+                let problems = validatePlan(plan, castNames, maxPanels, { crowd: wantsCrowd });
+                if (problems.length) {
+                    console.warn('[SceneSnap] plan rejected:', problems);
+                    planNotes = problems.slice();
+                    const fixRaw = await callLLM(
+                        `${planSystem}\n\nYOUR PREVIOUS PLAN WAS REJECTED:\n- ${problems.join('\n- ')}\nRe-output the complete corrected plan JSON now.`,
+                        user, 900);
+                    const fixed = parsePlan(fixRaw, maxPanels);
+                    if (fixed && validatePlan(fixed, castNames, maxPanels, { crowd: wantsCrowd }).length < problems.length) plan = fixed;
+                }
+                console.log('[SceneSnap] plan:', plan.panels.map((p, i) => `${i + 1}. [${(p.who || []).join(', ') || 'crowd'}] ${p.beat}`));
+            }
+        } catch (e) {
+            console.warn('[SceneSnap] plan pass failed, falling back to single-call builder:', e);
+            plan = null;
+        }
+    }
+    if (plan) {
+        fullSystem += `\n\nTHE STRIP IS ALREADY PLANNED — render exactly these panels, in this order. Do NOT change the beats, do NOT change who is in a frame, do NOT add or remove panels. Your only job now is the tags, states, camera, and composition sentence for each frame:\n${planAsBrief(plan)}`;
+    }
+
+    // ---- pass 2: render the plan (or the whole job, when there is no plan) ----
     let raw;
     try {
         raw = await callLLM(fullSystem, user, maxTokens);
@@ -1025,6 +1167,10 @@ ${FRAME_LAWS}${bubblesOn ? '\n\n' + BUBBLE_RULES : ''}\nOUTPUT (replaces the sin
     // World anchor: builder-derived, cast-mined as backstop. Stamped onto every panel by
     // the extension (appendAnchor) — per-panel drift to modern dress/architecture becomes
     // structurally impossible instead of being a memory test for the builder.
+    if (plan) {
+        if (plan.setting) panels.setting = stripTransientFromSetting(plan.setting);
+        if (plan.dress) panels.dress = plan.dress;
+    }
     const dress = filterRankGarments(panels.dress) || mineDressTags(getActiveCastSheet());
     let activeSheet = getActiveCastSheet();
     // A who-name missing from the cast means a panel with NO subject tags at all —
@@ -1065,7 +1211,7 @@ ${FRAME_LAWS}${bubblesOn ? '\n\n' + BUBBLE_RULES : ''}\nOUTPUT (replaces the sin
         // Identity welded by code — the seed no longer has to protect subject appearance.
         p.welded = id.blocks.length > 0;
     }
-    return { panels, style, raw: String(raw), setting: panels.setting || '', dress, schemaSent };
+    return { panels, style, raw: String(raw), setting: panels.setting || '', dress, schemaSent, plan, planNotes };
 }
 
 // ------------------------------------------------------------------ backends
@@ -1373,7 +1519,7 @@ async function illustrateMessage(mesId, { force = false } = {}) {
         let debugPrompts = [];
 
 
-            const { panels, style, raw, setting, dress, schemaSent } = await buildScenePrompt(mesId);
+            const { panels, style, raw, setting, dress, schemaSent, plan, planNotes } = await buildScenePrompt(mesId);
             // The dress anchor used to be stamped as bare garment tags, so appendAnchor's
             // dedup deleted it from exactly the panels where a principal already wore that
             // garment — taking the CROWD's only clothing instruction with it. The field run
@@ -1400,6 +1546,7 @@ async function illustrateMessage(mesId, { force = false } = {}) {
                 const castEntries = parseCastSheet(getActiveCastSheet());
                 debugPrompts.unshift(
                     `ENGINE v${VERSION}`,
+                    plan ? `PLAN — ${plan.panels.map((p, i) => `${i + 1}. [${(p.who || []).join(', ') || 'crowd'}] ${p.beat}`).join('  |  ')}${planNotes.length ? `\n  (repaired: ${planNotes.join(' ')})` : ''}` : 'PLAN — (single-call builder; no plan pass)',
                     `CAST — "${getActiveCastName()}": ${castEntries.length} entr${castEntries.length === 1 ? 'y' : 'ies'}${castEntries[0] ? ` (first: ${castEntries[0].name}: ${castEntries[0].tags.slice(0, 60)})` : ''}`,
                 );
             }

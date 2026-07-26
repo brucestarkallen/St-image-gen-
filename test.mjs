@@ -25,6 +25,7 @@ function extract(name) {
 
 const FUNCS = [
     'splitPrincipals', 'framesCrowd', 'enforceShotGrammar', 'hasGarment', 'firstGarmentTag', 'stripTransientFromSetting', 'capSentenceSafe', 'foldTagDiacritics',
+    'stripRankInsignia', 'parsePlan', 'validatePlan', 'planAsBrief', 'beatWords', 'beatsAreTheSame',
     'normalizeForMatch', 'sanitizeBubbles', 'sanitizeBuilderOutput', 'softSanitize',
     'parsePanels', 'parseCastSheet', 'mergeCastLines', 'effectiveForcedTags',
     'composePositive', 'scanPresenceIn', 'markerDetails', 'ledgerStateLines',
@@ -54,7 +55,7 @@ function extractConst(name) {
     if (!line) throw new Error(`extractConst: ${name} not found`);
     return line;
 }
-const CONSTS = ['escRe', 'BACKGROUND_STATE', 'CODE_OWNED_TAG', 'GARMENT_CONDITION', 'TRANSIENT_ACTIVITY', 'FRAMING_TAG', 'ANGLE_TAG', 'GARMENT_WORDS'];
+const CONSTS = ['escRe', 'BACKGROUND_STATE', 'CODE_OWNED_TAG', 'GARMENT_CONDITION', 'TRANSIENT_ACTIVITY', 'FRAMING_TAG', 'ANGLE_TAG', 'GARMENT_WORDS', 'RANK_WORD', 'DECORATION_WORD', 'BEAT_STOPWORD'];
 
 const sandboxPath = '/tmp/ss_sandbox_' + process.pid + '.mjs';
 writeFileSync(sandboxPath, prelude + '\n' + CONSTS.map(extractConst).join('\n') + '\n' + FUNCS.map(extract).join('\n\n')
@@ -485,6 +486,57 @@ function defaultPatterns() { return '<details>[\\s\\S]*?</details>\n\\{[A-Z_]+\\
     check('tags: non-Latin scripts are left alone',
         S.foldTagDiacritics('1girl, \u6b7b\u795e, black shihakusho') === '1girl, \u6b7b\u795e, black shihakusho');
 
+    // The plan pass: the strip is laid out and checked as a LIST before any tag exists.
+    {
+        const goodPlan = S.parsePlan(JSON.stringify({ setting: 'courtyard, crowd of shinigami in black shihakusho', dress: 'black shihakusho', panels: [
+            { beat: 'He raises the blade over the courtyard.', who: ['Jovan Oda', 'Rukia Kuchiki'] },
+            { beat: 'The old soldier salutes the memorial stone.', who: ['Ashida Tetsuzan'] },
+            { beat: 'The whole courtyard erupts into the chant.', who: [] },
+        ] }), 4);
+        check('plan: parsed into beats and who, world carried',
+            goodPlan.panels.length === 3 && goodPlan.panels[2].who.length === 0 && goodPlan.dress === 'black shihakusho');
+        check('plan: a valid plan raises no problems',
+            S.validatePlan(goodPlan, ['Jovan Oda', 'Rukia Kuchiki', 'Ashida Tetsuzan'], 4, { crowd: true }).length === 0);
+        check('plan: the brief names every panel for the render pass',
+            S.planAsBrief(goodPlan).includes('Panel 3') && S.planAsBrief(goodPlan).includes('(nobody'));
+    }
+    // Field regression, v0.16.0: the same beat spent twice, and an all-solo strip.
+    check('plan: one beat rendered twice is caught',
+        S.beatsAreTheSame('The sky-blue blade leaps free of its sheath into the air.', 'The sky-blue blade leaps into the air above him.')
+        && !S.beatsAreTheSame('He raises the blade over the courtyard.', 'The old soldier salutes the memorial stone.'));
+    check('plan: an all-solo strip is caught',
+        S.validatePlan({ panels: [
+            { beat: 'He raises the blade.', who: ['Jovan Oda'] },
+            { beat: 'She shouts with the division.', who: ['Rukia Kuchiki'] },
+            { beat: 'The old soldier salutes.', who: ['Ashida Tetsuzan'] },
+        ] }, ['Jovan Oda', 'Rukia Kuchiki', 'Ashida Tetsuzan'], 4, {})
+            .some(p => p.includes('Every panel is a single person')));
+    check('plan: an unknown name and a missing who field are caught',
+        S.validatePlan({ panels: [{ beat: 'A stranger waves.', who: ['Nobody Here'] }, { beat: 'Wind moves.', who: null }] }, ['Jovan Oda'], 4, {}).length === 2);
+    check('plan: a crowd scene with no crowd frame is caught',
+        S.validatePlan({ panels: [
+            { beat: 'He raises the blade.', who: ['Jovan Oda'] },
+            { beat: 'She shouts beside him.', who: ['Jovan Oda', 'Rukia Kuchiki'] },
+            { beat: 'The old soldier salutes.', who: ['Ashida Tetsuzan'] },
+        ] }, ['Jovan Oda', 'Rukia Kuchiki', 'Ashida Tetsuzan'], 4, { crowd: true })
+            .some(p => p.includes('gives the crowd the frame')));
+    check('plan: unparseable output returns null so the caller can fall back',
+        S.parsePlan('sorry, I cannot do that', 4) === null && S.parsePlan('{"panels":[]}', 4) === null);
+
+    // Field regression, snap_31 v0.17.0: a lieutenant in a black military tunic with
+    // collar tabs and an eagle, because her own cast line said "lieutenant's badge".
+    check('rank: a rank decoration is stripped from the cast block itself',
+        S.stripRankInsignia("woman, petite, violet eyes, lieutenant's badge") === 'woman, petite, violet eyes');
+    check('rank: the WELDED block never carries a rank decoration',
+        (() => { const b = S.assembleIdentity([{ name: 'Rukia Kuchiki', state: 'shouting' }],
+            "Rukia Kuchiki: woman, petite, short black hair, violet eyes, lieutenant's badge",
+            { dress: 'black shihakusho' }).blocks[0];
+            return !b.includes('badge') && b.includes('black shihakusho'); })());
+    check('rank: a decoration smuggled in through state is stripped too',
+        !S.assembleIdentity([{ name: 'A', state: "captain's insignia, standing" }], 'A: man, tall', {}).blocks[0].includes('insignia'));
+    check('rank: a garment that merely belongs to a rank survives',
+        S.stripRankInsignia("man, white hair, captain's haori") === "man, white hair, captain's haori");
+
     check('setting: standing description untouched',
         S.stripTransientFromSetting('stone courtyard, memorial stone, pale winter sun')
             === 'stone courtyard, memorial stone, pale winter sun');
@@ -668,6 +720,20 @@ function defaultPatterns() { return '<details>[\\s\\S]*?</details>\n\\{[A-Z_]+\\
         src.includes('CANONICAL NAME TAG') && src.includes('kuchiki rukia, bleach')
         && src.includes('never invent a character tag for an OC')
         && src.includes('RANK IS NOT AN OUTFIT, in the cast line either'));
+    check('src: the strip is planned before it is rendered, and the plan is checked',
+        src.includes('const PLAN_LAWS = `') && src.includes('parsePlan(planRaw, maxPanels)')
+        && src.includes('validatePlan(plan, castNames, maxPanels, { crowd: wantsCrowd })')
+        && src.includes('YOUR PREVIOUS PLAN WAS REJECTED:')
+        && src.includes('THE STRIP IS ALREADY PLANNED — render exactly these panels'));
+    check('src: a failed plan pass falls back to the single-call builder, never blocks the image',
+        src.includes("console.warn('[SceneSnap] plan pass failed, falling back to single-call builder:', e);")
+        && src.includes('plan = null;'));
+    check('src: the plan owns the world, and is surfaced in the debug popup',
+        src.includes('if (plan.setting) panels.setting = stripTransientFromSetting(plan.setting);')
+        && src.includes("'PLAN — (single-call builder; no plan pass)'"));
+    check('src: rank decorations are stripped at the weld and the WWII prior is negated',
+        src.includes('function stripRankInsignia(') && src.includes('RANK_WORD.test(t) && DECORATION_WORD.test(t)')
+        && src.includes('nazi, swastika, iron cross'));
     check('src: bubbles can only be spoken by someone drawn in the frame',
         src.includes('function sanitizeBubbles(list, sceneText, who)')
         && src.includes('if (!speakerPresent(speaker)) continue;')
@@ -720,12 +786,12 @@ function defaultPatterns() { return '<details>[\\s\\S]*?</details>\n\\{[A-Z_]+\\
         && src.includes('where natural language earns its keep')
         && src.includes("p.sentence && style === 'tags'"));
     check('src: state purity is enforced in code, not requested',
-        src.includes('function scrubState(') && src.includes('scrubState(state, hit.tags)'));
+        src.includes('function scrubState(') && src.includes('stripRankInsignia(scrubState(state, tags))'));
     check('src: state is bound to its owner by schema and weld',
         src.includes('"state":"<THIS character') && src.includes('welds their state onto it')
         && src.includes("carries it in their OWN \"state\"")
-        && src.includes('const scrubbed = scrubState(state, hit.tags);')
-        && src.includes('blocks.push(scrubbed ? `${hit.tags}, ${scrubbed}${clothing}` : `${hit.tags}${clothing}`);'));
+        && src.includes('const scrubbed = stripRankInsignia(scrubState(state, tags));')
+        && src.includes('blocks.push(scrubbed ? `${tags}, ${scrubbed}${clothing}` : `${tags}${clothing}`);'));
     check('src: setting and dress are tag-capped in code',
         src.includes('capTags(obj?.setting, 16)') && src.includes('capTags(obj?.dress, 8)'));
     check('src: the cast author copies canon verbatim — no synonyms, adults are man/woman',
