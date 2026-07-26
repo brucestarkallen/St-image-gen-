@@ -114,6 +114,11 @@ Stella: girl, long crimson hair, red eyes, large breasts, hair ribbon, school un
 
 ## Changelog
 
+### 0.12.0 — state binds to its owner
+- Identity binding worked; the last unbound layer was **state** — poses, wounds, expressions floated in a shared soup after the character blocks, so the model redistributed them (the dying man's laugh landed on his medic). Each `who` entry is now `{name, state}`: the extension welds each character's state onto their verbatim identity block — **one contiguous run per character** — and the panel prompt shrinks to what is genuinely shared: camera, lighting, atmosphere, environment, scene-wide effects.
+- Setting and dress are tag-capped in code (12/8) — attention no longer dilutes across scenery bloat.
+- Show last generation's WHO lines now include each character's bound state.
+
 ### 0.11.3
 - **The cast author copies canon, never composes it.** Auto-build must take trait wording verbatim from story memory ('armband' can never become 'badge', 'medium' can never become 'short'), keep eye colors and exact hair lengths, list base clothing per character, and use 'man'/'woman' for adults — 'boy'/'girl' only for canonically child-statured characters.
 - **The delete-per-chat ritual is dead.** Every chat now seeds its own NEW characters automatically, once, append-only — existing lines are never modified. To refresh one wrong entry: delete that single line; the next chat re-seeds it fresh.

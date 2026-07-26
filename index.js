@@ -12,7 +12,7 @@ import { getBase64Async, saveBase64AsFile } from '../../../utils.js';
 import { callGenericPopup, POPUP_TYPE } from '../../../popup.js';
 
 const MODULE = 'sceneSnap';
-const VERSION = '0.11.3';
+const VERSION = '0.12.0';
 
 const defaultSettings = Object.freeze({
     enabled: true,
@@ -351,15 +351,19 @@ function parsePanels(raw, style, maxPanels, opts = {}) {
                 const arr = Array.isArray(obj?.panels) ? obj.panels : [];
                 const panels = arr
                     .map(p => ({
-                        who: Array.isArray(p?.who) ? p.who.map(n => String(n).trim()).filter(Boolean).slice(0, 4) : [],
+                        who: Array.isArray(p?.who) ? p.who.map(w => {
+                            if (w && typeof w === 'object') return { name: String(w.name ?? '').trim(), state: stripLayoutMeta(String(w.state ?? '')).slice(0, 200) };
+                            return { name: String(w ?? '').trim(), state: '' };
+                        }).filter(w => w.name).slice(0, 4) : [],
                         prompt: normalizeCountTags(softSanitize(String(p?.prompt ?? p ?? ''), style)),
                         bubbles: wantBubbles ? sanitizeBubbles(p?.bubbles, sceneText) : [],
                     }))
                     .filter(p => p.prompt)
                     .slice(0, maxPanels);
                 if (panels.length) {
-                    panels.setting = stripLayoutMeta(String(obj?.setting ?? '')).slice(0, 300);
-                    panels.dress = stripLayoutMeta(String(obj?.dress ?? '')).slice(0, 300);
+                    const capTags = (v, n) => stripLayoutMeta(String(v ?? '')).split(',').map(t => t.trim()).filter(Boolean).slice(0, n).join(', ');
+                    panels.setting = capTags(obj?.setting, 12);
+                    panels.dress = capTags(obj?.dress, 8);
                     return panels;
                 }
             } catch { /* fall through to regex recovery */ }
@@ -415,10 +419,12 @@ function assembleIdentity(who, sheetText) {
     const byName = new Map(cast.map(c => [c.name.toLowerCase(), c]));
     const blocks = [];
     const missing = [];
-    for (const rawName of (who || []).slice(0, 4)) {
-        const hit = byName.get(String(rawName).toLowerCase());
-        if (hit) blocks.push(hit.tags);
-        else missing.push(rawName);
+    for (const entry of (who || []).slice(0, 4)) {
+        const name = typeof entry === 'object' && entry ? String(entry.name ?? '') : String(entry ?? '');
+        const state = typeof entry === 'object' && entry ? String(entry.state ?? '').trim() : '';
+        const hit = byName.get(name.trim().toLowerCase());
+        if (hit) blocks.push(state ? `${hit.tags}, ${state}` : hit.tags);
+        else missing.push(name.trim() || '(unnamed)');
     }
     const places = ['foreground left', 'center', 'foreground right', 'background'];
     const placed = blocks.length >= 3 ? blocks.map((b, i) => `${b}, ${places[i]}`) : blocks;
@@ -691,8 +697,8 @@ PANEL DISCIPLINE (binding rules for every panel):
 - Panels are the SCENE's beats in strict chronological order, first key moment to last — and the climax action itself (the strike, the explosion, the reveal) MUST be one of the panels; a strip that skips its own climax is a failed strip.
 - CONTINUITY: consecutive panels are one continuous moment in one place — carry the previous panel's consequences forward (smoke from a blast lingers in the next panel; wounds, debris, and damage persist; light and weather never change mid-scene). No panel may contradict a state an earlier panel established.
 - When someone acts ON another person (healing, striking, carrying, restraining), the panel shows BOTH — the object of the action is never cropped out. A medic kneels beside a VISIBLE patient.
-- WHO writes identity, and WHO is not you: list each panel's characters by their EXACT cast-sheet names in the "who" array (primary first, up to FOUR; fold extras into the crowd). The extension inserts every listed character's full appearance block VERBATIM from the cast sheet and computes the count tags itself — therefore the panel "prompt" must contain ZERO appearance traits of named characters (no hair, eyes, build, skin, clothing): only actions, expressions, poses, effects, camera, and scene. Writing a named character's looks in the prompt is a failed panel.
-- The character an effect happens TO is IN "who" and the effect tags are theirs: the exploding sword detonates around its holder — a climax panel whose victim is missing from "who" is a failed panel. Healing, striking, carrying, restraining: BOTH parties in "who"; "hand on patient" with no patient listed is a failed panel.
+- WHO writes identity AND owns state, and WHO is not you: list each panel's characters in "who" as {"name": exact cast-sheet name, "state": THAT character's pose, expression, wounds, and action tags} — primary first, up to FOUR; fold extras into the crowd. The extension inserts each character's appearance block VERBATIM from the cast sheet, welds their state onto it, and computes the counts — one contiguous run per character, so the image model cannot give one character's laugh or wound to another. The panel "prompt" therefore contains ONLY what is shared: camera, lighting, atmosphere, environment, and scene-wide effects. A per-character detail in the shared prompt, or any appearance trait anywhere, is a failed panel.
+- The character an effect happens TO carries it in their OWN "state": the exploding sword detonates in its holder's state, the wound bleeds in the wounded one's state — a climax panel whose victim is missing from "who" is a failed panel. Healing, striking, carrying, restraining: BOTH parties in "who", each with their own state; "hand on patient" with no patient listed is a failed panel.
 - Characters not in physical contact get explicit spatial-relation tags in the prompt (distance between them, one far in the background, facing from across the field). With three or more in "who", the extension appends a placement tag to each block automatically in "who" order.
 - Never blend two people into one, and never render anyone as a child unless their cast tags say so.
 - Clothing comes ONLY from cast tags and explicit scene wording. NEVER derive clothing or armor from rank/role words: 'officer', 'captain', 'soldier', 'guard', 'division' are jobs, not outfits — writing 'military uniform' because the scene says 'officers' is a failed panel.
@@ -700,12 +706,12 @@ PANEL DISCIPLINE (binding rules for every panel):
 - The panel's speaker (if it has a bubble) is drawn mid-speech, body and face oriented toward whoever they address — a speaker addressing a crowd faces the crowd, not the camera.
 - Actions are single concrete danbooru tags (clapping, arms crossed, pointing, hand on own chest) — never compound phrases like 'hands clapping together', which image models misread.
 - A line spoken to a group is drawn as the speaker prominent with the addressed group visible and attending — never a private two-shot for a public address.
-WORLD (derive once, as data): from the SCENE text and CAST tags, infer this world's shared clothing style and this scene's physical setting. "dress" is ONLY the universal base outfit every ordinary person wears — never rank- or status-specific garments (captain's coats/haori, armbands, crowns, insignia): those belong exclusively to the cast tags of whoever holds the rank. Never modernize: no modern uniforms, coats, neckties, or architecture unless cast tags or scene text explicitly describe them. "setting" also names the scene's standing population — packed spectator stands, an empty room, a busy street: an arena full of watchers shows watchers in every panel that shows the surroundings, and established spectators never vanish (that is a continuity violation). Output both as flat tag lists in the top-level "dress" and "setting" fields — the extension stamps them onto every panel itself, so do NOT restate them inside panel prompts.${bubblesOn ? '\n\n' + BUBBLE_RULES : ''}\nOUTPUT (replaces the single-line requirement above): strict JSON only — no reasoning, no commentary, no markdown: {"setting":"<location/environment/population tags for this scene>","dress":"<what people of this world wear, as tags>","panels":[{"who":["Exact Cast Name","..."],"prompt":"<actions, expressions, poses, effects, camera, scene ONLY — zero appearance traits>"${bubbleSchema}}]}`;
+WORLD (derive once, as data): from the SCENE text and CAST tags, infer this world's shared clothing style and this scene's physical setting. "dress" is ONLY the universal base outfit every ordinary person wears — never rank- or status-specific garments (captain's coats/haori, armbands, crowns, insignia): those belong exclusively to the cast tags of whoever holds the rank. Never modernize: no modern uniforms, coats, neckties, or architecture unless cast tags or scene text explicitly describe them. "setting" also names the scene's standing population — packed spectator stands, an empty room, a busy street: an arena full of watchers shows watchers in every panel that shows the surroundings, and established spectators never vanish (that is a continuity violation). Output both as flat tag lists in the top-level "dress" and "setting" fields — the extension stamps them onto every panel itself, so do NOT restate them inside panel prompts.${bubblesOn ? '\n\n' + BUBBLE_RULES : ''}\nOUTPUT (replaces the single-line requirement above): strict JSON only — no reasoning, no commentary, no markdown: {"setting":"<location/environment/population tags for this scene>","dress":"<what people of this world wear, as tags>","panels":[{"who":[{"name":"Exact Cast Name","state":"<THIS character's pose, expression, wounds, and action tags>"},{"name":"...","state":"..."}],"prompt":"<camera, lighting, atmosphere, shared effects, environment ONLY>"${bubbleSchema}}]}`;
     } else if (bubblesOn) {
         fullSystem += `\n\n${BUBBLE_RULES}\nOUTPUT (replaces the single-line requirement above): strict JSON only — no reasoning, no commentary, no markdown, exactly one panel: {"panels":[{"prompt":"<one prompt following all rules above>"${bubbleSchema}}]}`;
     }
 
-    const maxTokens = maxPanels > 1 ? Math.min(3200, 400 + 550 * maxPanels) : (bubblesOn ? 950 : 800);
+    const maxTokens = maxPanels > 1 ? Math.min(3600, 500 + 650 * maxPanels) : (bubblesOn ? 1100 : 800);
     let raw;
     try {
         raw = await callLLM(fullSystem, user, maxTokens);
@@ -1056,7 +1062,7 @@ async function illustrateMessage(mesId, { force = false } = {}) {
                     `CAST — "${getActiveCastName()}": ${castEntries.length} entr${castEntries.length === 1 ? 'y' : 'ies'}${castEntries[0] ? ` (first: ${castEntries[0].name}: ${castEntries[0].tags.slice(0, 60)})` : ''}`,
                 );
             }
-            panels.forEach((p, i) => debugPrompts.push(`PANEL ${i + 1} WHO — ${p.who && p.who.length ? p.who.join(', ') : '(builder ignored the who schema)'}`));
+            panels.forEach((p, i) => debugPrompts.push(`PANEL ${i + 1} WHO — ${p.who && p.who.length ? p.who.map(w => w.state ? `${w.name} [${w.state}]` : w.name).join(' | ') : '(builder ignored the who schema)'}`));
             panels.forEach((p, i) => p.bubbles.forEach(b => debugPrompts.push(`PANEL ${i + 1} BUBBLE — ${b.speaker || '?'}: "${b.text}"`)));
             console.log(`[SceneSnap] ${finals.length} panel(s) (${style}):`, finals);
             // One seed for the whole strip: same character rendering in every panel.

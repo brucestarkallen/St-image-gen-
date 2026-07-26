@@ -279,25 +279,29 @@ function defaultPatterns() { return '<details>[\\s\\S]*?</details>\n\\{[A-Z_]+\\
 
 // ---------------------------------------------------------------- code-written identity
 {
-    const sheet = 'Jovan Oda: man, medium white hair, pale blue eyes, black kosode, no insignia\nRukia Kuchiki: woman, short black hair, violet eyes, shinigami uniform\nKenpachi Zaraki: man, long black hair, spiked hair with bells, eyepatch, towering muscular build\nIsane Kotetsu: woman, short silver hair, grey eyes, tall, captain haori';
+    const sheet = 'Jovan Oda: man, medium white hair, pale blue eyes, black kosode, no insignia\nRukia Kuchiki: woman, short black hair, violet eyes, shinigami uniform\nKenpachi Zaraki: man, long black spiked hair, bells in hair, eyepatch, towering muscular build\nIsane Kotetsu: woman, short silver hair, grey eyes, tall, captain haori';
 
-    const duo = S.assembleIdentity(['Isane Kotetsu', 'Kenpachi Zaraki'], sheet);
-    check('identity: counts derived from cast blocks, both parties present verbatim',
+    const duo = S.assembleIdentity([
+        { name: 'Isane Kotetsu', state: 'kneeling beside him, glowing green hands on his chest, fierce expression' },
+        { name: 'Kenpachi Zaraki', state: 'kneeling in crater, shredded forearms, laughing' },
+    ], sheet);
+    check('identity: state welds into its owner\'s contiguous run — the laugh cannot migrate',
         duo.counts === '1boy, 1girl'
-        && duo.blocks[0].startsWith('woman, short silver hair')
-        && duo.blocks[1].startsWith('man, long black hair, spiked hair with bells')
+        && duo.blocks[0] === 'woman, short silver hair, grey eyes, tall, captain haori, kneeling beside him, glowing green hands on his chest, fierce expression'
+        && duo.blocks[1] === 'man, long black spiked hair, bells in hair, eyepatch, towering muscular build, kneeling in crater, shredded forearms, laughing'
         && duo.missing.length === 0);
-    check('identity: no placement tags at two characters', !/foreground|background|center/.test(duo.blocks.join('|')));
+    check('identity: legacy string who entries still work',
+        S.assembleIdentity(['Jovan Oda'], sheet).blocks[0].startsWith('man, medium white hair'));
 
-    const trio = S.assembleIdentity(['Jovan Oda', 'Rukia Kuchiki', 'Isane Kotetsu'], sheet);
-    check('identity: three-plus get automatic placement tags in who order',
-        trio.blocks[0].endsWith(', foreground left') && trio.blocks[1].endsWith(', center') && trio.blocks[2].endsWith(', foreground right'));
+    const trio = S.assembleIdentity([
+        { name: 'Jovan Oda', state: 'standing' }, { name: 'Rukia Kuchiki', state: '' }, { name: 'Isane Kotetsu', state: 'running' },
+    ], sheet);
+    check('identity: three-plus get placement tags after state, in who order',
+        trio.blocks[0].endsWith('standing, foreground left') && trio.blocks[1].endsWith(', center') && trio.blocks[2].endsWith('running, foreground right'));
 
-    const bad = S.assembleIdentity(['Jovan Oda', 'Elderly Stranger'], sheet);
+    const bad = S.assembleIdentity([{ name: 'Elderly Stranger', state: 'watching' }, 'Jovan Oda'], sheet);
     check('identity: unknown names reported, never invented',
         bad.missing.length === 1 && bad.missing[0] === 'Elderly Stranger' && bad.blocks.length === 1);
-    check('identity: name lookup is case-insensitive',
-        S.assembleIdentity(['jovan oda'], sheet).blocks.length === 1);
     check('identity: empty who tolerated', S.assembleIdentity([], sheet).counts === '');
 }
 
@@ -371,6 +375,12 @@ function defaultPatterns() { return '<details>[\\s\\S]*?</details>\n\\{[A-Z_]+\\
         && src.includes('oriented toward whoever they address'));
     check('src: explicit scenes are tagged explicitly, anatomy locked to cast sheet',
         src.includes('EXPLICIT SCENES:') && src.includes('never euphemize') && src.includes('fullSystem += NSFW_RULE;'));
+    check('src: state is bound to its owner by schema and weld',
+        src.includes('"state":"<THIS character') && src.includes('welds their state onto it')
+        && src.includes("carries it in their OWN \"state\"")
+        && src.includes('blocks.push(state ? `${hit.tags}, ${state}` : hit.tags)'));
+    check('src: setting and dress are tag-capped in code',
+        src.includes('capTags(obj?.setting, 12)') && src.includes('capTags(obj?.dress, 8)'));
     check('src: the cast author copies canon verbatim — no synonyms, adults are man/woman',
         src.includes('COPY, never compose') && src.includes("never 'badge'")
         && src.includes("ONLY for characters the story marks as children"));
@@ -385,10 +395,10 @@ function defaultPatterns() { return '<details>[\\s\\S]*?</details>\n\\{[A-Z_]+\\
         src.includes('PREVIOUS OUTPUT REJECTED: every panel MUST include the "who" array')
         && src.includes('whoCoverage(panels2) > whoCoverage(panels)')
         && src.includes('(builder ignored the who schema)'));
-    check('src: contract v5 — builder never writes identity; who + code assembly own it',
-        src.includes('WHO writes identity, and WHO is not you')
-        && src.includes('zero appearance traits')
-        && src.includes("a climax panel whose victim is missing from \"who\" is a failed panel")
+    check('src: contract v5.1 — who owns identity AND state; builder writes neither identity nor per-character detail into the shared prompt',
+        src.includes('WHO writes identity AND owns state, and WHO is not you')
+        && src.includes('one contiguous run per character')
+        && src.includes('a climax panel whose victim is missing from "who" is a failed panel')
         && src.includes('assembleIdentity(p.who, activeSheet)')
         && src.includes('Never blend two people into one')
         && src.includes('never render anyone as a child unless their cast tags say so'));
