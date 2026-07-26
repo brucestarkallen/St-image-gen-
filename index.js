@@ -12,7 +12,7 @@ import { getBase64Async, saveBase64AsFile } from '../../../utils.js';
 import { callGenericPopup, POPUP_TYPE } from '../../../popup.js';
 
 const MODULE = 'sceneSnap';
-const VERSION = '0.8.2';
+const VERSION = '0.8.3';
 
 const defaultSettings = Object.freeze({
     enabled: true,
@@ -736,6 +736,7 @@ async function generateNovelAI(positive, negative) {
     });
     if (!res.ok) {
         const text = await res.text().catch(() => '');
+        if (isStaleSession(res.status, text)) throw new Error(STALE_SESSION_MSG);
         throw new Error(`NovelAI: ${text || res.status} (is your NovelAI key set under API Connections?)`);
     }
     return { format: 'png', data: await res.text() };
@@ -758,6 +759,7 @@ async function generatePollinations(positive, negative) {
     });
     if (!res.ok) {
         const text = await res.text().catch(() => '');
+        if (isStaleSession(res.status, text)) throw new Error(STALE_SESSION_MSG);
         throw new Error(`Pollinations: ${text || res.status}`);
     }
     const data = await res.json();
@@ -771,6 +773,15 @@ const NAI_IMAGE_ENDPOINT = 'https://image.novelai.net/ai/generate-image';
 // arrives with NAI's own body. Both conditions required so neither masquerades as the other.
 function isCorsProxyDisabled(status, bodyText) {
     return status === 404 && /cors proxy is disabled/i.test(String(bodyText || ''));
+}
+
+// A page left open across an ST server restart holds a dead session: ST's CSRF gate
+// then rejects every API call with 403 + an HTML error page ("Invalid CSRF token").
+// Verified against a live ST instance. One reload fixes it — say exactly that.
+const STALE_SESSION_MSG = 'This page is older than the SillyTavern server (ST restarted since it loaded) — reload the page and try again.';
+
+function isStaleSession(status, bodyText) {
+    return status === 403 && /invalid csrf token/i.test(String(bodyText || ''));
 }
 
 async function generateNovelAIMulti(base, charTags, negative) {
@@ -845,6 +856,7 @@ async function generateNovelAIMulti(base, charTags, negative) {
     });
     if (!res.ok) {
         const text = await res.text().catch(() => '');
+        if (isStaleSession(res.status, text)) throw new Error(STALE_SESSION_MSG);
         if (isCorsProxyDisabled(res.status, text)) {
             const err = new Error("Multi-character mode needs SillyTavern's CORS proxy: config.yaml → enableCorsProxy: true, then restart ST (or launch with --corsProxy). Generating single-prompt for now.");
             err.corsProxyDisabled = true;

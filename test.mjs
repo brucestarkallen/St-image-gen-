@@ -27,7 +27,7 @@ const FUNCS = [
     'normalizeForMatch', 'sanitizeBubbles', 'sanitizeBuilderOutput', 'softSanitize',
     'parsePanels', 'parseCastSheet', 'mergeCastLines', 'effectiveForcedTags',
     'composePositive', 'scanPresenceIn', 'markerDetails', 'ledgerStateLines',
-    'stripScene', 'isCorsProxyDisabled', 'explainError',
+    'stripScene', 'isCorsProxyDisabled', 'explainError', 'isStaleSession',
 ];
 
 const prelude = `
@@ -232,6 +232,16 @@ function defaultPatterns() { return '<details>[\\s\\S]*?</details>\n\\{[A-Z_]+\\
     check('cors-guard: message without 404 status not misclassified',
         !S.isCorsProxyDisabled(500, 'CORS proxy is disabled'));
     check('cors-guard: empty body tolerated', !S.isCorsProxyDisabled(404, ''));
+}
+
+// ---------------------------------------------------------------- stale-session guard
+{
+    // Body captured verbatim from a live ST instance rejecting a stale CSRF token.
+    const LIVE_403 = '<!DOCTYPE html>\n<html lang="en">\n<head>\n<meta charset="utf-8">\n<title>Error</title>\n</head>\n<body>\n<pre>ForbiddenError: Invalid CSRF token. Please refresh the page and try again.</pre>\n</body>\n</html>\n';
+    check('stale: live ST 403 body detected', S.isStaleSession(403, LIVE_403));
+    check('stale: other 403s not misclassified', !S.isStaleSession(403, 'Forbidden: whitelist'));
+    check('stale: marker without 403 not misclassified', !S.isStaleSession(500, LIVE_403));
+    check('stale: empty tolerated', !S.isStaleSession(403, ''));
 }
 
 // ---------------------------------------------------------------- fetch-failure translation

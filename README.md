@@ -106,6 +106,7 @@ Stella: girl, long crimson hair, red eyes, large breasts, hair ribbon, school un
 - **"Prompt builder returned an empty response"** — the profile model may be reasoning-only or unreachable; pick another profile or leave on Main API.
 - **Runware "invalid model"** — re-copy the AIR from Civitai; version IDs change when models update.
 - **NovelAI 401** — set your NovelAI key under API Connections (NovelAI) first.
+- **"This page is older than the SillyTavern server"** — ST was restarted after this tab loaded, so its session died and ST rejects every call until the page is reloaded. One reload fixes it.
 - **"SillyTavern's server didn't answer"** — the button was pressed while ST was restarting or down. The page stays open but its server is gone, so every call fails instantly. Wait for the startup banner, reload the page, press again. (Since 0.8.1 all requests are same-origin, so this is the only thing a browser-level fetch failure can mean.)
 - **Multi-char warns that the CORS proxy is off** — NovelAI's API refuses direct browser calls, so multi-character mode rides SillyTavern's proxy route. One line in `config.yaml`: `enableCorsProxy: true`, restart ST (or launch with `--corsProxy`). Until then SceneSnap ships a single-prompt image instead of failing.
 - **A bubble is missing** — the builder's line wasn't found verbatim in the scene (dropped by design), or the beat had no dialogue. **Show last generation** lists every accepted bubble.
@@ -113,6 +114,10 @@ Stella: girl, long crimson hair, red eyes, large breasts, hair ribbon, school un
 - **Auto mode fired on an old message** — it only targets the newest AI message and suppresses itself for a moment after chat switches; if you see otherwise, report the console log.
 
 ## Changelog
+
+### 0.8.3
+- The full multi-char pipeline was verified against a live SillyTavern instance: request routing through `/proxy/`, CSRF, Authorization forwarding, and byte-perfect binary zip piping into SceneSnap's extractor; the disabled-proxy detector was validated against ST's real response.
+- **New classified failure**: pressing the button on a page left open across an ST restart fails ST's CSRF gate with an HTML 403. All three backends now detect it and say the actual fix ("reload the page") instead of printing raw HTML.
 
 ### 0.8.2
 - Browser-level fetch failures ("Failed to fetch" / "NetworkError" / "Load failed") are now translated at the single error reporter into what they actually mean — the SillyTavern server didn't answer (restarting or down) — in the toast and in **Show last generation**. Valid since 0.8.1 made every request same-origin, which the gate asserts.
