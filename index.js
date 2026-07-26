@@ -12,7 +12,7 @@ import { getBase64Async, saveBase64AsFile } from '../../../utils.js';
 import { callGenericPopup, POPUP_TYPE } from '../../../popup.js';
 
 const MODULE = 'sceneSnap';
-const VERSION = '0.27.0';
+const VERSION = '0.28.0';
 
 const defaultSettings = Object.freeze({
     enabled: true,
@@ -53,28 +53,20 @@ const SIZE_PRESETS = {
 };
 
 // Applied automatically while the user hasn't customized the matching field.
+// Quality-word blocks are OUT for NovelAI (0.28.0, user A/B): 'very aesthetic /
+// best quality / amazing quality' made outputs visibly worse — the prompt starts
+// with the subject, and only the functional tail rides at the end.
 const BACKEND_QUALITY = {
-    novelai: 'very aesthetic, masterpiece, no text, detailed background',
+    novelai: 'no text, detailed background, -1.5::flat color ::',
     pollinations: 'highly detailed, cinematic lighting, rich detailed background',
 };
 const BACKEND_NEGATIVE = {
     novelai: 'blurry, lowres, error, worst quality, bad quality, jpeg artifacts, very displeasing, chromatic aberration, multiple views, logo, watermark, film grain, scan artifacts',
 };
-// NAI V4.5 emphasis transport (docs.novelai.net/en/image/strengthening-weakening + ST
-// route source): ST's /api/novelai/generate-image hardcodes qualityToggle: false and
-// use_order: true. The NAI website default is qualityToggle ON, which PREPENDS this
-// exact block — position is strength under use_order, and a quality block appended
-// after the trailing composition sentence is the weakest position on the route. The
-// emphasis syntax itself survives the route untouched: it travels inside
-// v4_prompt.caption.base_caption, which NAI parses server-side. The tail carries
-// V4.5 negative emphasis — the docs' own rescue for flat, washed output
-// ("-2.5::flat color :: can fancy it right up"); 1.5 is the moderate dose.
-// Braces are OUT (0.27.0, user A/B): the quality words keep the front position but
-// ship unbraced — emphasis syntax made the aesthetic visibly worse in the field,
-// and a field A/B outranks the doc's ×1.05 arithmetic. The numeric tail stays: it
-// is the docs' own flatness rescue and carries no brace artifacts.
-const BACKEND_QUALITY_FRONT = { novelai: 'very aesthetic, best quality, amazing quality' };
-const BACKEND_QUALITY_TAIL = { novelai: 'no text, detailed background, -1.5::flat color ::' };
+// The docs' strengthening/weakening syntax survives ST's route untouched (it travels
+// inside v4_prompt.caption.base_caption, parsed server-side): the functional tail
+// above carries V4.5 negative emphasis — the docs' own rescue for flat, washed
+// output ("-2.5::flat color :: can fancy it right up"); 1.5 is the moderate dose.
 
 let lastDebug = null;
 
@@ -1070,13 +1062,6 @@ function effectiveNegative() {
 
 function composePositive(built, style) {
     built = foldTagDiacritics(built);
-    const cur = String(settings.forcedTags || '').trim();
-    // Untouched default + a backend with an emphasis transport: quality goes FIRST
-    // (the website's own behavior) and the V4.5 negative-emphasis rescue rides the
-    // tail. A user-edited forcedTags field keeps the classic append-everywhere path.
-    if (cur === defaultSettings.forcedTags.trim() && style === 'tags' && BACKEND_QUALITY_FRONT[settings.backend]) {
-        return `${BACKEND_QUALITY_FRONT[settings.backend]}, ${built}, ${BACKEND_QUALITY_TAIL[settings.backend]}`;
-    }
     const forced = effectiveForcedTags();
     if (!forced) return built;
     if (style === 'natural') return `${built} ${forced.split(',').map(s => s.trim()).filter(Boolean).join(', ')}.`.trim();
@@ -1398,13 +1383,13 @@ ${FRAME_LAWS}${bubblesOn ? '\n\n' + BUBBLE_RULES : ''}\nOUTPUT (replaces the sin
         p.crowd = crowdHere;
         p.sentence = replaceNamesInSentence(p.sentence, activeSheet);
         if (!p.who || !p.who.length) {
-            // An establishing frame: the crowd or the place IS the subject. It gets the
-            // population count and the shot grammar, and no identity weld to skip.
-            // `crowd` on its own describes a mood, not a headcount, and the field run
-            // returned an empty courtyard. These are the tags that put people in a frame.
-            // Dedupe FIRST: the crowd-action tags this frame lives or dies by were
-            // drowning in a triple-restated location block.
-            p.prompt = enforceShotGrammar([crowdHere ? '6+boys, 6+girls, crowd' : '', unifyStripLighting(dedupeAgainstAnchor(p.prompt, anchorText), anchorText)].filter(Boolean).join(', '));
+            // An establishing frame: the crowd or the place IS the subject. The
+            // '6+boys, 6+girls' headcount is DEAD (0.28.0, user A/B): it told the
+            // model to draw many identical people and returned rows of egg-heads.
+            // The frame leads with the anchor's OWN crowd words hoisted forward —
+            // real population words in a strong position, no synthetic headcount.
+            const crowdTag = crowdHere ? hoistCrowdTokens(anchorText, true) : '';
+            p.prompt = enforceShotGrammar([crowdTag, unifyStripLighting(dedupeAgainstAnchor(p.prompt, anchorText), anchorText)].filter(Boolean).join(', '));
             p.welded = false;
             continue;
         }
@@ -1732,6 +1717,17 @@ async function illustrateMessage(mesId, { force = false } = {}) {
 
 
             const { panels, style, raw, setting, dress, schemaSent, plan, planNotes } = await buildScenePrompt(mesId);
+            // V4.5 Curated is trained on filtered data and suppresses explicit
+            // anatomy. An explicit panel on Curated is a silent NSFW kill — warn
+            // once per chat instead of letting the user debug a blank.
+            if (settings.backend === 'novelai' && /curated/i.test(String(settings.naiModel || ''))
+                && panels.some(p => (p.who || []).some(w => EXPLICIT_STATE.test(String(w?.state || ''))))) {
+                const curKey = `curated:${getContext().chatId ?? 'chat'}`;
+                if (!sheetWarned.has(curKey)) {
+                    sheetWarned.add(curKey);
+                    toastr.warning('Explicit scene on NAI V4.5 Curated — Curated suppresses nipples/genitals by training. Switch SceneSnap’s NovelAI model to V4.5 Full for NSFW.', 'SceneSnap', { timeOut: 12000 });
+                }
+            }
             // The setting already names the population and what it wears, by law, in its
             // own words ("packed courtyard of shinigami in black shihakusho"). A second
             // bound phrase repeating that garment only flattened the crowd into one mass.

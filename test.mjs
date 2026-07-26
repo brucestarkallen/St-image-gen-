@@ -39,7 +39,7 @@ const defaultSettings = Object.freeze({
     negativePrompt: 'lowres',
     stripPatterns: '<details>[\\\\s\\\\S]*?</details>\\n\\\\{[A-Z_]+\\\\}[\\\\s\\\\S]*?\\\\{/[A-Z_]+\\\\}\\n<!--[\\\\s\\\\S]*?-->',
 });
-const BACKEND_QUALITY = { novelai: 'very aesthetic, masterpiece, no text, detailed background' };
+const BACKEND_QUALITY = { novelai: 'no text, detailed background, -1.5::flat color ::' };
 const SIZE_PRESETS = { portrait: { width: 832, height: 1216 }, landscape: { width: 1216, height: 832 }, square: { width: 1024, height: 1024 } };
 let settingsSizeRef;
 let settings = {
@@ -56,7 +56,7 @@ function extractConst(name) {
     if (!line) throw new Error(`extractConst: ${name} not found`);
     return line;
 }
-const CONSTS = ['escRe', 'BACKGROUND_STATE', 'CODE_OWNED_TAG', 'GARMENT_CONDITION', 'TRANSIENT_ACTIVITY', 'FRAMING_TAG', 'ANGLE_TAG', 'SIZE_WORD', 'SIZE_NOUN', 'GARMENT_WORDS', 'RANK_WORD', 'DECORATION_WORD', 'BEAT_STOPWORD', 'BACKEND_QUALITY_FRONT', 'BACKEND_QUALITY_TAIL', 'LIGHT_TOKEN', 'EXPLICIT_STATE', 'CROWD_ANCHOR_TOKEN'];
+const CONSTS = ['escRe', 'BACKGROUND_STATE', 'CODE_OWNED_TAG', 'GARMENT_CONDITION', 'TRANSIENT_ACTIVITY', 'FRAMING_TAG', 'ANGLE_TAG', 'SIZE_WORD', 'SIZE_NOUN', 'GARMENT_WORDS', 'RANK_WORD', 'DECORATION_WORD', 'BEAT_STOPWORD', 'LIGHT_TOKEN', 'EXPLICIT_STATE', 'CROWD_ANCHOR_TOKEN'];
 
 const sandboxPath = '/tmp/ss_sandbox_' + process.pid + '.mjs';
 writeFileSync(sandboxPath, prelude + '\n' + CONSTS.map(extractConst).join('\n') + '\n' + FUNCS.map(extract).join('\n\n')
@@ -257,9 +257,8 @@ function defaultPatterns() { return '<details>[\\s\\S]*?</details>\n\\{[A-Z_]+\\
     {
         S._setSettings({ backend: 'novelai', forcedTags: 'masterpiece, best quality, absurdres, detailed background' });
         const out = S.composePositive('1boy, shouting, courtyard', 'tags');
-        check('nai: quality block prepended UNBRACED (0.27.0 user A/B — braces hurt the aesthetic)',
-            out.startsWith('very aesthetic, best quality, amazing quality, 1boy, shouting, courtyard')
-            && !out.includes('{'));
+        check('nai: NO quality block at all (0.28.0 user A/B — the prompt starts with the subject)',
+            out.startsWith('1boy, shouting, courtyard') && !/very aesthetic|best quality|amazing quality/.test(out));
         check('nai: tail carries no-text + the docs-backed flat-color rescue',
             /no text, detailed background, -1\.5::flat color ::$/.test(out));
         check('nai: natural style keeps the classic append path',
@@ -949,8 +948,12 @@ function defaultPatterns() { return '<details>[\\s\\S]*?</details>\n\\{[A-Z_]+\\
     check('src: crowd hoist repositions the SETTING\'s own words only (0.26.0)',
         src.includes('const crowdTag = hoistCrowdTokens(anchorText, p.crowd);')
         && src.includes('CROWD_ANCHOR_TOKEN.test(t)'));
-    check('src: an establishing frame gets a real headcount, not a mood tag',
-        src.includes("crowdHere ? '6+boys, 6+girls, crowd' : ''"));
+    check('src: an establishing frame leads with the anchor\'s own crowd words (0.28.0 — egg-head headcount reverted)',
+        !src.includes("6+boys, 6+girls, crowd")
+        && src.includes("const crowdTag = crowdHere ? hoistCrowdTokens(anchorText, true) : '';"));
+    check('src: V4.5 Curated + explicit panel warns once (the silent NSFW kill)',
+        src.includes("/curated/i.test(String(settings.naiModel || ''))")
+        && src.includes('EXPLICIT_STATE.test(String(w?.state'));
     check('src: stacked size cues cannot shrink an adult into a child',
         src.includes('SIZE_WORD.test(low) && SIZE_WORD.test(String(blockTags')
         && src.includes('const SIZE_NOUN ='));
@@ -1012,7 +1015,7 @@ function defaultPatterns() { return '<details>[\\s\\S]*?</details>\n\\{[A-Z_]+\\
         src.includes('const counts = seen.map(k => label(k, nOf(k))).join(\', \');')
         && src.includes('[id.counts, ...id.blocks, bgTag, crowdTag, unifyStripLighting(dedupeAgainstAnchor(p.prompt, anchorText), anchorText)]'));
     check('src: anchor owns the environment — dedupe wired into BOTH panel paths',
-        src.includes("crowdHere ? '6+boys, 6+girls, crowd' : '', unifyStripLighting(dedupeAgainstAnchor(p.prompt, anchorText), anchorText)")
+        src.includes("crowdTag, unifyStripLighting(dedupeAgainstAnchor(p.prompt, anchorText), anchorText)")
         && src.includes('const bgTag = background.length ? backgroundFigureTag(background, activeSheet) : \'\';'));
     check('src: a crowd-restoring repair is accepted on an equal score',
         src.includes('const crowdRestored = wantsCrowd')

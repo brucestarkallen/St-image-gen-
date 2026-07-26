@@ -114,6 +114,12 @@ Stella: girl, long crimson hair, red eyes, large breasts, hair ribbon, school un
 
 ## Changelog
 
+### 0.28.0 — no quality words, no egg-heads, and the Curated trap gets a siren
+- **Reverted: the quality block entirely (user A/B).** No `very aesthetic / best quality / amazing quality` anywhere — the prompt starts with the subject. Only the functional tail rides at the end (`no text, detailed background, -1.5::flat color ::`).
+- **Reverted: the `6+boys, 6+girls, crowd` headcount (user A/B).** It told the model to draw many identical people and returned rows of faceless egg-heads. Establishing frames now lead with the anchor's own crowd words hoisted forward (`packed stands of shinigami in black shihakusho`) — real population words in a strong position, no synthetic headcount.
+- **Added: the V4.5 Curated siren.** Curated is trained on filtered data and suppresses nipples/genitals — an explicit panel on Curated is a silent NSFW kill. The extension now detects an explicit panel on a Curated model and warns once per chat to switch to V4.5 Full.
+- Gate: 269 → 270 checks.
+
 ### 0.27.0 — braces out, anatomy no longer truncated, crowds get a visible camera
 - **Reverted: all `{}` emphasis braces (user A/B).** The quality block keeps its front position but ships unbraced; welded garments keep their before-state position unbraced. A field A/B outranks the doc's ×1.05 arithmetic. The numeric `-1.5::flat color ::` tail stays (docs' flatness rescue, no brace artifacts).
 - **Fixed: the actual NSFW anatomy killer.** `scrubState`'s 200-char cap was amputating anatomy off the END of explicit states — the NSFW law demands undress + anatomy + position + fluids (300+ chars), so nipples/genitals were truncated before reaching the prompt. Explicit states now get a 420-char budget; SFW keeps 200. This is the regression vs. the old pre-weld versions (builder-written prompts had no cap).
