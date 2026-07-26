@@ -55,7 +55,7 @@ function extractConst(name) {
     if (!line) throw new Error(`extractConst: ${name} not found`);
     return line;
 }
-const CONSTS = ['escRe', 'BACKGROUND_STATE', 'CODE_OWNED_TAG', 'GARMENT_CONDITION', 'TRANSIENT_ACTIVITY', 'FRAMING_TAG', 'ANGLE_TAG', 'GARMENT_WORDS', 'RANK_WORD', 'DECORATION_WORD', 'BEAT_STOPWORD'];
+const CONSTS = ['escRe', 'BACKGROUND_STATE', 'CODE_OWNED_TAG', 'GARMENT_CONDITION', 'TRANSIENT_ACTIVITY', 'FRAMING_TAG', 'ANGLE_TAG', 'SIZE_WORD', 'SIZE_NOUN', 'GARMENT_WORDS', 'RANK_WORD', 'DECORATION_WORD', 'BEAT_STOPWORD'];
 
 const sandboxPath = '/tmp/ss_sandbox_' + process.pid + '.mjs';
 writeFileSync(sandboxPath, prelude + '\n' + CONSTS.map(extractConst).join('\n') + '\n' + FUNCS.map(extract).join('\n\n')
@@ -387,12 +387,11 @@ function defaultPatterns() { return '<details>[\\s\\S]*?</details>\n\\{[A-Z_]+\\
     check('counts: run in BLOCK order — a fixed order mislabels the first figure',
         S.assembleIdentity([{ name: 'Rukia Kuchiki', state: 'shouting' }, { name: 'Jovan Oda', state: 'standing' }], sheet, {}).counts === '1girl, 1boy'
         && S.assembleIdentity([{ name: 'Jovan Oda', state: 'standing' }, { name: 'Rukia Kuchiki', state: 'shouting' }], sheet, {}).counts === '1boy, 1girl');
-    check('counts: the crowd is returned separately, never inside the count run',
+    // Reverted in 0.21.0: the `crowd` tag asked for indistinct background mass and got
+    // it. The population lives in the setting's own words, never in the count run.
+    check('counts: no crowd tag reaches the count run at all',
         (() => { const id = S.assembleIdentity([{ name: 'Jovan Oda', state: 'standing' }, { name: 'Rukia Kuchiki', state: 'shouting' }], sheet, { crowd: true });
-            return id.counts === '1boy, 1girl' && id.crowdTag === 'crowd'; })());
-    check('counts: no crowd claimed when the frame has none',
-        S.assembleIdentity([{ name: 'Jovan Oda', state: 'standing' }], sheet, { crowd: false }).counts === '1boy'
-        && S.assembleIdentity([{ name: 'Jovan Oda', state: 'standing' }], sheet).counts === '1boy');
+            return id.counts === '1boy, 1girl' && !('crowdTag' in id); })());
     check('crowd: detected from the words the image model reads, not guessed',
         S.framesCrowd('dispersing crowd of shinigami in black shihakusho') && S.framesCrowd('tile roofs with standing officers')
         && S.framesCrowd('packed courtyard') && S.framesCrowd('ranks of soldiers')
@@ -596,6 +595,17 @@ function defaultPatterns() { return '<details>[\\s\\S]*?</details>\n\\{[A-Z_]+\\
         S.stripTransientFromSetting('stone courtyard, memorial stone, pale winter sun')
             === 'stone courtyard, memorial stone, pale winter sun');
 
+    // Field regression, snap_31 v0.20.0: "petite" in the block plus "small posture" in
+    // the state rendered a chibi-proportioned adult beside a normal-sized man.
+    check('scrub: a state that merely repeats the cast sheet stature is dropped',
+        S.scrubState('small posture, violet eyes fixed upward', 'woman, petite, violet eyes')
+            === 'violet eyes fixed upward'
+        && S.scrubState('tiny frame, shouting', 'woman, petite') === 'shouting');
+    check('scrub: stature survives when the cast sheet does not already state it',
+        S.scrubState('small frame, shouting', 'woman, black hair').includes('small frame'));
+    check('scrub: a size word inside a real action tag is not a stature restatement',
+        S.scrubState('small smile playing at her mouth, standing', 'woman, petite').includes('small smile'));
+
     check('scrub: real action tags that reuse one appearance word survive',
         S.scrubState('white hair blowing in wind, teeth clenched', 'man, white hair, tall').includes('blowing'));
 }
@@ -722,7 +732,7 @@ function defaultPatterns() { return '<details>[\\s\\S]*?</details>\n\\{[A-Z_]+\\
     check('src: stitch is a rigid cover-filled grid with framed cells',
         src.includes('cx.drawImage(img2, sx, sy, sw, sh, gutter, y, cellW, cellH)') && src.includes('cx.strokeRect(gutter + 2'));
     check('src: world derived once as data and stamped onto every panel by code',
-        src.includes('"setting":"<location/environment/population tags') && src.includes('appendAnchor(p.prompt, anchorFor(p))')
+        src.includes('"setting":"<location/environment/population tags') && src.includes('appendAnchor(p.prompt, anchorFor())')
         && src.includes('mineDressTags(getActiveCastSheet())'));
     check('src: public address is speaker + attending group, never a private two-shot',
         src.includes('never a private two-shot for a public address'));
@@ -736,9 +746,15 @@ function defaultPatterns() { return '<details>[\\s\\S]*?</details>\n\\{[A-Z_]+\\
     check('src: the two-cap is enforced in code at parse',
         src.includes('.filter(w => w.name).slice(0, 2) : [];')
         && src.includes('for (const entry of (who || []).slice(0, 2))'));
-    check('src: the world dress is bound to the population, immune to anchor dedup',
-        src.includes('p.crowd && crowdDress ? `crowd in ${crowdDress}` : \'\'')
-        && src.includes("const crowdDress = (populationDress && hasGarment(populationDress) ? populationDress.trim() : '') || firstGarmentTag(dress);"));
+    check('src: the crowd lives in the setting, not in the tag run (0.21.0 revert)',
+        !src.includes('`crowd in ${crowdDress}`') && !src.includes('crowdTag')
+        && src.includes("const anchorFor = () => [setting, dress].filter(Boolean).join(', ');")
+        && src.includes("that population's dress"));
+    check('src: an establishing frame gets a real headcount, not a mood tag',
+        src.includes("crowdHere ? '6+boys, 6+girls, crowd' : ''"));
+    check('src: stacked size cues cannot shrink an adult into a child',
+        src.includes('SIZE_WORD.test(low) && SIZE_WORD.test(String(blockTags')
+        && src.includes('const SIZE_NOUN ='));
     check('src: shot grammar is enforced in code, not merely mandated in prose',
         src.includes('p.prompt = enforceShotGrammar(') && src.includes('function enforceShotGrammar(prompt)'));
     check('src: the anti-modern negative covers the school-uniform prior and architecture',
@@ -751,8 +767,7 @@ function defaultPatterns() { return '<details>[\\s\\S]*?</details>\n\\{[A-Z_]+\\
         && src.includes('whoDeclared: Array.isArray(p?.who),')
         && src.includes("(establishing frame — crowd is the subject)")
         && !src.includes('whoCoverage'));
-    check('src: an establishing frame still gets its population count and shot grammar',
-        src.includes("p.prompt = enforceShotGrammar([crowdHere ? 'crowd' : '', p.prompt]"));
+
     check('src: garments and transient activity are enforced, not merely mandated',
         src.includes('if (hasGarment(low) && !GARMENT_CONDITION.test(low)) continue;')
         && src.includes('stripTransientFromSetting(capTags(obj?.setting, 16))'));
@@ -769,8 +784,7 @@ function defaultPatterns() { return '<details>[\\s\\S]*?</details>\n\\{[A-Z_]+\\
         && src.includes('sentence: capSentenceSafe(stripLayoutMeta('));
     check('src: variety boost is off for strips — a strip is one continuous place',
         src.includes('variety_boost: !landscape,'));
-    check('src: the dress anchor lands once, not three times',
-        src.includes('.filter(t => t && !(bound && bound.toLowerCase().includes(t.toLowerCase())))'));
+
     check('src: auto-build describes bodies, never characters by name',
         src.includes('NO CHARACTER NAMES IN THE TAGS, EVER') && src.includes('Describe the BODY')
         && src.includes('RANK IS NOT AN OUTFIT, in the cast line either'));
@@ -795,10 +809,9 @@ function defaultPatterns() { return '<details>[\\s\\S]*?</details>\n\\{[A-Z_]+\\
     check('src: rank decorations are stripped at the weld and the WWII prior is negated',
         src.includes('function stripRankInsignia(') && src.includes('RANK_WORD.test(t) && DECORATION_WORD.test(t)')
         && src.includes('nazi, swastika, iron cross'));
-    check('src: the count run follows block order and the crowd sits after the blocks',
+    check('src: the count run follows block order',
         src.includes('const counts = seen.map(k => label(k, nOf(k))).join(\', \');')
-        && src.includes("crowdTag: opts.crowd ? 'crowd' : ''")
-        && src.includes('[id.counts, ...id.blocks, id.crowdTag, bgTag, p.prompt]'));
+        && src.includes('[id.counts, ...id.blocks, bgTag, p.prompt]'));
     check('src: a two-shot must name what passes between the pair, and no lone repeat',
         src.includes('without saying what passes between them')
         && src.includes('Never give the same lone character two panels in a row')
@@ -807,9 +820,8 @@ function defaultPatterns() { return '<details>[\\s\\S]*?</details>\n\\{[A-Z_]+\\
         src.includes('function sanitizeBubbles(list, sceneText, who)')
         && src.includes('if (!speakerPresent(speaker)) continue;')
         && src.includes('sanitizeBubbles(p?.bubbles, sceneText, who)'));
-    check('src: counts are crowd-aware and background figures are demoted before the weld',
-        src.includes("opts.crowd ? 'crowd' : ''")
-        && src.includes('const crowdHere = framesCrowd(anchorText) || framesCrowd(p.prompt);')
+    check('src: the crowd signal drives the establishing frame, and background figures are demoted',
+        src.includes('const crowdHere = framesCrowd(anchorText) || framesCrowd(p.prompt);')
         && src.includes('const { principals, background } = splitPrincipals(p.who);'));
     check('src: laws match enforcement — background demotion, speaker presence, standing setting',
         src.includes('A character drawn far away, tiny, or as a silhouette is NOT in "who"')
@@ -881,7 +893,7 @@ function defaultPatterns() { return '<details>[\\s\\S]*?</details>\n\\{[A-Z_]+\\
         src.includes('WHO writes identity AND owns state, and WHO is not you')
         && src.includes('one contiguous run per character')
         && src.includes('a climax panel whose victim is missing from "who" is a failed panel')
-        && src.includes('assembleIdentity(principals, activeSheet, { crowd: crowdHere, dress: firstGarmentTag(dress) })')
+        && src.includes('assembleIdentity(principals, activeSheet, { dress: firstGarmentTag(dress) })')
         && src.includes('Never blend two people into one')
         && src.includes('never render anyone as a child unless their cast tags say so'));
     check('src: scene population is setting-state with continuity',

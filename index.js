@@ -12,7 +12,7 @@ import { getBase64Async, saveBase64AsFile } from '../../../utils.js';
 import { callGenericPopup, POPUP_TYPE } from '../../../popup.js';
 
 const MODULE = 'sceneSnap';
-const VERSION = '0.20.0';
+const VERSION = '0.21.0';
 
 const defaultSettings = Object.freeze({
     enabled: true,
@@ -550,6 +550,9 @@ const CODE_OWNED_TAG = /^(?:\d+\s*(?:boys?|girls?|others?|men|man|women|woman)|m
 // Exception: a garment token that also carries a condition word is describing what
 // happened TO the clothing (torn, open, removed, blowing), which is state, not wardrobe,
 // and the explicit-scene rules depend on it.
+const SIZE_WORD = /\b(?:petite|tiny|diminutive|small|little|slight|miniature)\b/i;
+const SIZE_NOUN = /\b(?:posture|frame|figure|build|stature|body|form|size|height)\b/i;
+
 const GARMENT_CONDITION = /\b(?:torn|ripped|shredded|tattered|slashed|cut|open|opened|undone|unbuttoned|unfastened|loose|falling|fallen|removed|discarded|missing|soaked|wet|bloodied|bloody|dirty|muddy|burned|burnt|singed|scorched|disheveled|askew|pulled|lifted|hiked|blowing|billowing|fluttering|stirring|flaring|swirling|damaged|half-?off)\b/i;
 
 function scrubState(state, blockTags) {
@@ -577,6 +580,8 @@ function scrubState(state, blockTags) {
         if (low.length >= 4 && blockToks.some(b => b.toLowerCase() !== low && b.toLowerCase().startsWith(low))) continue;
         const words = low.split(/[\s-]+/).filter(Boolean);
         if (words.length >= 2 && words.every(w => blockWords.has(w))) continue;
+        if (SIZE_WORD.test(low) && SIZE_WORD.test(String(blockTags || ''))
+            && (words.length === 1 || SIZE_NOUN.test(low))) continue;
         if (low.length < 3) continue;
         if (used + t.length + 2 > 200) break;
         out.push(t);
@@ -670,18 +675,8 @@ function assembleIdentity(who, sheetText, opts = {}) {
     const label = (k, n) => k === 'g' ? (n === 1 ? '1girl' : n + 'girls')
         : k === 'b' ? (n === 1 ? '1boy' : n + 'boys')
             : (n === 1 ? '1other' : n + 'others');
-    // Count tags are an exhaustive claim about the frame's population: "1boy, 1girl"
-    // asserts a two-person world. Stamping that onto a frame whose own anchor names a
-    // packed courtyard is a contradiction, and the model resolves it the only way it
-    // can — by rendering everyone who is not counted as shapeless mass, or by dropping
-    // a principal outright. `crowd` is the danbooru term for uncounted background
-    // people; with it the counts stop lying and the crowd becomes a subject the model
-    // is actually asked to draw.
     const counts = seen.map(k => label(k, nOf(k))).join(', ');
-    // `crowd` is environment, not a principal. Between the count run and the first
-    // character block it breaks their association and can pull that character's traits
-    // onto the crowd — it is returned separately and stamped AFTER the blocks.
-    return { counts, blocks, missing, crowdTag: opts.crowd ? 'crowd' : '' };
+    return { counts, blocks, missing };
 }
 
 // Escape a name for RegExp embedding. Top-level on purpose: this class once
@@ -1224,16 +1219,18 @@ ${FRAME_LAWS}${bubblesOn ? '\n\n' + BUBBLE_RULES : ''}\nOUTPUT (replaces the sin
         if (!p.who || !p.who.length) {
             // An establishing frame: the crowd or the place IS the subject. It gets the
             // population count and the shot grammar, and no identity weld to skip.
-            p.prompt = enforceShotGrammar([crowdHere ? 'crowd' : '', p.prompt].filter(Boolean).join(', '));
+            // `crowd` on its own describes a mood, not a headcount, and the field run
+            // returned an empty courtyard. These are the tags that put people in a frame.
+            p.prompt = enforceShotGrammar([crowdHere ? '6+boys, 6+girls, crowd' : '', p.prompt].filter(Boolean).join(', '));
             p.welded = false;
             continue;
         }
         const { principals, background } = splitPrincipals(p.who);
         if (background.length) console.warn('[SceneSnap] background figure(s) demoted out of who:', background.map(w => w.name));
-        const id = assembleIdentity(principals, activeSheet, { crowd: crowdHere, dress: firstGarmentTag(dress) });
+        const id = assembleIdentity(principals, activeSheet, { dress: firstGarmentTag(dress) });
         if (id.missing.length) console.warn('[SceneSnap] panel "who" names still not in cast sheet:', id.missing);
         const bgTag = background.length ? 'distant figure in the background' : '';
-        p.prompt = enforceShotGrammar([id.counts, ...id.blocks, id.crowdTag, bgTag, p.prompt].filter(Boolean).join(', '));
+        p.prompt = enforceShotGrammar([id.counts, ...id.blocks, bgTag, p.prompt].filter(Boolean).join(', '));
         p.who = principals;
         // Identity welded by code — the seed no longer has to protect subject appearance.
         p.welded = id.blocks.length > 0;
@@ -1547,28 +1544,16 @@ async function illustrateMessage(mesId, { force = false } = {}) {
 
 
             const { panels, style, raw, setting, dress, schemaSent, plan, planNotes } = await buildScenePrompt(mesId);
-            // The dress anchor used to be stamped as bare garment tags, so appendAnchor's
-            // dedup deleted it from exactly the panels where a principal already wore that
-            // garment — taking the CROWD's only clothing instruction with it. The field run
-            // lost it on panel 1 and three hundred shinigami came back in school uniforms.
-            // Bind it to the population instead: a distinct phrase no character block holds.
-            // "crowd of shinigami in black shihakusho" names the population's dress
-            // explicitly; prefer it over the first tag of the world dress, which in the
-            // field run was a principal's own kosode.
-            const populationDress = (String(setting || '').match(/(?:crowd|ranks|rows|stands|throng|courtyard|hall|street)[^,]*?\bin ([^,]+)/i) || [])[1];
-            const crowdDress = (populationDress && hasGarment(populationDress) ? populationDress.trim() : '') || firstGarmentTag(dress);
-            const anchorFor = (p) => {
-                const bound = p.crowd && crowdDress ? `crowd in ${crowdDress}` : '';
-                const rest = String(dress || '').split(',').map(t => t.trim())
-                    .filter(t => t && !(bound && bound.toLowerCase().includes(t.toLowerCase())));
-                return [setting, bound, ...rest].filter(Boolean).join(', ');
-            };
+            // The setting already names the population and what it wears, by law, in its
+            // own words ("packed courtyard of shinigami in black shihakusho"). A second
+            // bound phrase repeating that garment only flattened the crowd into one mass.
+            const anchorFor = () => [setting, dress].filter(Boolean).join(', ');
             const negFull = antiModernNegative(dress) ? `${negative}, ${antiModernNegative(dress)}` : negative;
             // Hybrid prompting: tags own identity/state (binding); NAI 4.5-class models also
             // read short natural sentences well, and sentences beat tags at spatial relations —
             // so one composition sentence rides at the end, tags mode only.
             const finals = panels.map(p => composePositive(
-                p.sentence && style === 'tags' ? `${appendAnchor(p.prompt, anchorFor(p))}, ${p.sentence}` : appendAnchor(p.prompt, anchorFor(p)),
+                p.sentence && style === 'tags' ? `${appendAnchor(p.prompt, anchorFor())}, ${p.sentence}` : appendAnchor(p.prompt, anchorFor()),
                 style,
             ));
             debugRaw = raw;
