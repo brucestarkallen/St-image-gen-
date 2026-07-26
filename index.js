@@ -12,7 +12,7 @@ import { getBase64Async, saveBase64AsFile } from '../../../utils.js';
 import { callGenericPopup, POPUP_TYPE } from '../../../popup.js';
 
 const MODULE = 'sceneSnap';
-const VERSION = '0.24.0';
+const VERSION = '0.25.0';
 
 const defaultSettings = Object.freeze({
     enabled: true,
@@ -169,7 +169,7 @@ WORLD (derive once, as data): from the SCENE text and CAST tags, infer this worl
 // to check: the panel list is validated (and repaired) BEFORE a single tag is written.
 const PLAN_LAWS = `PLAN FIRST, IN THE SAME ANSWER. Before you write a single tag, lay the strip out as a list of beats — this is the "plan" array of your JSON, and the "panels" array renders it one for one, in the same order.
 
-PANELS: pick how many the scene's climax needs (2 to %MAX%). One DISTINCT beat each, in the order they happen, ending on the final beat, and the climax action itself MUST be one of them.
+PANELS: pick how many the scene's climax needs (2 to %MAX%). One DISTINCT beat each, in the order they happen, ending on the final beat, and the climax action itself MUST be one of them. SPEND THE BUDGET: a climax with a shout, a crowd's eruption, and two or more reactions has 4+ beats — use up to %MAX% panels and give the major named reactors their own frames; a short strip is for a scene with few beats, never a full one with beats dropped.
 - THE BEATS ARE A CHAIN, NOT A LIST. Beat 2 is what happens NEXT because of beat 1; beat 3 follows beat 2. Every panel after the first states in "follows" what makes it the next moment — "the blade is now overhead, and the courtyard answers it", "his shout has landed and the old man responds to it". A panel whose "follows" could be deleted without anyone noticing is an independent picture, not a strip.
 - STRICT CHRONOLOGY: the strip runs forward in time. Never open on the crowd's reaction and then cut back to the action that caused it.
 - Every panel a different beat. One action stretched over two panels (a sword leaving its sheath, then that same sword held overhead) is ONE beat; pick the stronger image and spend the freed panel elsewhere.
@@ -638,7 +638,10 @@ function stripPlaceholderLines(sheetText) {
 // full verbatim appearance block onto it spends a subject slot and a count on someone
 // the frame renders three pixels tall — the model answers by splitting its attention
 // and both subjects come out degraded.
-const BACKGROUND_STATE = /\b(?:in the (?:far )?(?:background|distance)|at a distance|at distance|far (?:away|off|behind|in the)|distant|from afar|tiny in|small in the frame)\b/i;
+// A figure the builder itself framed only as "seen from behind" is scenery too:
+// the field run kept such a figure as a second principal and the model resolved
+// the two-person frame by floating his blade across the PRIMARY's neck.
+const BACKGROUND_STATE = /\b(?:in the (?:far )?(?:background|distance)|at a distance|at distance|far (?:away|off|behind|in the)|distant|from afar|tiny in|small in the frame|seen from (?:behind|above|below|afar))\b/i;
 
 // Principals get identity blocks and counts; background figures get one shared tag.
 // Never returns zero principals: a frame with no subject is not a frame.
@@ -846,6 +849,22 @@ function enforceShotGrammar(prompt) {
         out.push(t);
     }
     return out.join(', ');
+}
+
+// One strip, one sky. The anchor owns the time of day; a panel that names its own
+// light contradicts it, and the strip flickers blue-night / warm-day / purple-dusk
+// across one continuous minute (field: the same courtyard rendered as full-moon
+// night in panel 1, warm noon in panel 2, purple dusk in panel 3). When the anchor
+// carries any light token, panel-level light tokens are dropped in code. Shot
+// atmosphere that is not a time of day (lens flare, wind, dust, dramatic lighting)
+// is untouched.
+const LIGHT_TOKEN = /\b(?:sunlight|sun|sunny|daylight|moonlight|moonlit|moon|night|nighttime|evening|dusk|dawn|twilight|morning|winter light|backlight(?:ing)?|backlit|golden hour|rim light|sunset|sunrise|candlelight|firelight|lamplight)\b/i;
+
+function unifyStripLighting(prompt, anchor) {
+    if (!LIGHT_TOKEN.test(String(anchor || ''))) return String(prompt || '');
+    return String(prompt || '').split(',').map(t => t.trim())
+        .filter(t => t && !LIGHT_TOKEN.test(t))
+        .join(', ');
 }
 
 // What a population is momentarily DOING cannot live in a description stamped unchanged
@@ -1254,9 +1273,19 @@ ${FRAME_LAWS}${bubblesOn ? '\n\n' + BUBBLE_RULES : ''}\nOUTPUT (replaces the sin
                 try {
                     const rawFix = await callLLM(`${fullSystem}\n\nYOUR PLAN WAS REJECTED:\n- ${problems.join('\n- ')}\nRe-output the complete corrected JSON now — plan AND panels.`, user, maxTokens);
                     const planFix = parsePlan(rawFix, maxPanels);
-                    if (planFix && validatePlan(planFix, castNames, maxPanels, { crowd: wantsCrowd }).length < problems.length) {
-                        const panelsFix = parsePanels(rawFix, style, maxPanels, { bubbles: bubblesOn, sceneText: scene, expectJson: structuredSingle });
-                        if (panelsFix.length) { plan = planFix; panels = panelsFix; raw = rawFix; }
+                    if (planFix) {
+                        const fixProblems = validatePlan(planFix, castNames, maxPanels, { crowd: wantsCrowd });
+                        // A repair is accepted on fewer problems — OR on restoring the
+                        // crowd frame outright. Strictly-fewer-only let a repair that
+                        // fixed the MISSING CROWD PANEL die on an equal score, and the
+                        // strip shipped without its eruption frame (field).
+                        const crowdRestored = wantsCrowd
+                            && !plan.panels.some(p => (p.who || []).length === 0)
+                            && planFix.panels.some(p => (p.who || []).length === 0);
+                        if (fixProblems.length < problems.length || (crowdRestored && fixProblems.length <= problems.length)) {
+                            const panelsFix = parsePanels(rawFix, style, maxPanels, { bubbles: bubblesOn, sceneText: scene, expectJson: structuredSingle });
+                            if (panelsFix.length) { plan = planFix; panels = panelsFix; raw = rawFix; }
+                        }
                     }
                 } catch (e) { console.warn('[SceneSnap] plan repair failed, keeping first output:', e); }
             }
@@ -1310,7 +1339,7 @@ ${FRAME_LAWS}${bubblesOn ? '\n\n' + BUBBLE_RULES : ''}\nOUTPUT (replaces the sin
             // returned an empty courtyard. These are the tags that put people in a frame.
             // Dedupe FIRST: the crowd-action tags this frame lives or dies by were
             // drowning in a triple-restated location block.
-            p.prompt = enforceShotGrammar([crowdHere ? '6+boys, 6+girls, crowd' : '', dedupeAgainstAnchor(p.prompt, anchorText)].filter(Boolean).join(', '));
+            p.prompt = enforceShotGrammar([crowdHere ? '6+boys, 6+girls, crowd' : '', unifyStripLighting(dedupeAgainstAnchor(p.prompt, anchorText), anchorText)].filter(Boolean).join(', '));
             p.welded = false;
             continue;
         }
@@ -1319,7 +1348,7 @@ ${FRAME_LAWS}${bubblesOn ? '\n\n' + BUBBLE_RULES : ''}\nOUTPUT (replaces the sin
         const id = assembleIdentity(principals, activeSheet, { dress: firstGarmentTag(dress), worldDress: dress });
         if (id.missing.length) console.warn('[SceneSnap] panel "who" names still not in cast sheet:', id.missing);
         const bgTag = background.length ? backgroundFigureTag(background, activeSheet) : '';
-        p.prompt = enforceShotGrammar([id.counts, ...id.blocks, bgTag, dedupeAgainstAnchor(p.prompt, anchorText)].filter(Boolean).join(', '));
+        p.prompt = enforceShotGrammar([id.counts, ...id.blocks, bgTag, unifyStripLighting(dedupeAgainstAnchor(p.prompt, anchorText), anchorText)].filter(Boolean).join(', '));
         p.who = principals;
         // Identity welded by code — the seed no longer has to protect subject appearance.
         p.welded = id.blocks.length > 0;

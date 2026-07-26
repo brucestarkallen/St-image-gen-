@@ -114,6 +114,13 @@ Stella: girl, long crimson hair, red eyes, large breasts, hair ribbon, school un
 
 ## Changelog
 
+### 0.25.0 — seen-from-behind is scenery; one sky per strip
+- **Fixed: the second principal's blade through the PRIMARY's neck.** A `who` entry whose state was `seen from behind` stayed a principal — a two-person frame the model resolved by floating his sword across her head. `seen from behind/above/below/afar` states now demote to background like any distant figure, and the demotion carries the verb (`distant figure sword raised overhead in the background`). Genuine two-shots (facing, touching, addressing) are untouched.
+- **Fixed: the strip flickering night → noon → dusk across one continuous minute.** The anchor owns the time of day; per-panel light tokens (`dramatic backlighting`, `sunset`, `moonlight`) that contradict it are dropped in code (`unifyStripLighting`). Atmosphere that is not a time of day (lens flare, wind, dust, dramatic lighting) survives.
+- **Fixed: the crowd-eruption panel dying in plan repair.** Repairs were accepted only on a strictly-lower problem count; a repair that restored the missing crowd frame at an equal score was discarded. A crowd-restoring repair now wins ties.
+- **Planner: spend the panel budget.** A climax with a shout, an eruption, and named reactions is told to use up to Max panels and give major reactors their own frames — short strips are for few-beat scenes.
+- Gate: 243 → 251 checks; demotion and lighting negative-tested.
+
 ### 0.24.0 — the NAI emphasis transport (docs-backed)
 - **Quality tags now go FIRST on NovelAI, in emphasis braces** — `{very aesthetic, best quality, amazing quality}`. ST's `/api/novelai/generate-image` hardcodes `qualityToggle: false` and `use_order: true`; the NAI website default is qualityToggle ON, which *prepends* exactly this block. Under `use_order`, position is strength, and the extension's quality block sat dead-last, after the composition sentence — the weakest position on the route. (Source: ST route code + docs.novelai.net/en/image/strengthening-weakening.)
 - **The tail carries V4.5 negative emphasis: `-1.5::flat color ::`.** The official strengthening/weakening doc's own rescue for flat, lifeless output ("-2.5::flat color :: can fancy it right up"), at a moderate dose. Emphasis syntax travels untouched inside `v4_prompt.caption.base_caption` — NAI parses it server-side.

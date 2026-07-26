@@ -30,7 +30,7 @@ const FUNCS = [
     'parsePanels', 'parseCastSheet', 'mergeCastLines', 'effectiveForcedTags',
     'composePositive', 'scanPresenceIn', 'markerDetails', 'ledgerStateLines',
     'stripScene', 'explainError', 'isStaleSession', 'stripLayoutMeta', 'appendAnchor', 'mineDressTags', 'normalizeCountTags', 'filterRankGarments', 'assembleIdentity', 'scrubState', 'seedForPanel', 'replaceNamesInSentence', 'capTagSafe', 'antiModernNegative', 'isPlaceholderTags', 'stripPlaceholderLines', 'getSize',
-    'backgroundFigureTag', 'dedupeAgainstAnchor', 'neutralizeRoleUniforms',
+    'backgroundFigureTag', 'dedupeAgainstAnchor', 'neutralizeRoleUniforms', 'unifyStripLighting',
 ];
 
 const prelude = `
@@ -56,7 +56,7 @@ function extractConst(name) {
     if (!line) throw new Error(`extractConst: ${name} not found`);
     return line;
 }
-const CONSTS = ['escRe', 'BACKGROUND_STATE', 'CODE_OWNED_TAG', 'GARMENT_CONDITION', 'TRANSIENT_ACTIVITY', 'FRAMING_TAG', 'ANGLE_TAG', 'SIZE_WORD', 'SIZE_NOUN', 'GARMENT_WORDS', 'RANK_WORD', 'DECORATION_WORD', 'BEAT_STOPWORD', 'BACKEND_QUALITY_FRONT', 'BACKEND_QUALITY_TAIL'];
+const CONSTS = ['escRe', 'BACKGROUND_STATE', 'CODE_OWNED_TAG', 'GARMENT_CONDITION', 'TRANSIENT_ACTIVITY', 'FRAMING_TAG', 'ANGLE_TAG', 'SIZE_WORD', 'SIZE_NOUN', 'GARMENT_WORDS', 'RANK_WORD', 'DECORATION_WORD', 'BEAT_STOPWORD', 'BACKEND_QUALITY_FRONT', 'BACKEND_QUALITY_TAIL', 'LIGHT_TOKEN'];
 
 const sandboxPath = '/tmp/ss_sandbox_' + process.pid + '.mjs';
 writeFileSync(sandboxPath, prelude + '\n' + CONSTS.map(extractConst).join('\n') + '\n' + FUNCS.map(extract).join('\n\n')
@@ -804,6 +804,39 @@ function defaultPatterns() { return '<details>[\\s\\S]*?</details>\n\\{[A-Z_]+\\
         (bg.match(/in the background/g) || []).length === 1 && !/seen from/.test(bg) && /arm raised high/.test(bg));
 }
 
+// ---------------------------------------------------------------- seen-from-behind demotion + one sky per strip (0.25.0)
+{
+    // Field bug: a second principal whose state was "seen from behind" stayed a
+    // principal; the model resolved the two-person frame with his blade across HER neck.
+    const sp = S.splitPrincipals([
+        { name: 'Rukia', state: 'hands folded at front, tears forming' },
+        { name: 'Jovan', state: 'sword raised overhead, seen from behind' },
+    ]);
+    check('demote: seen-from-behind is scenery, not a principal',
+        sp.principals.length === 1 && sp.principals[0].name === 'Rukia' && sp.background.length === 1 && sp.background[0].name === 'Jovan');
+    // The demoted figure still carries its verb.
+    const bgt = S.backgroundFigureTag(sp.background, 'Jovan: man, white hair, black kosode');
+    check('demote: the blade follows the demoted figure', /sword raised overhead/.test(bgt));
+    // A genuine two-shot is NOT demoted.
+    const duo = S.splitPrincipals([
+        { name: 'A', state: 'facing her, hand extended' },
+        { name: 'B', state: 'meeting his eyes, blushing' },
+    ]);
+    check('demote: facing each other stays a two-shot', duo.principals.length === 2 && duo.background.length === 0);
+
+    const anchor = 'barracks courtyard, pale sun, winter light, wind in bare branches';
+    // Field bug: one courtyard rendered as full-moon night / warm noon / purple dusk
+    // across three panels of one continuous minute.
+    const lit = S.unifyStripLighting('dramatic backlighting, lens flare, sunset, dust motes', anchor);
+    check('sky: panel light tokens dropped under an anchor sky, atmosphere kept',
+        !/backlighting|sunset/.test(lit) && /lens flare/.test(lit) && /dust motes/.test(lit));
+    check('sky: no anchor light -> panel light untouched',
+        S.unifyStripLighting('moonlight, crickets', 'barracks courtyard, stone fountain') === 'moonlight, crickets');
+    check('sky: empty tolerated', S.unifyStripLighting('', anchor) === '');
+    check('sky: non-light tokens never match (sundress is not the sun)',
+        S.unifyStripLighting('white sundress, smiling', anchor) === 'white sundress, smiling');
+}
+
 // ---------------------------------------------------------------- source-level invariants
 {
     check('src: single-panel bubble mode requests strict JSON', src.includes('exactly one panel'));
@@ -905,10 +938,13 @@ function defaultPatterns() { return '<details>[\\s\\S]*?</details>\n\\{[A-Z_]+\\
         && src.includes('nazi, swastika, iron cross'));
     check('src: the count run follows block order',
         src.includes('const counts = seen.map(k => label(k, nOf(k))).join(\', \');')
-        && src.includes('[id.counts, ...id.blocks, bgTag, dedupeAgainstAnchor(p.prompt, anchorText)]'));
+        && src.includes('[id.counts, ...id.blocks, bgTag, unifyStripLighting(dedupeAgainstAnchor(p.prompt, anchorText), anchorText)]'));
     check('src: anchor owns the environment — dedupe wired into BOTH panel paths',
-        src.includes("crowdHere ? '6+boys, 6+girls, crowd' : '', dedupeAgainstAnchor(p.prompt, anchorText)")
+        src.includes("crowdHere ? '6+boys, 6+girls, crowd' : '', unifyStripLighting(dedupeAgainstAnchor(p.prompt, anchorText), anchorText)")
         && src.includes('const bgTag = background.length ? backgroundFigureTag(background, activeSheet) : \'\';'));
+    check('src: a crowd-restoring repair is accepted on an equal score',
+        src.includes('const crowdRestored = wantsCrowd')
+        && src.includes('fixProblems.length < problems.length || (crowdRestored && fixProblems.length <= problems.length)'));
     check('src: a two-shot must name what passes between the pair, and no lone repeat',
         src.includes('without saying what passes between them')
         && src.includes('Never give the same lone character two panels in a row')
