@@ -106,12 +106,16 @@ Stella: girl, long crimson hair, red eyes, large breasts, hair ribbon, school un
 - **"Prompt builder returned an empty response"** — the profile model may be reasoning-only or unreachable; pick another profile or leave on Main API.
 - **Runware "invalid model"** — re-copy the AIR from Civitai; version IDs change when models update.
 - **NovelAI 401** — set your NovelAI key under API Connections (NovelAI) first.
+- **"SillyTavern's server didn't answer"** — the button was pressed while ST was restarting or down. The page stays open but its server is gone, so every call fails instantly. Wait for the startup banner, reload the page, press again. (Since 0.8.1 all requests are same-origin, so this is the only thing a browser-level fetch failure can mean.)
 - **Multi-char warns that the CORS proxy is off** — NovelAI's API refuses direct browser calls, so multi-character mode rides SillyTavern's proxy route. One line in `config.yaml`: `enableCorsProxy: true`, restart ST (or launch with `--corsProxy`). Until then SceneSnap ships a single-prompt image instead of failing.
 - **A bubble is missing** — the builder's line wasn't found verbatim in the scene (dropped by design), or the beat had no dialogue. **Show last generation** lists every accepted bubble.
 - **Wrong characters keep appearing** — check the cast sheet and whether your preset prints `[IST: ...]` markers; with markers present, off-screen characters are hard-barred from prompts.
 - **Auto mode fired on an old message** — it only targets the newest AI message and suppresses itself for a moment after chat switches; if you see otherwise, report the console log.
 
 ## Changelog
+
+### 0.8.2
+- Browser-level fetch failures ("Failed to fetch" / "NetworkError" / "Load failed") are now translated at the single error reporter into what they actually mean — the SillyTavern server didn't answer (restarting or down) — in the toast and in **Show last generation**. Valid since 0.8.1 made every request same-origin, which the gate asserts.
 
 ### 0.8.1
 - **Fixed: multi-character mode failed with "Failed to fetch".** Root cause: v0.7.0 called `image.novelai.net` directly from the browser, and NovelAI's API sends no CORS headers, so the browser kills the request before it leaves. Multi-char now rides SillyTavern's same-origin CORS proxy route (`enableCorsProxy: true` in config.yaml). When the proxy is off, SceneSnap detects ST's exact disabled-proxy response, warns once with the config line, and degrades to a single-prompt image — same ladder as a missing token or cast. Token-rejection errors now surface NovelAI's own message (ST rewrites upstream 401s to 400; both are handled).

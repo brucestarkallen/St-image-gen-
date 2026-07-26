@@ -12,7 +12,7 @@ import { getBase64Async, saveBase64AsFile } from '../../../utils.js';
 import { callGenericPopup, POPUP_TYPE } from '../../../popup.js';
 
 const MODULE = 'sceneSnap';
-const VERSION = '0.8.1';
+const VERSION = '0.8.2';
 
 const defaultSettings = Object.freeze({
     enabled: true,
@@ -162,9 +162,21 @@ function resolveStyle() {
     return settings.backend === 'pollinations' ? 'natural' : 'tags';
 }
 
+// Since 0.8.1 every fetch in this extension is same-origin (the gate asserts no
+// cross-origin fetch exists), so a browser-level fetch failure has exactly one
+// meaning: the SillyTavern server itself didn't answer (restarting, or down).
+// Covers Chrome ("Failed to fetch"), Firefox ("NetworkError..."), Safari ("Load failed").
+function explainError(message) {
+    const m = String(message || '');
+    if (/failed to fetch|networkerror|load failed/i.test(m)) {
+        return "SillyTavern's server didn't answer — it's likely restarting or down. Wait for it to finish starting, reload this page, then try again.";
+    }
+    return m;
+}
+
 function notifyError(err) {
     console.error('[SceneSnap]', err);
-    try { toastr.error(String(err?.message || err).slice(0, 300), 'SceneSnap', { timeOut: 10000 }); } catch { /* noop */ }
+    try { toastr.error(explainError(err?.message || err).slice(0, 300), 'SceneSnap', { timeOut: 10000 }); } catch { /* noop */ }
 }
 
 async function urlToBase64(url) {
@@ -1131,8 +1143,9 @@ async function illustrateMessage(mesId, { force = false } = {}) {
         if ($mes.length) appendMediaToMessage(msg, $mes, 'keep');
         await ctx2.saveChat();
     } catch (err) {
-        if (lastDebug) lastDebug.error = String(err?.message || err);
-        else lastDebug = { time: new Date().toLocaleTimeString(), backend: settings.backend, style: resolveStyle(), raw: '(builder did not run)', prompts: [], negative: effectiveNegative(), error: String(err?.message || err) };
+        const msg = explainError(err?.message || err);
+        if (lastDebug) lastDebug.error = msg;
+        else lastDebug = { time: new Date().toLocaleTimeString(), backend: settings.backend, style: resolveStyle(), raw: '(builder did not run)', prompts: [], negative: effectiveNegative(), error: msg };
         notifyError(err);
     } finally {
         inFlight.delete(mesId);

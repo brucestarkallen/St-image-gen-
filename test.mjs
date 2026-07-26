@@ -27,7 +27,7 @@ const FUNCS = [
     'normalizeForMatch', 'sanitizeBubbles', 'sanitizeBuilderOutput', 'softSanitize',
     'parsePanels', 'parseCastSheet', 'mergeCastLines', 'effectiveForcedTags',
     'composePositive', 'scanPresenceIn', 'markerDetails', 'ledgerStateLines',
-    'stripScene', 'isCorsProxyDisabled',
+    'stripScene', 'isCorsProxyDisabled', 'explainError',
 ];
 
 const prelude = `
@@ -232,6 +232,18 @@ function defaultPatterns() { return '<details>[\\s\\S]*?</details>\n\\{[A-Z_]+\\
     check('cors-guard: message without 404 status not misclassified',
         !S.isCorsProxyDisabled(500, 'CORS proxy is disabled'));
     check('cors-guard: empty body tolerated', !S.isCorsProxyDisabled(404, ''));
+}
+
+// ---------------------------------------------------------------- fetch-failure translation
+{
+    check('explain: Chrome fetch failure names ST, not the raw error',
+        /SillyTavern/.test(S.explainError('Failed to fetch')) && !/Failed to fetch/.test(S.explainError('Failed to fetch')));
+    check('explain: Firefox wording translated',
+        /SillyTavern/.test(S.explainError('NetworkError when attempting to fetch resource.')));
+    check('explain: Safari wording translated', /SillyTavern/.test(S.explainError('Load failed')));
+    check('explain: real backend errors pass through untouched',
+        S.explainError('NovelAI multi-char: 500 upstream oops') === 'NovelAI multi-char: 500 upstream oops');
+    check('explain: empty tolerated', S.explainError(null) === '');
 }
 
 // ---------------------------------------------------------------- source-level invariants
