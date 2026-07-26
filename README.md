@@ -114,6 +114,11 @@ Stella: girl, long crimson hair, red eyes, large breasts, hair ribbon, school un
 
 ## Changelog
 
+### 0.12.6
+- **No more subject-less panels.** A who-name missing from the cast used to ship a prompt with zero people in it — an empty courtyard where a character belonged. Missing names now trigger one targeted cast-seeding (the builder must output lines for exactly those characters from story memory) before assembly.
+- **Sentences speak in role words, enforced in code**: any cast name leaking into a composition sentence is substituted with the character's gender word — names are semantic zeros to tag-native models.
+- **Dress-derived anti-modern negative**: when the world's declared dress is traditional and nothing modern is declared, the negative prompt automatically gains modern-uniform terms — seeds can no longer outvote the kosode with Prussian tunics. World-agnostic: it only fires on what your own world data says.
+
 ### 0.12.5
 - **Subject-derived panel seeds.** The locked strip seed kept recurring characters consistent but bled palette priors across *different* subjects — two white-haired solo panels primed the next panel's black-haired girl silver. Seeds now derive from who is in the frame: same people → same seed, different people → decorrelated. Negative-tested.
 - **Dialogue beats are two-shots**: a line spoken to a present character puts speaker AND addressee in `who` (or a shot/reverse pair); solo frames are for reactions and genuine solitude — defaulting to solo is a failed strip.

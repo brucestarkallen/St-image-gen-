@@ -12,7 +12,7 @@ import { getBase64Async, saveBase64AsFile } from '../../../utils.js';
 import { callGenericPopup, POPUP_TYPE } from '../../../popup.js';
 
 const MODULE = 'sceneSnap';
-const VERSION = '0.12.5';
+const VERSION = '0.12.6';
 
 const defaultSettings = Object.freeze({
     enabled: true,
@@ -469,10 +469,41 @@ function assembleIdentity(who, sheetText) {
     return { counts, blocks: placed, missing };
 }
 
+// Names are semantic zeros to tag-native image models. Sentences must speak in role
+// words; any cast name that leaks in is substituted by the character's gender word.
+function replaceNamesInSentence(sentence, sheetText) {
+    let out = String(sentence || '');
+    if (!out) return out;
+    for (const c of parseCastSheet(sheetText)) {
+        const first = String(c.tags).split(',')[0].trim().toLowerCase();
+        const role = /^(man|boy|male)$/.test(first) ? 'the man' : /^(woman|girl|female)$/.test(first) ? 'the woman' : 'the figure';
+        const parts = c.name.split(/\s+/).filter(Boolean);
+        for (const token of [c.name, ...parts]) {
+            if (token.length < 3) continue;
+            out = out.replace(new RegExp(`\\b${token.replace(/[.*+?^$item{}()|[\\]\\\\]/g, '\\$&')}\\b`, 'g'), role);
+        }
+    }
+    return out.replace(/\b(the (?:man|woman|boy|girl|figure))( and \1)+\b/g, '$1').replace(/\s{2,}/g, ' ');
+}
+
 // Per-panel seed: derived from the run seed and WHO is in the frame. Same who-set,
 // same seed — a recurring character renders consistently. Different who-set, different
 // seed — a locked seed's palette priors can no longer bleed one panel's white hair
 // onto the next panel's black-haired girl (field bug).
+// When the world's dress is traditional and nothing modern is declared, seeds can
+// still roll modern-uniform latents that outvote the anchor (field bug: Prussian
+// tunics over 'black kosode'). Derive an anti-modern negative FROM the dress data —
+// world-agnostic: it only fires on what the user's own world declares.
+function antiModernNegative(dress) {
+    const d = String(dress || '').toLowerCase();
+    const traditional = ['kimono', 'kosode', 'hakama', 'haori', 'shihakush', 'yukata', 'robe', 'obi', 'sash'];
+    const modern = ['necktie', 'suit', 'blazer', 'hoodie', 't-shirt', 'jeans', 'jacket', 'trench'];
+    if (traditional.some(t => d.includes(t)) && !modern.some(m => d.includes(m))) {
+        return 'modern military uniform, epaulettes, necktie, medals, dress shirt, buttons coat, peaked cap';
+    }
+    return '';
+}
+
 function seedForPanel(runSeed, whoNames) {
     let h = 0;
     for (const n of (whoNames || []).map(x => String(x).toLowerCase()).sort()) {
@@ -780,12 +811,28 @@ WORLD (derive once, as data): from the SCENE text and CAST tags, infer this worl
     // the extension (appendAnchor) — per-panel drift to modern dress/architecture becomes
     // structurally impossible instead of being a memory test for the builder.
     const dress = filterRankGarments(panels.dress) || mineDressTags(getActiveCastSheet());
-    const activeSheet = getActiveCastSheet();
+    let activeSheet = getActiveCastSheet();
+    // A who-name missing from the cast means a panel with NO subject tags at all —
+    // an empty courtyard where a character should be (field bug). Seed the missing
+    // names once, targeted, then assemble.
+    {
+        const missingAll = new Set();
+        for (const p of panels) {
+            for (const w of (p.who || [])) {
+                if (!parseCastSheet(activeSheet).some(c => c.name.toLowerCase() === String(w.name).toLowerCase())) missingAll.add(w.name);
+            }
+        }
+        if (missingAll.size && settings.autoCast) {
+            console.warn('[SceneSnap] who-names missing from cast — targeted seeding:', [...missingAll]);
+            try { await autoBuildCast({ silent: true, requiredNames: [...missingAll] }); activeSheet = getActiveCastSheet(); } catch (e) { console.warn('[SceneSnap] targeted seeding failed:', e); }
+        }
+    }
     for (const p of panels) {
         if (!p.who || !p.who.length) continue;
         const id = assembleIdentity(p.who, activeSheet);
-        if (id.missing.length) console.warn('[SceneSnap] panel "who" names not in cast sheet:', id.missing);
+        if (id.missing.length) console.warn('[SceneSnap] panel "who" names still not in cast sheet:', id.missing);
         p.prompt = [id.counts, ...id.blocks, p.prompt].filter(Boolean).join(', ');
+        p.sentence = replaceNamesInSentence(p.sentence, activeSheet);
     }
     return { panels, style, raw: String(raw), setting: panels.setting || '', dress };
 }
@@ -1095,6 +1142,7 @@ async function illustrateMessage(mesId, { force = false } = {}) {
 
             const { panels, style, raw, setting, dress } = await buildScenePrompt(mesId);
             const anchor = [setting, dress].filter(Boolean).join(', ');
+            const negFull = antiModernNegative(dress) ? `${negative}, ${antiModernNegative(dress)}` : negative;
             // Hybrid prompting: tags own identity/state (binding); NAI 4.5-class models also
             // read short natural sentences well, and sentences beat tags at spatial relations —
             // so one composition sentence rides at the end, tags mode only.
@@ -1117,7 +1165,7 @@ async function illustrateMessage(mesId, { force = false } = {}) {
             // One seed for the whole strip: same character rendering in every panel.
             const runSeed = Math.floor(Math.random() * 2 ** 31);
             for (let i = 0; i < panels.length; i++) {
-                const result = await generateWithBackend(finals[i], negative, panels.length > 1, seedForPanel(runSeed, (panels[i].who || []).map(w => w.name)));
+                const result = await generateWithBackend(finals[i], negFull, panels.length > 1, seedForPanel(runSeed, (panels[i].who || []).map(w => w.name)));
                 panelFormat = result.format || panelFormat;
                 let imageB64 = result.isUrl ? await urlToBase64(result.data) : result.data;
                 if (panels[i].bubbles.length) {
@@ -1296,7 +1344,7 @@ const sheetWarned = new Set();
 
 // ------------------------------------------------------------------ cast auto-build
 
-async function autoBuildCast({ silent = false } = {}) {
+async function autoBuildCast({ silent = false, requiredNames = [] } = {}) {
     const ctx = getContext();
     const memory = collectStoryMemory().slice(0, 14000);
     const excerpt = (ctx.chat || [])
@@ -1314,6 +1362,7 @@ async function autoBuildCast({ silent = false } = {}) {
     try {
         const user = [
             `PLAYER CHARACTER HINT: the human player's persona is named "${ctx.name1 || 'User'}" — the protagonist may appear under this or another in-story name; include the protagonist either way.`,
+            requiredNames.length ? `REQUIRED CHARACTERS (output a line for EACH of these, using their appearance from story memory/chat): ${requiredNames.join(', ')}` : '',
             `EXISTING SHEET (skip these characters):\n${getActiveCastSheet() || '(empty)'}`,
             memory ? `STORY MEMORY:\n${memory}` : '',
             excerpt ? `RECENT CHAT EXCERPT:\n${excerpt}` : '',

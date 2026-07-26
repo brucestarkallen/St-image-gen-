@@ -27,7 +27,7 @@ const FUNCS = [
     'normalizeForMatch', 'sanitizeBubbles', 'sanitizeBuilderOutput', 'softSanitize',
     'parsePanels', 'parseCastSheet', 'mergeCastLines', 'effectiveForcedTags',
     'composePositive', 'scanPresenceIn', 'markerDetails', 'ledgerStateLines',
-    'stripScene', 'explainError', 'isStaleSession', 'stripLayoutMeta', 'appendAnchor', 'mineDressTags', 'normalizeCountTags', 'filterRankGarments', 'assembleIdentity', 'scrubState', 'seedForPanel', 'getSize',
+    'stripScene', 'explainError', 'isStaleSession', 'stripLayoutMeta', 'appendAnchor', 'mineDressTags', 'normalizeCountTags', 'filterRankGarments', 'assembleIdentity', 'scrubState', 'seedForPanel', 'replaceNamesInSentence', 'antiModernNegative', 'getSize',
 ];
 
 const prelude = `
@@ -284,6 +284,26 @@ function defaultPatterns() { return '<details>[\\s\\S]*?</details>\n\\{[A-Z_]+\\
         S.sanitizeBuilderOutput('1girl, snow, courtyard', 'tags') === '1girl, snow, courtyard');
 }
 
+// ---------------------------------------------------------------- sentence name scrub
+{
+    const sheet = 'Jovan Oda: man, medium white hair\nRukia Kuchiki: woman, short black hair\nKiyone Kotetsu: woman, short blonde hair';
+    check('names: cast names become role words (full and partial)',
+        S.replaceNamesInSentence('Rukia stands before Jovan while Kiyone runs past.', sheet)
+            === 'the woman stands before the man while the woman runs past.');
+    check('names: sentences without names pass through',
+        S.replaceNamesInSentence('She kneels beside him.', sheet) === 'She kneels beside him.');
+    check('names: empty tolerated', S.replaceNamesInSentence('', sheet) === '');
+}
+
+// ---------------------------------------------------------------- dress-derived negative
+{
+    check('neg: traditional-only dress fires the anti-modern negative',
+        /modern military uniform/.test(S.antiModernNegative('shihakushō, black kosode, hakama')));
+    check('neg: declared-modern worlds are untouched',
+        S.antiModernNegative('suit, necktie, dress shirt') === '' && S.antiModernNegative('black kosode, necktie') === '');
+    check('neg: empty dress is neutral', S.antiModernNegative('') === '');
+}
+
 // ---------------------------------------------------------------- subject-derived seeds
 {
     check('seed: same who-set, same seed — recurring characters stay consistent',
@@ -382,7 +402,7 @@ function defaultPatterns() { return '<details>[\\s\\S]*?</details>\n\\{[A-Z_]+\\
     check('src: no direct cross-origin fetch to NovelAI remains',
         !src.includes("fetch('https://image.novelai.net"));
     check('src: strip panels generate landscape (flag threaded to every panel backend)',
-        src.includes('generateWithBackend(finals[i], negative, panels.length > 1, seedForPanel')
+        src.includes('generateWithBackend(finals[i], negFull, panels.length > 1, seedForPanel')
         && src.includes('generateRunware(positive, negative, landscape, seed)')
         && src.includes('generateNovelAI(positive, negative, landscape, seed)')
         && src.includes('generatePollinations(positive, negative, landscape, seed)')
@@ -412,6 +432,13 @@ function defaultPatterns() { return '<details>[\\s\\S]*?</details>\n\\{[A-Z_]+\\
         src.includes('.filter(w => w.name).slice(0, 2) : [],'));
     check('src: explicit scenes are tagged explicitly, anatomy locked to cast sheet',
         src.includes('EXPLICIT SCENES:') && src.includes('never euphemize') && src.includes('fullSystem += NSFW_RULE;'));
+    check('src: missing who-names trigger targeted seeding, then names are scrubbed from sentences',
+        src.includes('REQUIRED CHARACTERS (output a line for EACH')
+        && src.includes('autoBuildCast({ silent: true, requiredNames: [...missingAll] })')
+        && src.includes('p.sentence = replaceNamesInSentence(p.sentence, activeSheet);'));
+    check('src: dress-derived anti-modern negative wired into the strip loop',
+        src.includes('antiModernNegative(dress) ? `${negative}, ${antiModernNegative(dress)}` : negative')
+        && src.includes('generateWithBackend(finals[i], negFull,'));
     check('src: dialogue beats are two-shots and bubbles show the speaker\'s face',
         src.includes('a spoken line addressed to a present character is a TWO-shot')
         && src.includes("SHOW ITS SPEAKER'S FACE")
