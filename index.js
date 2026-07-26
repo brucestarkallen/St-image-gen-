@@ -12,7 +12,7 @@ import { getBase64Async, saveBase64AsFile } from '../../../utils.js';
 import { callGenericPopup, POPUP_TYPE } from '../../../popup.js';
 
 const MODULE = 'sceneSnap';
-const VERSION = '0.8.5';
+const VERSION = '0.9.0';
 
 const defaultSettings = Object.freeze({
     enabled: true,
@@ -314,10 +314,16 @@ function sanitizeBubbles(list, sceneText) {
             .trim();
         if (!text) continue;
         if (!sceneNorm || !sceneNorm.includes(normalizeForMatch(text))) continue;
-        if (text.length > 90) {
-            const cut = text.slice(0, 90);
-            const at = cut.lastIndexOf(' ');
-            text = (at > 40 ? cut.slice(0, at) : cut).trim();
+        if (text.length > 110) {
+            const win = text.slice(0, 110);
+            const sentenceEnd = Math.max(win.lastIndexOf('. '), win.lastIndexOf('! '), win.lastIndexOf('? '));
+            if (sentenceEnd > 40) {
+                text = win.slice(0, sentenceEnd + 1).trim();
+            } else {
+                const cut = win.slice(0, 104);
+                const at = cut.lastIndexOf(' ');
+                text = (at > 40 ? cut.slice(0, at) : cut).trim() + '\u2026';
+            }
         }
         out.push({ speaker, text });
     }
@@ -635,7 +641,7 @@ async function buildScenePrompt(mesId) {
     if (grounding.has) fullSystem += GROUNDING_RULE;
     const bubbleSchema = bubblesOn ? ',"bubbles":[{"speaker":"<name>","text":"<verbatim quote>"}]' : '';
     if (maxPanels > 1) {
-        fullSystem += `\n\nSEQUENCE MODE (active):\nDecide how many panels (1 to ${maxPanels}) the scene's climax genuinely needs — one panel per DISTINCT visual beat, chronological order, ending on the final beat. Use 1 panel when one moment carries the scene. Characters keep identical appearance tags in every panel.${bubblesOn ? '\n\n' + BUBBLE_RULES : ''}\nOUTPUT (replaces the single-line requirement above): strict JSON only — no reasoning, no commentary, no markdown: {"panels":[{"prompt":"<one prompt following all rules above>"${bubbleSchema}}]}`;
+        fullSystem += `\n\nSEQUENCE MODE (active):\nBuild a vertical comic strip: decide how many panels (2 to ${maxPanels}) the scene's climax needs — one panel per DISTINCT visual beat, chronological order, ending on the final beat. Never fewer than 2 panels: the reader asked for a strip. Characters keep identical appearance tags in every panel.${bubblesOn ? '\n\n' + BUBBLE_RULES : ''}\nOUTPUT (replaces the single-line requirement above): strict JSON only — no reasoning, no commentary, no markdown: {"panels":[{"prompt":"<one prompt following all rules above>"${bubbleSchema}}]}`;
     } else if (bubblesOn) {
         fullSystem += `\n\n${BUBBLE_RULES}\nOUTPUT (replaces the single-line requirement above): strict JSON only — no reasoning, no commentary, no markdown, exactly one panel: {"panels":[{"prompt":"<one prompt following all rules above>"${bubbleSchema}}]}`;
     }
@@ -1017,8 +1023,9 @@ async function overlayBubbles(b64, format, bubbles) {
     const fontPx = Math.round(Math.min(40, Math.max(17, W / 24)));
     cx.font = `700 ${fontPx}px "Comic Neue", "Comic Sans MS", sans-serif`;
     cx.textBaseline = 'top';
-    const maxTextW = W * 0.58;
-    let cursorY = Math.round(img.height * 0.035);
+    const twoUp = Math.min(2, bubbles.length) > 1;
+    const maxTextW = twoUp ? W * 0.36 : W * 0.58;
+    const yBase = Math.round(img.height * 0.035);
     for (let i = 0; i < Math.min(2, bubbles.length); i++) {
         const words = String(bubbles[i].text).split(' ');
         const lines = [];
@@ -1036,8 +1043,9 @@ async function overlayBubbles(b64, format, bubbles) {
         const bw = Math.min(textW + padX * 2, W * 0.92);
         const bh = lines.length * lineH + padY * 2;
         const x = i % 2 === 0 ? Math.round(W * 0.04) : Math.max(Math.round(W * 0.04), Math.round(W * 0.96 - bw));
+        const y = yBase + (i === 1 ? Math.round(fontPx * 0.35) : 0);
         cx.beginPath();
-        pathRoundRect(cx, x, cursorY, bw, bh, fontPx * 1.1);
+        pathRoundRect(cx, x, y, bw, bh, fontPx * 1.1);
         cx.fillStyle = 'rgba(255,255,255,0.96)';
         cx.fill();
         cx.lineWidth = Math.max(2, Math.round(fontPx / 9));
@@ -1045,9 +1053,8 @@ async function overlayBubbles(b64, format, bubbles) {
         cx.stroke();
         cx.fillStyle = '#101010';
         for (let li = 0; li < lines.length; li++) {
-            cx.fillText(lines[li], x + padX + (textW - cx.measureText(lines[li]).width) / 2, cursorY + padY + li * lineH);
+            cx.fillText(lines[li], x + padX + (textW - cx.measureText(lines[li]).width) / 2, y + padY + li * lineH);
         }
-        cursorY += bh + Math.round(fontPx * 0.5);
     }
     const blob = await new Promise(resolve => canvas.toBlob(resolve, `image/${mime}`, 0.94));
     if (!blob) throw new Error('Bubble overlay failed to encode');
@@ -1159,7 +1166,7 @@ async function illustrateMessage(mesId, { force = false } = {}) {
         }
 
 
-        lastDebug = { time: new Date().toLocaleTimeString(), backend: settings.backend + (multiRan ? ' (multi-char)' : (multiCharError ? ' (multi-char failed \u2192 single)' : '')), style: multiRan ? 'nai-multichar' : resolveStyle(), multiCharError, raw: debugRaw, prompts: debugPrompts, negative, error: null };
+        lastDebug = { time: new Date().toLocaleTimeString(), backend: settings.backend + (multiRan ? ' (multi-char)' : (multiCharError ? ' (multi-char failed \u2192 single)' : '')), style: multiRan ? 'nai-multichar' : resolveStyle(), multiCharError: multiCharError && /failed to fetch|networkerror|load failed/i.test(multiCharError) ? multiCharError + ' \u2014 yet the standard route succeeded moments later, so this request is being blocked inside the browser (shield/content blocker), not by the server.' : multiCharError, raw: debugRaw, prompts: debugPrompts, negative, error: null };
 
         const base64 = panelImages.length > 1
             ? await stitchPanels(panelImages, panelFormat)
@@ -1445,7 +1452,7 @@ function settingsHtml() {
 
                 <label for="snapshot_panels">Max panels (comic sequence)</label>
                 <input id="snapshot_panels" type="number" min="1" max="6" class="text_pole">
-                <small class="snapshot_hint">1 = single frame. 2–6 = the builder decides per scene how many panels the climax needs, stitched top-to-bottom into one vertical strip (webtoon style). Each panel is a full generation — free on NAI Opus, pennies on Runware, but N× the wait. The console logs how many panels the builder chose.</small>
+                <small class="snapshot_hint">1 = single frame. 2–6 = a guaranteed strip — the builder picks at least 2 panels, up to your cap, stitched top-to-bottom (webtoon style). Each panel is a full generation — free on NAI Opus, pennies on Runware, but N× the wait. The console logs how many panels the builder chose.</small>
 
                 <label class="checkbox_label"><input id="snapshot_bubbles" type="checkbox"><span>Dialogue bubbles (comic text)</span></label>
                 <small class="snapshot_hint">Draws up to two speech bubbles per panel with dialogue copied verbatim from the scene. SceneSnap renders the text itself — always legible on every backend, never model-garbled. Lines that aren't found word-for-word in the scene are dropped, never invented. Pair with Max panels 2–4 for the full manhwa-strip look.</small>

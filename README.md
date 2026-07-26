@@ -116,6 +116,12 @@ Stella: girl, long crimson hair, red eyes, large breasts, hair ribbon, school un
 
 ## Changelog
 
+### 0.9.0 — the Reddit-strip release
+- **The strip is guaranteed.** With Max panels ≥ 2, the builder must produce at least 2 panels — "one moment carries the scene" can no longer collapse your comic into a single frame.
+- **Bubbles never chop a sentence.** Lines up to 110 chars ship whole; longer lines cut exactly at a sentence boundary, and only sentence-less run-ons get a word-safe cut with a visible ellipsis. The mid-phrase amputation ("…a Thirteenth Division") is dead.
+- **Bubbles stay off faces.** Two bubbles now sit side-by-side in the top band of the panel (left/right), never stacked down the frame onto heads.
+- When multi-char is skipped by a network-level death but the standard route succeeds seconds later, **Show last generation now states the proven conclusion**: the request is being blocked inside the browser, not by the server.
+
 ### 0.8.5
 - **The button always ships an image.** Multi-character mode is now best-effort: if its request fails for any reason at all, SceneSnap generates the same scene through the standard route (the exact path "Test backend" exercises) instead of erroring out with nothing. The obstruction is named once in a yellow toast ("Multi-char skipped: ...") and recorded verbatim in **Show last generation** under "Multi-char skipped".
 - Mid-transfer body deaths get the same evidence-based classification as dead fetches (server probed, verdict stated).

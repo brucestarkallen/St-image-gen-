@@ -99,8 +99,21 @@ check('normalize: curly quotes + case + whitespace',
     const longScene = 'He said "' + 'alpha beta gamma delta '.repeat(10) + 'end" and left.';
     const longText = ('alpha beta gamma delta '.repeat(10) + 'end').trim();
     const trimmed = S.sanitizeBubbles([{ speaker: 'X', text: longText }], longScene);
-    check('bubbles: verify-then-trim — long verbatim line kept and word-safe cut <= 90',
-        trimmed.length === 1 && trimmed[0].text.length <= 90 && !trimmed[0].text.endsWith(' '));
+    check('bubbles: verify-then-trim — sentence-less overflow word-cut with visible ellipsis',
+        trimmed.length === 1 && trimmed[0].text.length <= 105 && trimmed[0].text.endsWith('\u2026'));
+
+    // The exact field defect: a ~95-char sentence must ship WHOLE, never chopped mid-phrase.
+    const line95 = "But don't worry. After my official proclamation, we'll have a Thirteenth Division celebration.";
+    const whole = S.sanitizeBubbles([{ speaker: 'J', text: line95 }], 'He said: ' + line95 + ' And smiled.');
+    check('bubbles: 95-char sentence ships whole (no mid-sentence chop)',
+        whole.length === 1 && whole[0].text === line95);
+
+    // Overflow WITH a sentence boundary: cut lands exactly on the boundary, no ellipsis needed.
+    const sA = 'The first sentence is exactly this long and it ends right here.'; // 63 chars incl. period
+    const sB = 'The second sentence keeps going for quite a while longer than the window allows.';
+    const cutAtSentence = S.sanitizeBubbles([{ speaker: 'N', text: sA + ' ' + sB }], sA + ' ' + sB);
+    check('bubbles: overflow cuts at the sentence boundary',
+        cutAtSentence.length === 1 && cutAtSentence[0].text === sA);
 
     check('bubbles: empty scene yields nothing (no unverifiable text ever renders)',
         S.sanitizeBubbles([{ speaker: 'M', text: 'anything' }], '').length === 0);
@@ -273,6 +286,12 @@ function defaultPatterns() { return '<details>[\\s\\S]*?</details>\n\\{[A-Z_]+\\
         !src.includes("fetch('https://image.novelai.net"));
     check('src: proxy target is percent-encoded into the path',
         src.includes('/proxy/${encodeURIComponent(NAI_IMAGE_ENDPOINT)}') && !src.includes('/proxy/${NAI_IMAGE_ENDPOINT}'));
+    check('src: sequence mode floors at 2 panels — the strip is guaranteed',
+        src.includes('(2 to ${maxPanels})') && src.includes('Never fewer than 2 panels'));
+    check('src: two bubbles sit side-by-side in the top band, never stacked down the frame',
+        src.includes('W * 0.36') && !src.includes('cursorY += bh'));
+    check('src: network-death multichar skip gets the post-hoc in-browser-blocking evidence line',
+        src.includes('blocked inside the browser (shield/content blocker), not by the server'));
     check('src: multi-char degrades to single prompt on ANY failure (never selective rethrow)',
         src.includes('multiCharError = String(e?.message || e)') && !src.includes("if (!e?.corsProxyDisabled && !e?.blockedInBrowser) throw e;"));
     check('src: the multi-char obstruction is shown in the debug popup',
