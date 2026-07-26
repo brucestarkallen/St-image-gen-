@@ -27,7 +27,7 @@ const FUNCS = [
     'normalizeForMatch', 'sanitizeBubbles', 'sanitizeBuilderOutput', 'softSanitize',
     'parsePanels', 'parseCastSheet', 'mergeCastLines', 'effectiveForcedTags',
     'composePositive', 'scanPresenceIn', 'markerDetails', 'ledgerStateLines',
-    'stripScene', 'isCorsProxyDisabled', 'explainError', 'isStaleSession', 'classifyFetchDeath', 'stripLayoutMeta', 'appendAnchor', 'mineDressTags', 'getSize',
+    'stripScene', 'explainError', 'isStaleSession', 'stripLayoutMeta', 'appendAnchor', 'mineDressTags', 'getSize',
 ];
 
 const prelude = `
@@ -238,80 +238,6 @@ function defaultPatterns() { return '<details>[\\s\\S]*?</details>\n\\{[A-Z_]+\\
         S.sanitizeBuilderOutput('<think>x</think>```\n1girl, red eyes, alley, night\n```', 'tags') === '1girl, red eyes, alley, night');
 }
 
-// ---------------------------------------------------------------- CORS-proxy guard
-{
-    check('cors-guard: ST disabled-proxy 404 detected',
-        S.isCorsProxyDisabled(404, 'CORS proxy is disabled. Enable it in config.yaml or use the --corsProxy flag.'));
-    check('cors-guard: real upstream 404 not misclassified',
-        !S.isCorsProxyDisabled(404, '{"statusCode":404,"message":"Not Found"}'));
-    check('cors-guard: message without 404 status not misclassified',
-        !S.isCorsProxyDisabled(500, 'CORS proxy is disabled'));
-    check('cors-guard: empty body tolerated', !S.isCorsProxyDisabled(404, ''));
-}
-
-// ---------------------------------------------------------------- strip sizing
-{
-    S._setSettings({ sizePreset: 'portrait' });
-    const p = S.getSize();
-    const l = S.getSize(true);
-    check('size: default stays portrait', p.height > p.width);
-    check('size: strip mode flips portrait panels to landscape', l.width > l.height && l.width === p.height && l.height === p.width);
-    S._setSettings({ sizePreset: 'landscape' });
-    const already = S.getSize(true);
-    check('size: an already-wide preset is untouched', already.width === 1216 && already.height === 832);
-    S._setSettings({ sizePreset: 'portrait' });
-}
-
-// ---------------------------------------------------------------- world anchor stamping
-{
-    check('anchor: appended without duplicating existing tokens',
-        S.appendAnchor('1girl, barracks courtyard, snow', 'barracks courtyard, black kimono, snow, white sash')
-            === '1girl, barracks courtyard, snow, black kimono, white sash');
-    check('anchor: empty anchor is a no-op', S.appendAnchor('1boy, smile', '') === '1boy, smile');
-    check('anchor: case-insensitive dedupe', S.appendAnchor('1girl, Black Kimono', 'black kimono') === '1girl, Black Kimono');
-
-    const cast = 'Jovan Oda: man, medium white hair, black kosode, no insignia\nRukia Kuchiki: woman, violet eyes, shinigami uniform, lieutenant armband\nShunsui: man, pink flowered kimono, captain haori, eyepatch';
-    const mined = S.mineDressTags(cast);
-    check('mine: garment tags collected across cast, non-garments excluded',
-        mined.includes('black kosode') && mined.includes('shinigami uniform') && mined.includes('lieutenant armband')
-        && mined.includes('captain haori') && !/violet eyes|white hair|eyepatch/.test(mined));
-    check('mine: names never leak (only post-colon tags scanned)', !/Jovan|Rukia|Shunsui/.test(mined));
-    check('mine: empty cast tolerated', S.mineDressTags('') === '');
-}
-
-// ---------------------------------------------------------------- layout-meta scrub
-{
-    // The exact field leak: builder prefixed a panel prompt with page-layout language,
-    // so NAI drew a comic page inside the panel (nested grids).
-    const leaked = 'comic strip, 4 panels, vertical layout, panel 1: wide shot, 1boy, medium white hair, black kosode, crowd, barracks courtyard';
-    const clean = S.stripLayoutMeta(leaked);
-    check('layout: leaked page language scrubbed, scene tags intact',
-        !/comic|panel|layout/i.test(clean) && clean.includes('wide shot, 1boy, medium white hair') && clean.includes('barracks courtyard'));
-    check('layout: normal prompts untouched',
-        S.stripLayoutMeta('1girl, short black hair, violet eyes, courtyard, snow') === '1girl, short black hair, violet eyes, courtyard, snow');
-    check('layout: multiple views and manga page variants scrubbed',
-        !/multiple views|manga page|4koma/i.test(S.stripLayoutMeta('multiple views, manga page, 4koma, 1boy, smile')));
-}
-
-// ---------------------------------------------------------------- fetch-death classification
-{
-    check('death: server unreachable -> null (unreachable message owns it)', S.classifyFetchDeath(false) === null);
-    const blocked = S.classifyFetchDeath(true);
-    check('death: server up -> blocked-in-browser error with flag',
-        blocked instanceof Error && blocked.blockedInBrowser === true && /blocker|shield/i.test(blocked.message));
-    check('death: blocked message never claims the server is down', !/restarting|down/i.test(blocked.message.replace('shields', '')));
-}
-
-// ---------------------------------------------------------------- stale-session guard
-{
-    // Body captured verbatim from a live ST instance rejecting a stale CSRF token.
-    const LIVE_403 = '<!DOCTYPE html>\n<html lang="en">\n<head>\n<meta charset="utf-8">\n<title>Error</title>\n</head>\n<body>\n<pre>ForbiddenError: Invalid CSRF token. Please refresh the page and try again.</pre>\n</body>\n</html>\n';
-    check('stale: live ST 403 body detected', S.isStaleSession(403, LIVE_403));
-    check('stale: other 403s not misclassified', !S.isStaleSession(403, 'Forbidden: whitelist'));
-    check('stale: marker without 403 not misclassified', !S.isStaleSession(500, LIVE_403));
-    check('stale: empty tolerated', !S.isStaleSession(403, ''));
-}
-
 // ---------------------------------------------------------------- fetch-failure translation
 {
     check('explain: Chrome fetch failure names ST, not the raw error',
@@ -330,8 +256,6 @@ function defaultPatterns() { return '<details>[\\s\\S]*?</details>\n\\{[A-Z_]+\\
     check('src: overlay failures ship the clean panel', src.includes('bubble overlay failed, shipping the clean panel'));
     check('src: no direct cross-origin fetch to NovelAI remains',
         !src.includes("fetch('https://image.novelai.net"));
-    check('src: proxy target is percent-encoded into the path',
-        src.includes('/proxy/${encodeURIComponent(NAI_IMAGE_ENDPOINT)}') && !src.includes('/proxy/${NAI_IMAGE_ENDPOINT}'));
     check('src: strip panels generate landscape (flag threaded to every panel backend)',
         src.includes('generateWithBackend(finals[i], negative, panels.length > 1, runSeed)')
         && src.includes('generateRunware(positive, negative, landscape, seed)')
@@ -359,8 +283,6 @@ function defaultPatterns() { return '<details>[\\s\\S]*?</details>\n\\{[A-Z_]+\\
         && src.includes("never compound phrases like 'hands clapping together'"));
     check('src: panel prompts are single frames by contract (rule + scrub wired)',
         src.includes('never write layout words') && src.includes('stripLayoutMeta(t.replace'));
-    check('src: blocked multichar transport latches off for the session',
-        src.includes('multiCharDeadThisSession = true') && src.includes('!multiCharDeadThisSession && settings.backend'));
     check('src: SceneSnap media renders full-bleed and survives reloads',
         src.includes("scenesnap: true,") && src.includes('markSceneSnapMedia') && src.includes("$mes.addClass('scenesnap-media')"));
     check('src: the outfit contract is verbatim per panel',
@@ -369,18 +291,10 @@ function defaultPatterns() { return '<details>[\\s\\S]*?</details>\n\\{[A-Z_]+\\
         src.includes('(2 to ${maxPanels})') && src.includes('Never fewer than 2 panels'));
     check('src: two bubbles sit side-by-side in the top band, never stacked down the frame',
         src.includes('W * 0.36') && !src.includes('cursorY += bh'));
-    check('src: network-death multichar skip gets the post-hoc in-browser-blocking evidence line',
-        src.includes('blocked inside the browser (shield/content blocker), not by the server'));
-    check('src: multi-char degrades to single prompt on ANY failure (never selective rethrow)',
-        src.includes('multiCharError = String(e?.message || e)') && !src.includes("if (!e?.corsProxyDisabled && !e?.blockedInBrowser) throw e;"));
-    check('src: the multi-char obstruction is shown in the debug popup',
-        src.includes('Multi-char skipped (image fell back to single prompt)'));
-    check('src: mid-transfer body death gets the same evidence-based classification',
-        src.includes('classifyFetchDeath(await probeServerUp()) || bodyErr'));
-    check('src: fetch death is classified by probing /version, not assumed',
-        src.includes("fetch('/version'") && src.includes('classifyFetchDeath(await probeServerUp())'));
     check('src: generateRaw fallback precedes quiet prompt',
         src.indexOf('ctx.generateRaw') !== -1 && src.indexOf('ctx.generateRaw') < src.indexOf('ctx.generateQuietPrompt'));
+    check('src: multi-char fully removed — no NAI direct/proxy transport, no token setting, no latch',
+        !/naiMultiChar|naiToken|MULTICHAR|NAI_IMAGE_ENDPOINT|extractFirstPngFromZip|classifyFetchDeath|probeServerUp/.test(src));
     check('src: version stamp matches manifest', (() => {
         const manifest = JSON.parse(readFileSync(new URL('./manifest.json', import.meta.url), 'utf-8'));
         const m = src.match(/const VERSION = '([^']+)'/);

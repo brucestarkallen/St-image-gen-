@@ -106,15 +106,17 @@ Stella: girl, long crimson hair, red eyes, large breasts, hair ribbon, school un
 - **"Prompt builder returned an empty response"** — the profile model may be reasoning-only or unreachable; pick another profile or leave on Main API.
 - **Runware "invalid model"** — re-copy the AIR from Civitai; version IDs change when models update.
 - **NovelAI 401** — set your NovelAI key under API Connections (NovelAI) first.
-- **"Something in this browser blocked the image request"** — the server answered a liveness probe, so the multi-char request was killed inside the browser itself: an ad/privacy shield or content blocker (common on mobile browsers with built-in blocking). Allow this SillyTavern address in the blocker. SceneSnap ships a single-prompt image in the meantime.
 - **"This page is older than the SillyTavern server"** — ST was restarted after this tab loaded, so its session died and ST rejects every call until the page is reloaded. One reload fixes it.
 - **"SillyTavern's server didn't answer"** — the button was pressed while ST was restarting or down. The page stays open but its server is gone, so every call fails instantly. Wait for the startup banner, reload the page, press again. (Since 0.8.1 all requests are same-origin, so this is the only thing a browser-level fetch failure can mean.)
-- **Multi-char warns that the CORS proxy is off** — NovelAI's API refuses direct browser calls, so multi-character mode rides SillyTavern's proxy route. One line in `config.yaml`: `enableCorsProxy: true`, restart ST (or launch with `--corsProxy`). Until then SceneSnap ships a single-prompt image instead of failing.
 - **A bubble is missing** — the builder's line wasn't found verbatim in the scene (dropped by design), or the beat had no dialogue. **Show last generation** lists every accepted bubble.
 - **Wrong characters keep appearing** — check the cast sheet and whether your preset prints `[IST: ...]` markers; with markers present, off-screen characters are hard-barred from prompts.
 - **Auto mode fired on an old message** — it only targets the newest AI message and suppresses itself for a moment after chat switches; if you see otherwise, report the console log.
 
 ## Changelog
+
+### 0.10.0 — multi-character mode removed
+- **NAI multi-character mode is gone**, deliberately. Honest ledger: it was never observed working end-to-end anywhere — the build rig proved every link except the final NovelAI hop, and on the one real device it ran on, its transport died at browser level across clean browsers with every blocker theory eliminated. A feature that can't be verified and can't be used is a liability, and since 0.9.5/0.9.6 (seed-lock, two-character cap, solo close-ups, stamped world) the strips it was meant to help never touch it. Removed whole: transport, token setting, session latch, zip extractor, its prompts and its toasts. The last version carrying it is v0.9.6 (`git checkout v0.9.6-era` via history) if a desktop deployment ever wants to resurrect and actually verify it.
+- The sheetless warning now fires on a sheet with no parseable entries, not just an empty one.
 
 ### 0.9.6 — the world stays itself, automatically
 - **No manual dress-code line needed anymore.** The builder now derives this world's clothing style and this scene's setting ONCE, as data (`dress` + `setting` fields), and **the extension stamps both onto every panel prompt in code** — per-panel drift into modern uniforms or wrong architecture is structurally impossible instead of a memory test for the builder. Duplicate tags are deduped on stamping.
