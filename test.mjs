@@ -392,13 +392,15 @@ function defaultPatterns() { return '<details>[\\s\\S]*?</details>\n\\{[A-Z_]+\\
         && src.includes('mineDressTags(getActiveCastSheet())'));
     check('src: public address is speaker + attending group, never a private two-shot',
         src.includes('never a private two-shot for a public address'));
-    check('src: panel discipline — chronology+climax, continuity, both parties via who, four-cap, role-word ban, speaker orientation',
+    check('src: panel discipline — chronology+climax, continuity, both parties via who, TWO-cap as model physics',
         src.includes('MUST be one of the panels') && src.includes('strict chronological order')
         && src.includes("carry the previous panel's consequences forward")
         && src.includes('BOTH parties in "who"')
-        && src.includes('up to FOUR; fold extras into the crowd')
+        && src.includes('AT MOST TWO') && src.includes('SPLIT into consecutive panels')
         && src.includes('jobs, not outfits')
         && src.includes('oriented toward whoever they address'));
+    check('src: the two-cap is enforced in code at parse',
+        src.includes('.filter(w => w.name).slice(0, 2) : [],'));
     check('src: explicit scenes are tagged explicitly, anatomy locked to cast sheet',
         src.includes('EXPLICIT SCENES:') && src.includes('never euphemize') && src.includes('fullSystem += NSFW_RULE;'));
     check('src: hybrid natural-language sentence — schema, contract, and tags-mode append',

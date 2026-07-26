@@ -114,6 +114,9 @@ Stella: girl, long crimson hair, red eyes, large breasts, hair ribbon, school un
 
 ## Changelog
 
+### 0.12.3 — two per frame is model physics
+- The user's field observation was the truth: two-character panels were beautiful; three and four are where the pink kimono migrated. Single-prompt tag binding cannot reliably assign garments or wounds across 3+ people — the only hard binding mechanisms are per-character API conditioning (unavailable here) or **at most two subjects**. The cap is back to TWO, enforced in code at parse; a beat with three principals is split into consecutive panels (panels are unlimited; frames are not), everyone else is crowd. Raising the cap to four earlier was following a request against model physics — reverted with reasons on record.
+
 ### 0.12.2 — hybrid prompting: natural language where it earns its keep
 - Why tags at all: anime-family models (NovelAI, Illustrious) are trained on Danbooru tag captions — tags are their native language, and tag runs are their only strong attribute-binding mechanism. Prose-native models (Gemini, GPT-image, FLUX) are a different species; the existing **Prompt style** setting already serves them (Auto/tags/natural).
 - What sentences DO beat tags at on NAI 4.5: spatial relationships. Each panel now carries one builder-written plain-English **composition sentence** (relations and interaction only, zero appearance words), appended after the tags in tags mode. Identity and state stay code-welded tags; arrangement gets grammar.

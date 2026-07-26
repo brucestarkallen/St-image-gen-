@@ -12,7 +12,7 @@ import { getBase64Async, saveBase64AsFile } from '../../../utils.js';
 import { callGenericPopup, POPUP_TYPE } from '../../../popup.js';
 
 const MODULE = 'sceneSnap';
-const VERSION = '0.12.2';
+const VERSION = '0.12.3';
 
 const defaultSettings = Object.freeze({
     enabled: true,
@@ -355,7 +355,7 @@ function parsePanels(raw, style, maxPanels, opts = {}) {
                         who: Array.isArray(p?.who) ? p.who.map(w => {
                             if (w && typeof w === 'object') return { name: String(w.name ?? '').trim(), state: stripLayoutMeta(String(w.state ?? '')).slice(0, 500) };
                             return { name: String(w ?? '').trim(), state: '' };
-                        }).filter(w => w.name).slice(0, 4) : [],
+                        }).filter(w => w.name).slice(0, 2) : [],
                         prompt: normalizeCountTags(softSanitize(String(p?.prompt ?? p ?? ''), style)),
                         bubbles: wantBubbles ? sanitizeBubbles(p?.bubbles, sceneText) : [],
                     }))
@@ -722,7 +722,7 @@ PANEL DISCIPLINE (binding rules for every panel):
 - Panels are the SCENE's beats in strict chronological order, first key moment to last — and the climax action itself (the strike, the explosion, the reveal) MUST be one of the panels; a strip that skips its own climax is a failed strip.
 - CONTINUITY: consecutive panels are one continuous moment in one place — carry the previous panel's consequences forward (smoke from a blast lingers in the next panel; wounds, debris, and damage persist; light and weather never change mid-scene). No panel may contradict a state an earlier panel established.
 - When someone acts ON another person (healing, striking, carrying, restraining), the panel shows BOTH — the object of the action is never cropped out. A medic kneels beside a VISIBLE patient.
-- WHO writes identity AND owns state, and WHO is not you: list each panel's characters in "who" as {"name": exact cast-sheet name, "state": THAT character's pose, expression, wounds, and action tags} — primary first, up to FOUR; fold extras into the crowd. The extension inserts each character's appearance block VERBATIM from the cast sheet, welds their state onto it, and computes the counts — one contiguous run per character, so the image model cannot give one character's laugh or wound to another. The panel "prompt" therefore contains ONLY what is shared: camera, lighting, atmosphere, environment, and scene-wide effects. A per-character detail in the shared prompt, or any appearance trait anywhere, is a failed panel.
+- WHO writes identity AND owns state, and WHO is not you: list each panel's characters in "who" as {"name": exact cast-sheet name, "state": THAT character's pose, expression, wounds, and action tags} — primary first, AT MOST TWO. Two is model physics, not preference: single-prompt tag binding cannot reliably assign a garment or a wound across three people, so a beat with three or more principals is SPLIT into consecutive panels (panels are unlimited; frames are not), and everyone else is crowd. The extension enforces the cap. The extension inserts each character's appearance block VERBATIM from the cast sheet, welds their state onto it, and computes the counts — one contiguous run per character, so the image model cannot give one character's laugh or wound to another. The panel "prompt" therefore contains ONLY what is shared: camera, lighting, atmosphere, environment, and scene-wide effects. A per-character detail in the shared prompt, or any appearance trait anywhere, is a failed panel.
 - The character an effect happens TO carries it in their OWN "state": the exploding sword detonates in its holder's state, the wound bleeds in the wounded one's state — a climax panel whose victim is missing from "who" is a failed panel. Healing, striking, carrying, restraining: BOTH parties in "who", each with their own state; "hand on patient" with no patient listed is a failed panel.
 - Characters not in physical contact get explicit spatial-relation tags in the prompt (distance between them, one far in the background, facing from across the field). With three or more in "who", the extension appends a placement tag to each block automatically in "who" order.
 - "sentence" is where natural language earns its keep: ONE short plain-English sentence per panel stating the spatial arrangement and interaction ("She kneels beside him at the crater's center, pressing both hands to his chest while the crowd watches from the stands."). Relations only — any appearance word there is a failed panel.
