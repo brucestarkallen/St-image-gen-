@@ -12,6 +12,7 @@ import { getBase64Async, saveBase64AsFile } from '../../../utils.js';
 import { callGenericPopup, POPUP_TYPE } from '../../../popup.js';
 
 const MODULE = 'sceneSnap';
+const VERSION = '0.8.0';
 
 const defaultSettings = Object.freeze({
     enabled: true,
@@ -23,6 +24,7 @@ const defaultSettings = Object.freeze({
     builderProfile: '',      // Connection Manager profile id ('' = main API)
     maxSceneChars: 6000,
     maxPanels: 1,
+    dialogueBubbles: true,
     stripPatterns: '<details>[\\s\\S]*?</details>\n\\{[A-Z_]+\\}[\\s\\S]*?\\{/[A-Z_]+\\}\n<!--[\\s\\S]*?-->',
     forcedTags: 'masterpiece, best quality, absurdres, detailed background',
     negativePrompt: 'lowres, worst quality, bad quality, bad anatomy, bad hands, extra digits, jpeg artifacts, signature, username, logo, watermark, artist name',
@@ -122,6 +124,20 @@ Example:
 Akane: girl, long black hair, ponytail, brown eyes, athletic build, school uniform, red ribbon
 Rules: visual traits only — never personality, locations, positions, or current actions. Max 12 tags per character, Danbooru-style tags, prefer information from character tracker blocks when present, skip characters already listed in EXISTING SHEET. ALWAYS include the story's protagonist/viewpoint character — the player's character counts as a character. If a required character's appearance is never described, still output their line as: Name: gender, (appearance unknown — fill in). If there are no new characters at all, output NONE.`;
 
+// One canonical dialogue-bubble contract, cited by both builder paths — never restated.
+const BUBBLE_RULES = `DIALOGUE BUBBLES (active):
+Alongside each panel prompt, pick 0-2 spoken lines for that panel's beat, copied VERBATIM from the SCENE text — never invent, paraphrase, translate, or merge lines. Max 12 words per line; prefer the punchiest dialogue of the beat. "speaker" is the exact character name. If the beat has no spoken dialogue, use an empty array. The image prompt itself must still contain no dialogue or quotation marks — spoken lines go ONLY in the bubbles field; SceneSnap draws them onto the image afterward.`;
+
+// One canonical grounding-authority rule, cited by both builder paths — never restated.
+const GROUNDING_RULE = `
+
+GROUND TRUTH: when a CURRENT WORLD STATE block is provided, it is authoritative — its ON SCREEN list defines who may be depicted (OFF SCREEN characters are forbidden even if the prose mentions them), and its per-character lines give current location, condition, activity, and clothing, overriding sheet defaults and any assumption. PRECEDING CONTEXT is reference only, for resolving pronouns, place, time, and outfits — the illustration always depicts the SCENE's final beat, never events from the preceding context.`;
+
+// Same default presence-marker patterns as Summaryception's ledger: a preset's
+// [IST: name|state] in-scene tracker and [ACW: name|...] off-screen watchlist.
+const DEFAULT_PRESENCE_ON = '\\[IST:\\s*([^|\\]]+)';
+const DEFAULT_PRESENCE_OFF = '\\[ACW:\\s*([^|\\]]+)';
+
 let settings = {};
 const inFlight = new Set();
 const autoDone = new Set();
@@ -213,6 +229,19 @@ async function callLLM(system, user, maxTokens = 500) {
         }
     }
 
+    // Preset-free fallback: generateRaw sends ONLY these two strings through the
+    // current connection — no chat history, no active preset. A quiet prompt runs
+    // through the full generation pipeline, so a heavy RP preset (laws, CoT)
+    // contaminates the builder's output; it stays as the last-resort transport only.
+    if (typeof ctx.generateRaw === 'function') {
+        try {
+            const rawReply = await ctx.generateRaw({ prompt: user, systemPrompt: system });
+            if (rawReply && String(rawReply).trim()) return String(rawReply);
+            console.warn('[SceneSnap] generateRaw returned empty, falling back to quiet prompt');
+        } catch (err) {
+            console.warn('[SceneSnap] generateRaw failed, falling back to quiet prompt:', err);
+        }
+    }
     const reply = await ctx.generateQuietPrompt({ quietPrompt: `${system}\n\n${user}` });
     if (!reply || !String(reply).trim()) throw new Error('Prompt builder returned an empty response');
     return String(reply);
@@ -245,35 +274,80 @@ function softSanitize(text, style) {
     try { return sanitizeBuilderOutput(text, style); } catch { return ''; }
 }
 
-function parsePanels(raw, style, maxPanels) {
+// Curly quotes/apostrophes and whitespace runs must not defeat the verbatim check.
+function normalizeForMatch(text) {
+    return String(text)
+        .replace(/[\u2018\u2019]/g, "'")
+        .replace(/[\u201C\u201D]/g, '"')
+        .replace(/\s+/g, ' ')
+        .toLowerCase()
+        .trim();
+}
+
+// Verbatim guarantee: a bubble renders only if its text literally occurs in the
+// scene — invented dialogue can never reach the image. Order matters: verify
+// FIRST, length-trim SECOND (a prefix of verified text is still verbatim; a
+// trimmed string checked against the scene is not the same guarantee).
+function sanitizeBubbles(list, sceneText) {
+    if (!Array.isArray(list)) return [];
+    const sceneNorm = normalizeForMatch(sceneText);
+    const out = [];
+    for (const b of list) {
+        if (out.length >= 2) break;
+        const speaker = String(b?.speaker ?? '').replace(/\s+/g, ' ').trim().slice(0, 40);
+        let text = String(b?.text ?? '')
+            .replace(/\s+/g, ' ')
+            .replace(/^["'\u201C\u2018\s]+|["'\u201D\u2019\s]+$/g, '')
+            .replace(/(\.{3}|\u2026)$/, '')
+            .trim();
+        if (!text) continue;
+        if (!sceneNorm || !sceneNorm.includes(normalizeForMatch(text))) continue;
+        if (text.length > 90) {
+            const cut = text.slice(0, 90);
+            const at = cut.lastIndexOf(' ');
+            text = (at > 40 ? cut.slice(0, at) : cut).trim();
+        }
+        out.push({ speaker, text });
+    }
+    return out;
+}
+
+function parsePanels(raw, style, maxPanels, opts = {}) {
+    const wantBubbles = !!opts.bubbles;
+    const sceneText = String(opts.sceneText || '');
     const cleaned = String(raw)
         .replace(/<think>[\s\S]*?<\/think>/gi, '')
         .replace(/```json\n?|```/gi, '')
         .trim();
-    if (maxPanels > 1) {
+    if (maxPanels > 1 || wantBubbles) {
         const match = cleaned.match(/\{[\s\S]*\}/);
         if (match) {
             try {
                 const obj = JSON.parse(match[0]);
                 const arr = Array.isArray(obj?.panels) ? obj.panels : [];
-                const prompts = arr
-                    .map(p => softSanitize(String(p?.prompt ?? p ?? ''), style))
-                    .filter(Boolean)
+                const panels = arr
+                    .map(p => ({
+                        prompt: softSanitize(String(p?.prompt ?? p ?? ''), style),
+                        bubbles: wantBubbles ? sanitizeBubbles(p?.bubbles, sceneText) : [],
+                    }))
+                    .filter(p => p.prompt)
                     .slice(0, maxPanels);
-                if (prompts.length) return prompts;
+                if (panels.length) return panels;
             } catch { /* fall through to regex recovery */ }
         }
         // Truncated/dirty JSON: recover every completed "prompt":"..." value.
+        // Bubbles are dropped on this path — recovered fragments cannot carry the
+        // verbatim guarantee, and a clean panel still ships.
         const recovered = [];
         const rx = /"prompt"\s*:\s*"((?:[^"\\]|\\.)*)"/g;
         let hit;
         while ((hit = rx.exec(cleaned)) !== null) {
             const text = softSanitize(hit[1].replace(/\\"/g, '"').replace(/\\n/g, ' '), style);
-            if (text) recovered.push(text);
+            if (text) recovered.push({ prompt: text, bubbles: [] });
         }
         if (recovered.length) return recovered.slice(0, maxPanels);
     }
-    return [sanitizeBuilderOutput(cleaned, style)];
+    return [{ prompt: sanitizeBuilderOutput(cleaned, style), bubbles: [] }];
 }
 
 function effectiveForcedTags() {
@@ -320,18 +394,26 @@ const NAI_CENTERS_BY_COUNT = {
 async function buildMultiCharSpec(mesId, scene) {
     const sheet = getActiveCastSheet();
     const extra = String(settings.extraRules || '').trim();
+    const grounding = collectSceneGrounding(mesId);
+    const bubblesOn = !!settings.dialogueBubbles;
     const user = [
         sheet ? `CHARACTER SHEETS:\n${sheet}` : 'CHARACTER SHEETS: (none — infer only from what the scene explicitly states)',
+        grounding.stateBlock,
+        grounding.contextBlock,
         extra ? `EXTRA RULES:\n${extra}` : '',
         `SCENE (illustrate its final moment):\n${scene}`,
     ].filter(Boolean).join('\n\n');
 
+    let system = MULTICHAR_SYSTEM_PROMPT;
+    if (grounding.has) system += GROUNDING_RULE;
+    if (bubblesOn) system += `\n\n${BUBBLE_RULES}\nAdd the chosen lines as a top-level "bubbles" key in the same JSON object: {"base":"...","characters":[...],"bubbles":[{"speaker":"<name>","text":"<verbatim quote>"}]}. This is a single frame — the bubbles cover the final beat only.`;
+
     let raw;
     try {
-        raw = await callLLM(MULTICHAR_SYSTEM_PROMPT, user, 1400);
+        raw = await callLLM(system, user, 1400);
     } catch (firstErr) {
         console.warn('[SceneSnap] multichar builder attempt 1 failed, retrying once:', firstErr);
-        raw = await callLLM(MULTICHAR_SYSTEM_PROMPT, user, 1400);
+        raw = await callLLM(system, user, 1400);
     }
     console.log('[SceneSnap] raw multichar builder output:', String(raw).slice(0, 700));
 
@@ -350,18 +432,13 @@ async function buildMultiCharSpec(mesId, scene) {
         .slice(0, 4);
     if (!base) throw new Error('Multi-character builder produced an empty base prompt');
     if (!chars.length) throw new Error('Multi-character builder produced no character panels');
-    return { base, chars, raw: String(raw) };
+    const bubbles = bubblesOn ? sanitizeBubbles(obj?.bubbles, scene) : [];
+    return { base, chars, bubbles, raw: String(raw) };
 }
 
-async function getSceneText(mesId) {
-    const ctx = getContext();
-    const message = ctx.chat?.[mesId];
-    if (!message) throw new Error(`Message #${mesId} not found`);
-
-    let scene = String(message.mes || '');
-
-    // Strip stat/tracker blocks (configurable, one regex per line) so the tail of the
-    // message is the final prose beat, not metadata.
+// Strip patterns applied once, identically, wherever message text feeds the builder.
+function stripScene(text) {
+    let scene = String(text || '');
     for (const line of String(settings.stripPatterns || '').split('\n')) {
         const pattern = line.trim();
         if (!pattern) continue;
@@ -371,8 +448,148 @@ async function getSceneText(mesId) {
             console.warn('[SceneSnap] invalid strip pattern skipped:', pattern, e);
         }
     }
-    scene = scene.replace(/\n{3,}/g, '\n\n').trim();
+    return scene.replace(/\n{3,}/g, '\n\n').trim();
+}
 
+// Pure: scan structured presence markers. When markers exist they are the
+// authoritative attendance list — mention is not presence.
+function scanPresenceIn(text, onSrc, offSrc) {
+    const grab = (src) => {
+        const names = [];
+        let rx;
+        try { rx = new RegExp(src, 'gi'); } catch { return names; }
+        let m;
+        while ((m = rx.exec(String(text))) !== null) {
+            const name = String(m[1] || '').trim();
+            if (name && !names.some(n => n.toLowerCase() === name.toLowerCase())) names.push(name);
+            if (rx.lastIndex === m.index) rx.lastIndex++;
+        }
+        return names;
+    };
+    return { present: grab(onSrc), absent: grab(offSrc) };
+}
+
+// Pure: [IST: Name|kneeling, bloodied] carries the freshest visual state after the
+// pipe — capture it (default marker shape only; custom patterns yield names only).
+function markerDetails(text) {
+    const out = {};
+    const rx = /\[IST:\s*([^|\]]+)\|([^\]]*)\]/gi;
+    let m;
+    while ((m = rx.exec(String(text))) !== null) {
+        const name = String(m[1] || '').trim();
+        const detail = String(m[2] || '').replace(/\s+/g, ' ').trim();
+        if (name && detail && !out[name.toLowerCase()]) out[name.toLowerCase()] = { name, detail };
+    }
+    return out;
+}
+
+// Pure: per-character current-state lines from a Summaryception-shaped ledger
+// ({ name: { state } }). With an authoritative present-list, keys match by name
+// (case-insensitive); without one, only characters the scene actually names.
+function ledgerStateLines(ledger, presentNames, sceneLower) {
+    if (!ledger || typeof ledger !== 'object') return [];
+    const keys = Object.keys(ledger);
+    const lines = [];
+    const wanted = presentNames.length ? presentNames : keys;
+    for (const name of wanted) {
+        if (lines.length >= 6) break;
+        const key = keys.find(k => k.toLowerCase() === String(name).toLowerCase());
+        const entry = key ? ledger[key] : null;
+        if (!entry || typeof entry.state !== 'string' || !entry.state.trim()) continue;
+        if (!presentNames.length && sceneLower && !sceneLower.includes(String(name).toLowerCase())) continue;
+        lines.push(`${key}: ${entry.state.replace(/\s+/g, ' ').trim().slice(0, 260)}`);
+    }
+    return lines;
+}
+
+function readPresencePatterns() {
+    // Respect Summaryception's user-configured marker patterns when present.
+    try {
+        const sc = getContext().extensionSettings?.summaryception;
+        return {
+            on: (typeof sc?.ledgerPresenceOnPattern === 'string' && sc.ledgerPresenceOnPattern.trim()) ? sc.ledgerPresenceOnPattern : DEFAULT_PRESENCE_ON,
+            off: (typeof sc?.ledgerPresenceOffPattern === 'string' && sc.ledgerPresenceOffPattern.trim()) ? sc.ledgerPresenceOffPattern : DEFAULT_PRESENCE_OFF,
+        };
+    } catch { return { on: DEFAULT_PRESENCE_ON, off: DEFAULT_PRESENCE_OFF }; }
+}
+
+// World-state + preceding-context grounding for the prompt builder. Sources, in
+// authority order: presence markers from the newest message that prints them
+// (walk-back window 6), Summaryception's per-character ledger state, and short
+// tails of the two preceding turns for pronoun/place resolution. Every source
+// degrades to nothing without error — grounding is fuel, never a dependency.
+function collectSceneGrounding(mesId) {
+    const ctx = getContext();
+    const chat = ctx.chat || [];
+    const targetText = String(chat[mesId]?.mes || '');
+    const { on, off } = readPresencePatterns();
+
+    let presence = { present: [], absent: [] };
+    let details = {};
+    for (let i = mesId; i >= 0 && i >= mesId - 6; i--) {
+        const m = chat[i];
+        if (!m || m.is_system) continue;
+        const found = scanPresenceIn(String(m.mes || ''), on, off);
+        if (found.present.length) {
+            presence = found;
+            details = markerDetails(String(m.mes || ''));
+            break;
+        }
+    }
+
+    let ledger = null;
+    try {
+        const sc = ctx.chatMetadata?.summaryception;
+        if (sc && sc.ledger && typeof sc.ledger === 'object') ledger = sc.ledger;
+    } catch { /* not installed */ }
+    const stateLines = ledgerStateLines(ledger, presence.present, targetText.toLowerCase());
+
+    const charLines = [];
+    const seen = new Set();
+    for (const name of presence.present) {
+        const d = details[name.toLowerCase()];
+        const led = stateLines.find(l => l.toLowerCase().startsWith(name.toLowerCase() + ':'));
+        const bits = [];
+        if (d) bits.push(d.detail);
+        if (led) bits.push(led.slice(led.indexOf(':') + 1).trim());
+        if (bits.length) {
+            charLines.push(`${name}: ${bits.join(' — ')}`.slice(0, 320));
+            seen.add(name.toLowerCase());
+        }
+    }
+    for (const l of stateLines) {
+        const nm = l.slice(0, l.indexOf(':')).toLowerCase();
+        if (!seen.has(nm)) charLines.push(l);
+    }
+
+    const stateBlock = (presence.present.length || charLines.length)
+        ? [
+            'CURRENT WORLD STATE (authoritative ground truth):',
+            presence.present.length ? `ON SCREEN: ${presence.present.join(', ')}` : '',
+            presence.absent.length ? `OFF SCREEN (never depict): ${presence.absent.join(', ')}` : '',
+            ...charLines,
+        ].filter(Boolean).join('\n')
+        : '';
+
+    const tails = [];
+    for (let i = mesId - 1; i >= 0 && tails.length < 2; i--) {
+        const m = chat[i];
+        if (!m || m.is_system) continue;
+        const text = stripScene(String(m.mes || '')).slice(-500).trim();
+        if (text) tails.unshift(`[${m.is_user ? 'player' : 'story'}] ${text}`);
+    }
+    const contextBlock = tails.length
+        ? `PRECEDING CONTEXT (reference only — resolve pronouns, place, time, outfits; never illustrate this):\n${tails.join('\n')}`
+        : '';
+
+    return { stateBlock, contextBlock, has: !!(stateBlock || contextBlock) };
+}
+
+async function getSceneText(mesId) {
+    const ctx = getContext();
+    const message = ctx.chat?.[mesId];
+    if (!message) throw new Error(`Message #${mesId} not found`);
+    let scene = stripScene(message.mes);
     const max = Math.max(1000, Number(settings.maxSceneChars) || 6000);
     if (scene.length > max) {
         // Keep the top (headers/trackers) and the tail (final beat of the scene).
@@ -387,9 +604,13 @@ async function buildScenePrompt(mesId) {
     const system = style === 'tags' ? TAG_SYSTEM_PROMPT : NATURAL_SYSTEM_PROMPT;
     const sheet = getActiveCastSheet();
     const extra = String(settings.extraRules || '').trim();
+    const grounding = collectSceneGrounding(mesId);
+    const bubblesOn = !!settings.dialogueBubbles;
 
     const user = [
         sheet ? `CHARACTER SHEETS:\n${sheet}` : 'CHARACTER SHEETS: (none provided — infer appearances only from what the scene text explicitly states)',
+        grounding.stateBlock,
+        grounding.contextBlock,
         extra ? `EXTRA RULES:\n${extra}` : '',
         `SCENE (illustrate its final moment):\n${scene}`,
     ].filter(Boolean).join('\n\n');
@@ -399,11 +620,15 @@ async function buildScenePrompt(mesId) {
     if (settings.backend === 'novelai' && style === 'tags') {
         fullSystem += '\n\nTARGET MODEL: NovelAI Diffusion V4.5 — blend Danbooru tags with a few short natural phrases used as tags (e.g. "moonlit stone alley at night", "crowded arena under harsh sun"); count tags and sheet-verbatim appearance rules still apply.';
     }
+    if (grounding.has) fullSystem += GROUNDING_RULE;
+    const bubbleSchema = bubblesOn ? ',"bubbles":[{"speaker":"<name>","text":"<verbatim quote>"}]' : '';
     if (maxPanels > 1) {
-        fullSystem += `\n\nSEQUENCE MODE (active):\nDecide how many panels (1 to ${maxPanels}) the scene's climax genuinely needs — one panel per DISTINCT visual beat, chronological order, ending on the final beat. Use 1 panel when one moment carries the scene. Characters keep identical appearance tags in every panel.\nOUTPUT (replaces the single-line requirement above): strict JSON only — no reasoning, no commentary, no markdown: {"panels":[{"prompt":"<one prompt following all rules above>"}]}`;
+        fullSystem += `\n\nSEQUENCE MODE (active):\nDecide how many panels (1 to ${maxPanels}) the scene's climax genuinely needs — one panel per DISTINCT visual beat, chronological order, ending on the final beat. Use 1 panel when one moment carries the scene. Characters keep identical appearance tags in every panel.${bubblesOn ? '\n\n' + BUBBLE_RULES : ''}\nOUTPUT (replaces the single-line requirement above): strict JSON only — no reasoning, no commentary, no markdown: {"panels":[{"prompt":"<one prompt following all rules above>"${bubbleSchema}}]}`;
+    } else if (bubblesOn) {
+        fullSystem += `\n\n${BUBBLE_RULES}\nOUTPUT (replaces the single-line requirement above): strict JSON only — no reasoning, no commentary, no markdown, exactly one panel: {"panels":[{"prompt":"<one prompt following all rules above>"${bubbleSchema}}]}`;
     }
 
-    const maxTokens = maxPanels > 1 ? Math.min(3200, 400 + 550 * maxPanels) : 800;
+    const maxTokens = maxPanels > 1 ? Math.min(3200, 400 + 550 * maxPanels) : (bubblesOn ? 950 : 800);
     let raw;
     try {
         raw = await callLLM(fullSystem, user, maxTokens);
@@ -412,7 +637,7 @@ async function buildScenePrompt(mesId) {
         raw = await callLLM(fullSystem, user, maxTokens);
     }
     console.log('[SceneSnap] raw builder output:', String(raw).slice(0, 600));
-    return { prompts: parsePanels(raw, style, maxPanels), style, raw: String(raw) };
+    return { panels: parsePanels(raw, style, maxPanels, { bubbles: bubblesOn, sceneText: scene }), style, raw: String(raw) };
 }
 
 // ------------------------------------------------------------------ backends
@@ -681,6 +906,79 @@ async function stitchPanels(base64List, format) {
     return String(dataUrl).split(',')[1];
 }
 
+// ------------------------------------------------------------------ dialogue bubbles
+
+function pathRoundRect(cx, x, y, w, h, r) {
+    if (typeof cx.roundRect === 'function') { cx.roundRect(x, y, w, h, r); return; }
+    const rr = Math.min(r, w / 2, h / 2);
+    cx.moveTo(x + rr, y);
+    cx.arcTo(x + w, y, x + w, y + h, rr);
+    cx.arcTo(x + w, y + h, x, y + h, rr);
+    cx.arcTo(x, y + h, x, y, rr);
+    cx.arcTo(x, y, x + w, y, rr);
+    cx.closePath();
+}
+
+// Draw the panel's dialogue as manhwa-style floating bubbles. SceneSnap renders
+// the text itself, so it is pixel-legible on EVERY backend and can never come out
+// model-garbled. First bubble top-left, second top-right, in speech order.
+// Failure here must never cost the image — callers catch and ship the clean panel.
+async function overlayBubbles(b64, format, bubbles) {
+    if (!Array.isArray(bubbles) || !bubbles.length) return b64;
+    const mime = format === 'png' ? 'png' : 'jpeg';
+    const img = await new Promise((resolve, reject) => {
+        const i = new Image();
+        i.onload = () => resolve(i);
+        i.onerror = () => reject(new Error('Bubble overlay: panel image failed to load'));
+        i.src = `data:image/${mime};base64,${b64}`;
+    });
+    const canvas = document.createElement('canvas');
+    canvas.width = img.width;
+    canvas.height = img.height;
+    const cx = canvas.getContext('2d');
+    cx.drawImage(img, 0, 0);
+    const W = img.width;
+    const fontPx = Math.round(Math.min(40, Math.max(17, W / 24)));
+    cx.font = `700 ${fontPx}px "Comic Neue", "Comic Sans MS", sans-serif`;
+    cx.textBaseline = 'top';
+    const maxTextW = W * 0.58;
+    let cursorY = Math.round(img.height * 0.035);
+    for (let i = 0; i < Math.min(2, bubbles.length); i++) {
+        const words = String(bubbles[i].text).split(' ');
+        const lines = [];
+        let line = '';
+        for (const word of words) {
+            const probe = line ? `${line} ${word}` : word;
+            if (line && cx.measureText(probe).width > maxTextW) { lines.push(line); line = word; }
+            else line = probe;
+        }
+        if (line) lines.push(line);
+        const textW = Math.max(...lines.map(l => cx.measureText(l).width));
+        const lineH = Math.round(fontPx * 1.25);
+        const padX = Math.round(fontPx * 0.9);
+        const padY = Math.round(fontPx * 0.62);
+        const bw = Math.min(textW + padX * 2, W * 0.92);
+        const bh = lines.length * lineH + padY * 2;
+        const x = i % 2 === 0 ? Math.round(W * 0.04) : Math.max(Math.round(W * 0.04), Math.round(W * 0.96 - bw));
+        cx.beginPath();
+        pathRoundRect(cx, x, cursorY, bw, bh, fontPx * 1.1);
+        cx.fillStyle = 'rgba(255,255,255,0.96)';
+        cx.fill();
+        cx.lineWidth = Math.max(2, Math.round(fontPx / 9));
+        cx.strokeStyle = '#101010';
+        cx.stroke();
+        cx.fillStyle = '#101010';
+        for (let li = 0; li < lines.length; li++) {
+            cx.fillText(lines[li], x + padX + (textW - cx.measureText(lines[li]).width) / 2, cursorY + padY + li * lineH);
+        }
+        cursorY += bh + Math.round(fontPx * 0.5);
+    }
+    const blob = await new Promise(resolve => canvas.toBlob(resolve, `image/${mime}`, 0.94));
+    if (!blob) throw new Error('Bubble overlay failed to encode');
+    const dataUrl = await getBase64Async(blob);
+    return String(dataUrl).split(',')[1];
+}
+
 // ------------------------------------------------------------------ core flow
 
 function setButtonBusy(mesId, busy) {
@@ -715,6 +1013,14 @@ async function illustrateMessage(mesId, { force = false } = {}) {
                 await autoBuildCast({ silent: true });
             }
         }
+        if (!getActiveCastSheet()) {
+            // Sheetless generation loses appearance locking — degrade loudly, once per chat.
+            const chatKey = String(getContext().chatId ?? 'chat');
+            if (!sheetWarned.has(chatKey)) {
+                sheetWarned.add(chatKey);
+                toastr.info('No cast sheet — character appearances may drift between images. SceneSnap settings → Auto-build cast.', 'SceneSnap', { timeOut: 9000 });
+            }
+        }
 
         const negative = effectiveNegative();
         const useMultiChar = settings.backend === 'novelai' && settings.naiMultiChar
@@ -732,24 +1038,37 @@ async function illustrateMessage(mesId, { force = false } = {}) {
             const spec = await buildMultiCharSpec(mesId, scene);
             debugRaw = spec.raw;
             debugPrompts = [`BASE: ${spec.base}`, ...spec.chars.map((c, i) => `CHAR ${i + 1}: ${c}`)];
+            spec.bubbles.forEach(b => debugPrompts.push(`BUBBLE — ${b.speaker || '?'}: "${b.text}"`));
             positive = debugPrompts.join('\n');
             const result = await generateNovelAIMulti(spec.base, spec.chars, negative);
             panelFormat = result.format || 'png';
-            panelImages = [result.data];
+            let imageB64 = result.data;
+            if (spec.bubbles.length) {
+                try { imageB64 = await overlayBubbles(imageB64, panelFormat, spec.bubbles); }
+                catch (e) { console.warn('[SceneSnap] bubble overlay failed, shipping the clean image:', e); }
+            }
+            panelImages = [imageB64];
             console.log(`[SceneSnap] NAI multi-char: 1 base + ${spec.chars.length} character panels`);
         } else {
-            const { prompts, style, raw } = await buildScenePrompt(mesId);
-            const finals = prompts.map(p => composePositive(p, style));
+            const { panels, style, raw } = await buildScenePrompt(mesId);
+            const finals = panels.map(p => composePositive(p.prompt, style));
             debugRaw = raw;
-            debugPrompts = finals;
+            debugPrompts = finals.slice();
+            panels.forEach((p, i) => p.bubbles.forEach(b => debugPrompts.push(`PANEL ${i + 1} BUBBLE — ${b.speaker || '?'}: "${b.text}"`)));
             console.log(`[SceneSnap] ${finals.length} panel(s) (${style}):`, finals);
-            for (const prompt of finals) {
-                const result = await generateWithBackend(prompt, negative);
+            for (let i = 0; i < panels.length; i++) {
+                const result = await generateWithBackend(finals[i], negative);
                 panelFormat = result.format || panelFormat;
-                panelImages.push(result.isUrl ? await urlToBase64(result.data) : result.data);
+                let imageB64 = result.isUrl ? await urlToBase64(result.data) : result.data;
+                if (panels[i].bubbles.length) {
+                    try { imageB64 = await overlayBubbles(imageB64, panelFormat, panels[i].bubbles); }
+                    catch (e) { console.warn('[SceneSnap] bubble overlay failed, shipping the clean panel:', e); }
+                }
+                panelImages.push(imageB64);
             }
             positive = finals.join('  \u25ba  ');
         }
+
 
         lastDebug = { time: new Date().toLocaleTimeString(), backend: settings.backend + (useMultiChar ? ' (multi-char)' : ''), style: useMultiChar ? 'nai-multichar' : resolveStyle(), raw: debugRaw, prompts: debugPrompts, negative, error: null };
 
@@ -900,6 +1219,7 @@ function mergeCastLines(existing, incoming) {
 }
 
 const castBootstrapAttempted = new Set();
+const sheetWarned = new Set();
 
 // ------------------------------------------------------------------ cast auto-build
 
@@ -1036,6 +1356,9 @@ function settingsHtml() {
                 <input id="snapshot_panels" type="number" min="1" max="6" class="text_pole">
                 <small class="snapshot_hint">1 = single frame. 2–6 = the builder decides per scene how many panels the climax needs, stitched top-to-bottom into one vertical strip (webtoon style). Each panel is a full generation — free on NAI Opus, pennies on Runware, but N× the wait. The console logs how many panels the builder chose.</small>
 
+                <label class="checkbox_label"><input id="snapshot_bubbles" type="checkbox"><span>Dialogue bubbles (comic text)</span></label>
+                <small class="snapshot_hint">Draws up to two speech bubbles per panel with dialogue copied verbatim from the scene. SceneSnap renders the text itself — always legible on every backend, never model-garbled. Lines that aren't found word-for-word in the scene are dropped, never invented. Pair with Max panels 2–4 for the full manhwa-strip look.</small>
+
                 <hr>
                 <label for="snapshot_profile">Prompt builder LLM (Connection Manager profile)</label>
                 <select id="snapshot_profile" class="text_pole"></select>
@@ -1120,6 +1443,7 @@ function syncUI() {
     $('#snapshot_size').val(settings.sizePreset);
     $('#snapshot_style').val(settings.promptStyle);
     $('#snapshot_panels').val(settings.maxPanels);
+    $('#snapshot_bubbles').prop('checked', settings.dialogueBubbles);
     $('#snapshot_forced').val(settings.forcedTags);
     $('#snapshot_negative').val(settings.negativePrompt);
     $('#snapshot_extra_rules').val(settings.extraRules);
@@ -1162,6 +1486,7 @@ function bindSettings() {
     $('#snapshot_size').on('change', function () { settings.sizePreset = this.value; saveSettingsDebounced(); });
     $('#snapshot_style').on('change', function () { settings.promptStyle = this.value; saveSettingsDebounced(); });
     $('#snapshot_panels').on('input', function () { settings.maxPanels = Math.min(6, Math.max(1, Number(this.value) || 1)); saveSettingsDebounced(); });
+    $('#snapshot_bubbles').on('change', function () { settings.dialogueBubbles = this.checked; saveSettingsDebounced(); });
     $('#snapshot_profile').on('change', function () { settings.builderProfile = this.value; saveSettingsDebounced(); });
     $('#snapshot_forced').on('input', function () { settings.forcedTags = this.value; saveSettingsDebounced(); });
     $('#snapshot_negative').on('input', function () { settings.negativePrompt = this.value; saveSettingsDebounced(); });
@@ -1339,5 +1664,5 @@ jQuery(async () => {
     eventSource.on(event_types.APP_READY, () => setTimeout(() => { addAllMessageButtons(); refreshProfileOptions(); refreshCastUI(); }, 1000));
 
     setTimeout(addAllMessageButtons, 2000);
-    console.log('[SceneSnap] loaded');
+    console.log(`[SceneSnap] v${VERSION} loaded`);
 });

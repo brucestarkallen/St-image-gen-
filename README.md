@@ -14,7 +14,8 @@ Generic image extensions dump raw chat prose into the image model. Three things 
 
 1. **Character drift** — the model reinvents hair/eye/outfit every image. SceneSnap keeps a **cast sheet**: locked appearance tags per character, injected verbatim into every prompt.
 2. **Scene mashing** — prose contains headers, trackers, memories, and multiple beats; the image tries to depict all of it at once. SceneSnap's builder is instructed to pick **one frozen frame: the final visual beat**, and to treat header/tracker blocks (timeline, current clothes) as **authoritative outfit/setting data**, not scene content.
-3. **Prompt-format mismatch** — anime checkpoints (Illustrious / NoobAI / NovelAI) want **Danbooru tags**; FLUX-style models want **natural language**. Feeding one the other's format produces mush. SceneSnap auto-matches prompt style to the backend.
+3. **Blind builder** — a single message rarely restates where everyone is, what they're wearing, or who's even in the room; the builder guesses from pronouns and invents the rest. SceneSnap now grounds every prompt in **current world state**: the preset's `[IST: name|state]` / `[ACW: ...]` presence markers (authoritative attendance — off-screen characters are forbidden), Summaryception's per-character ledger `state` (location, condition, activity), and short tails of the two preceding turns for pronoun resolution.
+4. **Prompt-format mismatch** — anime checkpoints (Illustrious / NoobAI / NovelAI) want **Danbooru tags**; FLUX-style models want **natural language**. Feeding one the other's format produces mush. SceneSnap auto-matches prompt style to the backend.
 
 ## Pipeline
 
@@ -22,10 +23,11 @@ Generic image extensions dump raw chat prose into the image model. Three things 
 AI message rendered
    └─ scene text (top header kept + final ~70% kept)
       + active cast sheet
+      + world state (presence markers + Summaryception ledger) + preceding-turn tails
       + your extra rules
-   └─ Prompt builder LLM (Connection Manager profile, or main API)
-      → tags / natural prompt for one frozen frame
-   └─ Image backend → saved to chat files → attached to end of the message
+   └─ Prompt builder LLM (profile → generateRaw → quiet prompt, preset-free where possible)
+      → tags / natural prompt for one frozen frame (+ verbatim dialogue picks)
+   └─ Image backend → dialogue bubbles drawn on → saved to chat files → attached to the message
 ```
 
 Generation runs after the message renders. It never delays text generation. The paintbrush icon on the message shows an hourglass while working; multiple images per message become a swipeable gallery.
@@ -58,6 +60,18 @@ Check **Show last generation** to see the exact base prompt and per-character pa
 
 Set **Max panels** to 2–4 and the builder decides *per scene* whether the climax is one frozen frame or a sequence of distinct beats (a liver shot → the fold → the collar grab), keeping character tags identical across panels. Panels are generated back-to-back and stitched into a single comic strip (2–3 side by side, 4 in a grid). Default is 1 — behavior unchanged unless you raise it.
 
+## Dialogue bubbles (the comic-text upgrade)
+
+On by default. The builder picks up to two spoken lines per panel — **copied verbatim from the scene** — and SceneSnap draws them onto the image as manhwa-style floating bubbles (first top-left, second top-right, in speech order). Because SceneSnap renders the text itself on canvas, it is pixel-legible on **every** backend and can never come out model-garbled — no dependence on any image model's typography lottery.
+
+The verbatim guarantee is enforced, not requested: a line the builder returns is dropped unless it literally occurs in the scene text (curly quotes, case, and whitespace normalized). Invented dialogue can never reach an image. If a beat has no dialogue, the panel ships clean. Overlay failures also ship the clean panel — bubbles can never cost you the image. Pair with **Max panels 2–4** for the full stacked-strip look.
+
+## World-state grounding
+
+Every builder call now carries an authoritative `CURRENT WORLD STATE` block when the data exists: who is **on screen** (from the newest `[IST: ...]` markers within the last 6 messages — off-screen `[ACW: ...]` names are forbidden from the frame), each present character's current location/condition/activity (marker detail + Summaryception's ledger `state`), plus reference-only tails of the two preceding turns so pronouns, place, and outfits resolve correctly. Custom Summaryception marker patterns are respected. Every source degrades silently to nothing — grounding is fuel, never a dependency.
+
+The builder itself also got a cleaner transport: with no Connection Manager profile set, it now uses `generateRaw` (current connection, **no chat history, no active preset**) instead of a quiet prompt, so a heavy RP preset's laws and chain-of-thought no longer contaminate the image prompt. Quiet prompt remains as last-resort transport only.
+
 ## NovelAI notes
 
 - Model: `nai-diffusion-4-5-full`. With NAI, consider quality tags `very aesthetic, masterpiece, no text` instead of the Illustrious block, and keep the negative prompt — NAI uses it well.
@@ -81,6 +95,7 @@ Stella: girl, long crimson hair, red eyes, large breasts, hair ribbon, school un
 
 - **Prompt builder LLM**: pick a *fast* Connection Manager profile. The builder call is ~500 tokens out; a fast model keeps image latency low. Falls back to your main API if unset.
 - **Strip from scene**: regexes (one per line) removed from the message before prompt building. Defaults already cover `<details>` blocks, `{ALLCAPS}...{/ALLCAPS}` tracker blocks, and HTML comments — so stat trackers at the end of a message never displace the final prose beat.
+- **Dialogue bubbles**: on/off for the comic-text overlay. Lines not found word-for-word in the scene are dropped, never invented.
 - **Extra builder rules**: story-agnostic constraints, e.g. `Never depict more than 2 characters` or `Interior scenes: always include window lighting`.
 - **Always-append quality tags / Negative prompt**: standard Illustrious/NoobAI quality block is prefilled.
 - **/snap** — illustrate the last AI message. **/snap 42** — illustrate message #42. Paintbrush icon on any AI message does the same.
@@ -91,7 +106,21 @@ Stella: girl, long crimson hair, red eyes, large breasts, hair ribbon, school un
 - **"Prompt builder returned an empty response"** — the profile model may be reasoning-only or unreachable; pick another profile or leave on Main API.
 - **Runware "invalid model"** — re-copy the AIR from Civitai; version IDs change when models update.
 - **NovelAI 401** — set your NovelAI key under API Connections (NovelAI) first.
+- **A bubble is missing** — the builder's line wasn't found verbatim in the scene (dropped by design), or the beat had no dialogue. **Show last generation** lists every accepted bubble.
+- **Wrong characters keep appearing** — check the cast sheet and whether your preset prints `[IST: ...]` markers; with markers present, off-screen characters are hard-barred from prompts.
 - **Auto mode fired on an old message** — it only targets the newest AI message and suppresses itself for a moment after chat switches; if you see otherwise, report the console log.
+
+## Changelog
+
+### 0.8.0
+- **Dialogue bubbles**: verbatim scene dialogue drawn onto panels as manhwa-style bubbles by SceneSnap itself — legible on every backend, enforced verbatim (invented lines are dropped, never rendered), max 2 per panel, graceful degradation everywhere.
+- **World-state grounding**: builder prompts now carry authoritative attendance from `[IST:]`/`[ACW:]` presence markers (walk-back 6 messages, custom Summaryception patterns respected), per-character location/condition from Summaryception's ledger `state`, and preceding-turn tails for pronoun resolution.
+- **Preset-free builder fallback**: Main-API path now uses `generateRaw` (no chat, no preset) before falling back to a quiet prompt — RP preset laws/CoT no longer contaminate image prompts.
+- **Sheetless generation warns** once per chat instead of silently losing appearance locking.
+- Gate established: ESM parse check, `test.mjs` behavior harness (36 checks, negative-tested guards), ESLint config. `AGENTS.md` added.
+
+### 0.7.0
+- NovelAI multi-character mode, comic sequence mode, cast auto-build from story memory, Runware/NovelAI/Pollinations backends.
 
 ## License
 
