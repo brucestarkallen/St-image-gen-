@@ -27,7 +27,7 @@ const FUNCS = [
     'normalizeForMatch', 'sanitizeBubbles', 'sanitizeBuilderOutput', 'softSanitize',
     'parsePanels', 'parseCastSheet', 'mergeCastLines', 'effectiveForcedTags',
     'composePositive', 'scanPresenceIn', 'markerDetails', 'ledgerStateLines',
-    'stripScene', 'explainError', 'isStaleSession', 'stripLayoutMeta', 'appendAnchor', 'mineDressTags', 'normalizeCountTags', 'filterRankGarments', 'assembleIdentity', 'scrubState', 'getSize',
+    'stripScene', 'explainError', 'isStaleSession', 'stripLayoutMeta', 'appendAnchor', 'mineDressTags', 'normalizeCountTags', 'filterRankGarments', 'assembleIdentity', 'scrubState', 'seedForPanel', 'getSize',
 ];
 
 const prelude = `
@@ -284,6 +284,15 @@ function defaultPatterns() { return '<details>[\\s\\S]*?</details>\n\\{[A-Z_]+\\
         S.sanitizeBuilderOutput('1girl, snow, courtyard', 'tags') === '1girl, snow, courtyard');
 }
 
+// ---------------------------------------------------------------- subject-derived seeds
+{
+    check('seed: same who-set, same seed — recurring characters stay consistent',
+        S.seedForPanel(12345, ['Jovan Oda', 'Rukia Kuchiki']) === S.seedForPanel(12345, ['rukia kuchiki', 'JOVAN ODA']));
+    check('seed: different who-set decorrelates — palette priors cannot bleed across subjects',
+        S.seedForPanel(12345, ['Jovan Oda']) !== S.seedForPanel(12345, ['Rukia Kuchiki']));
+    check('seed: stays in NAI range', (() => { const v = S.seedForPanel(2147483000, ['A','B']); return Number.isInteger(v) && v >= 0 && v < 2147483647; })());
+}
+
 // ---------------------------------------------------------------- state scrub enforcement
 {
     const block = 'man, long black spiked hair, bells in hair, eyepatch, facial scar, towering muscular build, tattered captain haori';
@@ -373,15 +382,15 @@ function defaultPatterns() { return '<details>[\\s\\S]*?</details>\n\\{[A-Z_]+\\
     check('src: no direct cross-origin fetch to NovelAI remains',
         !src.includes("fetch('https://image.novelai.net"));
     check('src: strip panels generate landscape (flag threaded to every panel backend)',
-        src.includes('generateWithBackend(finals[i], negative, panels.length > 1, runSeed)')
+        src.includes('generateWithBackend(finals[i], negative, panels.length > 1, seedForPanel')
         && src.includes('generateRunware(positive, negative, landscape, seed)')
         && src.includes('generateNovelAI(positive, negative, landscape, seed)')
         && src.includes('generatePollinations(positive, negative, landscape, seed)')
         && src.includes('if (landscape && p.height > p.width)'));
     check('src: dialogue spreads one-per-panel by default', src.includes('Prefer ONE line per panel'));
-    check('src: one seed per strip — threaded through dispatch and all three backends',
-        src.includes('generateWithBackend(finals[i], negative, panels.length > 1, runSeed)')
-        && src.includes('generateRunware(positive, negative, landscape, seed)')
+    check('src: run seed feeds who-derived per-panel seeds through all three backends',
+        src.includes('const runSeed = Math.floor(Math.random() * 2 ** 31);')
+        && src.includes('seedForPanel(runSeed, (panels[i].who || []).map(w => w.name))')
         && src.includes('seed: Number.isInteger(seed) ? seed : -1,')
         && src.includes('seed: Number.isInteger(seed) ? seed : undefined,')
         && src.includes('Number.isInteger(seed) ? seed : Math.floor'));
@@ -403,6 +412,14 @@ function defaultPatterns() { return '<details>[\\s\\S]*?</details>\n\\{[A-Z_]+\\
         src.includes('.filter(w => w.name).slice(0, 2) : [],'));
     check('src: explicit scenes are tagged explicitly, anatomy locked to cast sheet',
         src.includes('EXPLICIT SCENES:') && src.includes('never euphemize') && src.includes('fullSystem += NSFW_RULE;'));
+    check('src: dialogue beats are two-shots and bubbles show the speaker\'s face',
+        src.includes('a spoken line addressed to a present character is a TWO-shot')
+        && src.includes("SHOW ITS SPEAKER'S FACE")
+        && src.includes('Defaulting everything to solo is a failed strip'));
+    check('src: panel seeds derive from who — wired into the strip loop',
+        src.includes('seedForPanel(runSeed, (panels[i].who || []).map(w => w.name))'));
+    check('src: crowd dress is named in setting by contract',
+        src.includes("that population's dress"));
     check('src: gold-run cinematography mandated — shot grammar, variety, acting density',
         src.includes('SHOT GRAMMAR') && src.includes('NEVER repeat the same framing+angle pair')
         && src.includes('ACTING DENSITY') && src.includes('A two-tag state is a failed panel'));

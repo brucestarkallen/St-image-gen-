@@ -114,6 +114,12 @@ Stella: girl, long crimson hair, red eyes, large breasts, hair ribbon, school un
 
 ## Changelog
 
+### 0.12.5
+- **Subject-derived panel seeds.** The locked strip seed kept recurring characters consistent but bled palette priors across *different* subjects — two white-haired solo panels primed the next panel's black-haired girl silver. Seeds now derive from who is in the frame: same people → same seed, different people → decorrelated. Negative-tested.
+- **Dialogue beats are two-shots**: a line spoken to a present character puts speaker AND addressee in `who` (or a shot/reverse pair); solo frames are for reactions and genuine solitude — defaulting to solo is a failed strip.
+- **Bubbles show the speaker's face**: dialogue may never ride a from-behind, neck-down, or faceless framing of its own speaker.
+- **Crowd dress is named in setting** — an unnamed crowd's dress is how background people modernize.
+
 ### 0.12.4 — the gold run, decoded and mandated
 - The user's best-ever strip was reverse-engineered: it was beautiful because frames were solo/duo (binding held — now law via the two-cap) and every panel was drenched in cinematic grammar. That grammar is now **contract**: every panel carries exactly one framing tag + one angle tag + lighting/atmosphere, consecutive panels never repeat the same framing+angle pair, and every character's state must be 4–8 acting tags (pose + expression + gaze + one physical emotive detail). Terse states are failed panels.
 - **One world, one cast.** The active cast is now a plain global setting; per-chat cast memory — the mechanism that silently pointed chats at degraded auto-built slots — is removed. Every chat and branch reads the same sheet, always.
