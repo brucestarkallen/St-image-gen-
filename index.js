@@ -12,7 +12,7 @@ import { getBase64Async, saveBase64AsFile } from '../../../utils.js';
 import { callGenericPopup, POPUP_TYPE } from '../../../popup.js';
 
 const MODULE = 'sceneSnap';
-const VERSION = '0.12.0';
+const VERSION = '0.12.1';
 
 const defaultSettings = Object.freeze({
     enabled: true,
@@ -352,7 +352,7 @@ function parsePanels(raw, style, maxPanels, opts = {}) {
                 const panels = arr
                     .map(p => ({
                         who: Array.isArray(p?.who) ? p.who.map(w => {
-                            if (w && typeof w === 'object') return { name: String(w.name ?? '').trim(), state: stripLayoutMeta(String(w.state ?? '')).slice(0, 200) };
+                            if (w && typeof w === 'object') return { name: String(w.name ?? '').trim(), state: stripLayoutMeta(String(w.state ?? '')).slice(0, 500) };
                             return { name: String(w ?? '').trim(), state: '' };
                         }).filter(w => w.name).slice(0, 4) : [],
                         prompt: normalizeCountTags(softSanitize(String(p?.prompt ?? p ?? ''), style)),
@@ -414,6 +414,30 @@ function filterRankGarments(tagList) {
 // sheet, insert its tag block verbatim, and derive the count tags from the blocks'
 // leading gender words. Substitution, omission, blending, and trait drift become
 // mechanically impossible for named characters. Placement tags are auto-appended at 3+.
+// Builders echo a character's appearance back into "state" and long states get cut
+// mid-word — the field run showed 'towering mus' and doubled identity per character.
+// Enforcement in code: drop every state token already in the owner's block, drop
+// mid-word fragments (a token that is a >=4-char prefix of a block token), and cap
+// the result tag-safely — never inside a tag.
+function scrubState(state, blockTags) {
+    const blockToks = String(blockTags || '').split(',').map(t => t.trim()).filter(Boolean);
+    const blockSet = new Set(blockToks.map(t => t.toLowerCase()));
+    const out = [];
+    let used = 0;
+    for (const raw of String(state || '').split(',')) {
+        const t = raw.trim();
+        if (!t) continue;
+        const low = t.toLowerCase();
+        if (blockSet.has(low)) continue;
+        if (low.length >= 4 && blockToks.some(b => b.toLowerCase() !== low && b.toLowerCase().startsWith(low))) continue;
+        if (low.length < 3) continue;
+        if (used + t.length + 2 > 160) break;
+        out.push(t);
+        used += t.length + 2;
+    }
+    return out.join(', ');
+}
+
 function assembleIdentity(who, sheetText) {
     const cast = parseCastSheet(sheetText);
     const byName = new Map(cast.map(c => [c.name.toLowerCase(), c]));
@@ -423,7 +447,7 @@ function assembleIdentity(who, sheetText) {
         const name = typeof entry === 'object' && entry ? String(entry.name ?? '') : String(entry ?? '');
         const state = typeof entry === 'object' && entry ? String(entry.state ?? '').trim() : '';
         const hit = byName.get(name.trim().toLowerCase());
-        if (hit) blocks.push(state ? `${hit.tags}, ${state}` : hit.tags);
+        if (hit) blocks.push(scrubState(state, hit.tags) ? `${hit.tags}, ${scrubState(state, hit.tags)}` : hit.tags);
         else missing.push(name.trim() || '(unnamed)');
     }
     const places = ['foreground left', 'center', 'foreground right', 'background'];

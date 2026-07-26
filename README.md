@@ -114,6 +114,9 @@ Stella: girl, long crimson hair, red eyes, large breasts, hair ribbon, school un
 
 ## Changelog
 
+### 0.12.1
+- **State purity is enforced in code.** Builders were echoing each character's full appearance back into `state` (doubling identity per character) and long states were cut mid-word ("towering mus"), poisoning prompts with fragments. The weld now scrubs every state: tokens already in the owner's block are deleted, mid-word fragments (prefixes of block tokens) are deleted, and all caps are tag-safe — a disobedient builder becomes harmless. Negative-tested.
+
 ### 0.12.0 — state binds to its owner
 - Identity binding worked; the last unbound layer was **state** — poses, wounds, expressions floated in a shared soup after the character blocks, so the model redistributed them (the dying man's laugh landed on his medic). Each `who` entry is now `{name, state}`: the extension welds each character's state onto their verbatim identity block — **one contiguous run per character** — and the panel prompt shrinks to what is genuinely shared: camera, lighting, atmosphere, environment, scene-wide effects.
 - Setting and dress are tag-capped in code (12/8) — attention no longer dilutes across scenery bloat.

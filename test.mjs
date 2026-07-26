@@ -27,7 +27,7 @@ const FUNCS = [
     'normalizeForMatch', 'sanitizeBubbles', 'sanitizeBuilderOutput', 'softSanitize',
     'parsePanels', 'parseCastSheet', 'mergeCastLines', 'effectiveForcedTags',
     'composePositive', 'scanPresenceIn', 'markerDetails', 'ledgerStateLines',
-    'stripScene', 'explainError', 'isStaleSession', 'stripLayoutMeta', 'appendAnchor', 'mineDressTags', 'normalizeCountTags', 'filterRankGarments', 'assembleIdentity', 'getSize',
+    'stripScene', 'explainError', 'isStaleSession', 'stripLayoutMeta', 'appendAnchor', 'mineDressTags', 'normalizeCountTags', 'filterRankGarments', 'assembleIdentity', 'scrubState', 'getSize',
 ];
 
 const prelude = `
@@ -277,6 +277,25 @@ function defaultPatterns() { return '<details>[\\s\\S]*?</details>\n\\{[A-Z_]+\\
         S.sanitizeBuilderOutput('1girl, snow, courtyard', 'tags') === '1girl, snow, courtyard');
 }
 
+// ---------------------------------------------------------------- state scrub enforcement
+{
+    const block = 'man, long black spiked hair, bells in hair, eyepatch, facial scar, towering muscular build, tattered captain haori';
+    // The exact field echo: real state + full identity duplicate + mid-word fragment.
+    const echoed = 'kneeling, bleeding, shredded forearms, coughing blood, delirious smile, tattered captain haori, long black spiked hair, bells in hair, eyepatch, facial scar, towering mus';
+    const clean = S.scrubState(echoed, block);
+    check('scrub: echoed identity tokens deleted, true state kept',
+        clean === 'kneeling, bleeding, shredded forearms, coughing blood, delirious smile');
+    check('scrub: mid-word fragments (prefix of a block token) deleted', !clean.includes('towering'));
+    check('scrub: cap is tag-safe — never cuts inside a tag',
+        S.scrubState(Array.from({length: 40}, (_, i) => `tag number ${i}`).join(', '), block).split(', ').every(x => /^tag number \d+$/.test(x)));
+    check('scrub: empty state passes through', S.scrubState('', block) === '');
+    check('scrub: welded via assembleIdentity — no doubled identity in the final run',
+        (() => {
+            const run = S.assembleIdentity([{ name: 'Z', state: echoed }], 'Z: ' + block).blocks[0];
+            return run.split(', ').filter(x => x === 'eyepatch').length === 1 && !run.split(', ').includes('towering mus');
+        })());
+}
+
 // ---------------------------------------------------------------- code-written identity
 {
     const sheet = 'Jovan Oda: man, medium white hair, pale blue eyes, black kosode, no insignia\nRukia Kuchiki: woman, short black hair, violet eyes, shinigami uniform\nKenpachi Zaraki: man, long black spiked hair, bells in hair, eyepatch, towering muscular build\nIsane Kotetsu: woman, short silver hair, grey eyes, tall, captain haori';
@@ -375,10 +394,12 @@ function defaultPatterns() { return '<details>[\\s\\S]*?</details>\n\\{[A-Z_]+\\
         && src.includes('oriented toward whoever they address'));
     check('src: explicit scenes are tagged explicitly, anatomy locked to cast sheet',
         src.includes('EXPLICIT SCENES:') && src.includes('never euphemize') && src.includes('fullSystem += NSFW_RULE;'));
+    check('src: state purity is enforced in code, not requested',
+        src.includes('function scrubState(') && src.includes('scrubState(state, hit.tags)'));
     check('src: state is bound to its owner by schema and weld',
         src.includes('"state":"<THIS character') && src.includes('welds their state onto it')
         && src.includes("carries it in their OWN \"state\"")
-        && src.includes('blocks.push(state ? `${hit.tags}, ${state}` : hit.tags)'));
+        && src.includes('scrubState(state, hit.tags) ? `${hit.tags}, ${scrubState(state, hit.tags)}`'));
     check('src: setting and dress are tag-capped in code',
         src.includes('capTags(obj?.setting, 12)') && src.includes('capTags(obj?.dress, 8)'));
     check('src: the cast author copies canon verbatim — no synonyms, adults are man/woman',
