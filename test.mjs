@@ -24,7 +24,7 @@ function extract(name) {
 }
 
 const FUNCS = [
-    'splitPrincipals', 'framesCrowd', 'enforceShotGrammar', 'hasGarment', 'firstGarmentTag',
+    'splitPrincipals', 'framesCrowd', 'enforceShotGrammar', 'hasGarment', 'firstGarmentTag', 'stripTransientFromSetting',
     'normalizeForMatch', 'sanitizeBubbles', 'sanitizeBuilderOutput', 'softSanitize',
     'parsePanels', 'parseCastSheet', 'mergeCastLines', 'effectiveForcedTags',
     'composePositive', 'scanPresenceIn', 'markerDetails', 'ledgerStateLines',
@@ -54,7 +54,7 @@ function extractConst(name) {
     if (!line) throw new Error(`extractConst: ${name} not found`);
     return line;
 }
-const CONSTS = ['escRe', 'BACKGROUND_STATE', 'CODE_OWNED_TAG', 'FRAMING_TAG', 'ANGLE_TAG', 'GARMENT_WORDS'];
+const CONSTS = ['escRe', 'BACKGROUND_STATE', 'CODE_OWNED_TAG', 'GARMENT_CONDITION', 'TRANSIENT_ACTIVITY', 'FRAMING_TAG', 'ANGLE_TAG', 'GARMENT_WORDS'];
 
 const sandboxPath = '/tmp/ss_sandbox_' + process.pid + '.mjs';
 writeFileSync(sandboxPath, prelude + '\n' + CONSTS.map(extractConst).join('\n') + '\n' + FUNCS.map(extract).join('\n\n')
@@ -448,6 +448,26 @@ function defaultPatterns() { return '<details>[\\s\\S]*?</details>\n\\{[A-Z_]+\\
         && S.firstGarmentTag('black kosode, no insignia, black shihakusho') === 'black kosode'
         && S.firstGarmentTag('pale winter sun, stone courtyard') === '');
 
+    // Field regression, snap_31 v0.15.0: 0.15.0 forbade garments in `state` in prose and
+    // shipped no enforcer. "shinigami uniform" reached the model over the welded
+    // shihakusho and rendered a modern military uniform.
+    check('scrub: a garment named in state is dropped — clothing has one source',
+        S.scrubState('shinigami uniform, salute held, wet-eyed', 'old man, clouded eye, spotted hands')
+            === 'salute held, wet-eyed');
+    check('scrub: clothing CONDITION is state, not wardrobe, and survives',
+        S.scrubState('torn black kosode, bleeding', 'man, white hair').includes('torn black kosode')
+        && S.scrubState('coat tails stirring in wind, running', 'man, tall').includes('coat tails stirring in wind'));
+
+    // Field regression: "dispersing crowd" was stamped unchanged onto all four panels of
+    // a scene whose courtyard is erupting.
+    check('setting: a transient activity is stripped, the population and its dress kept',
+        S.stripTransientFromSetting('courtyard, dispersing crowd of shinigami in black shihakusho, bare plum tree')
+            === 'courtyard, crowd of shinigami in black shihakusho, bare plum tree'
+        && S.stripTransientFromSetting('cheering crowd, marching soldiers') === 'crowd, soldiers');
+    check('setting: standing description untouched',
+        S.stripTransientFromSetting('stone courtyard, memorial stone, pale winter sun')
+            === 'stone courtyard, memorial stone, pale winter sun');
+
     check('scrub: real action tags that reuse one appearance word survive',
         S.scrubState('white hair blowing in wind, teeth clenched', 'man, white hair, tall').includes('blowing'));
 }
@@ -527,6 +547,15 @@ function defaultPatterns() { return '<details>[\\s\\S]*?</details>\n\\{[A-Z_]+\\
     const capped = S.parsePanels(JSON.stringify({ panels: [{ who: [{ name: 'A', state: long }], prompt: 'wide shot, dust cloud' }] }), 'tags', 4, {});
     check('parse: who-state is capped tag-safe — no trailing fragment can reach the weld',
         capped[0].who[0].state.split(', ').every(x => /^statetag\d+$/.test(x)));
+    // A crowd/establishing frame is legal: "who": [] declared explicitly is the scene's
+    // widest shot, not builder non-compliance. Omitting the field entirely still is.
+    const declared = S.parsePanels(JSON.stringify({ panels: [
+        { who: [], prompt: 'wide shot, roaring courtyard' },
+        { prompt: '1boy, close-up' },
+    ] }), 'tags', 4, {});
+    check('parse: an empty who is distinguished from an omitted one',
+        declared.length === 2 && declared[0].whoDeclared === true && declared[1].whoDeclared === false);
+
     const objless = S.parsePanels(JSON.stringify({ panels: [{ who: [{ name: 'A', state: 'x' }] }, { prompt: '1boy, smile' }] }), 'tags', 4, {});
     check('parse: a panel object without a prompt is dropped — never "[object Object]"',
         objless.length === 1 && objless[0].prompt.includes('1boy') && !JSON.stringify(objless).includes('object Object'));
@@ -589,13 +618,27 @@ function defaultPatterns() { return '<details>[\\s\\S]*?</details>\n\\{[A-Z_]+\\
     check('src: state is pose and feeling only — counts and garments are code-owned',
         src.includes('Never a count tag (1boy, 1girl, 2boys, solo) and never a garment')
         && src.includes('if (CODE_OWNED_TAG.test(low)) continue;'));
+    check('src: a crowd frame is legal — the retry targets omission, not absent principals',
+        src.includes('const whoOmitted = ps => ps.reduce((n, p) => n + (p.whoDeclared ? 0 : 1), 0);')
+        && src.includes('whoDeclared: Array.isArray(p?.who),')
+        && src.includes("(establishing frame — crowd is the subject)")
+        && !src.includes('whoCoverage'));
+    check('src: an establishing frame still gets its population count and shot grammar',
+        src.includes("p.prompt = enforceShotGrammar([crowdHere ? 'crowd' : '', p.prompt]"));
+    check('src: garments and transient activity are enforced, not merely mandated',
+        src.includes('if (hasGarment(low) && !GARMENT_CONDITION.test(low)) continue;')
+        && src.includes('stripTransientFromSetting(capTags(obj?.setting, 16))'));
+    check('src: laws — crowd frames, one beat per panel, no beat spent twice',
+        src.includes('declare "who": [] and let the environment and the crowd carry the frame')
+        && src.includes('ONE BEAT PER PANEL')
+        && src.includes('Do not spend two panels on one continuous action'));
     check('src: bubbles can only be spoken by someone drawn in the frame',
         src.includes('function sanitizeBubbles(list, sceneText, who)')
         && src.includes('if (!speakerPresent(speaker)) continue;')
         && src.includes('sanitizeBubbles(p?.bubbles, sceneText, who)'));
     check('src: counts are crowd-aware and background figures are demoted before the weld',
         src.includes("opts.crowd ? 'crowd' : ''")
-        && src.includes('const crowd = framesCrowd(anchorText) || framesCrowd(p.prompt);')
+        && src.includes('const crowdHere = framesCrowd(anchorText) || framesCrowd(p.prompt);')
         && src.includes('const { principals, background } = splitPrincipals(p.who);'));
     check('src: laws match enforcement — principals-only, shared interaction, standing setting',
         src.includes('WHO IS PRINCIPALS ONLY') && src.includes('BOTH principals must share ONE interaction')
@@ -662,13 +705,13 @@ function defaultPatterns() { return '<details>[\\s\\S]*?</details>\n\\{[A-Z_]+\\
         && src.includes('v${esc(lastDebug.engine'));
     check('src: who schema is enforced with one corrective retry and surfaced in the debug popup',
         src.includes('PREVIOUS OUTPUT REJECTED: every panel MUST include the "who" array')
-        && src.includes('whoCoverage(panels2) > whoCoverage(panels)')
-        && src.includes('(builder ignored the who schema)'));
+        && src.includes('whoOmitted(panels2) < whoOmitted(panels)')
+        && src.includes('(builder omitted the who field)'));
     check('src: contract v5.1 — who owns identity AND state; builder writes neither identity nor per-character detail into the shared prompt',
         src.includes('WHO writes identity AND owns state, and WHO is not you')
         && src.includes('one contiguous run per character')
         && src.includes('a climax panel whose victim is missing from "who" is a failed panel')
-        && src.includes('assembleIdentity(principals, activeSheet, { crowd, dress: firstGarmentTag(dress) })')
+        && src.includes('assembleIdentity(principals, activeSheet, { crowd: crowdHere, dress: firstGarmentTag(dress) })')
         && src.includes('Never blend two people into one')
         && src.includes('never render anyone as a child unless their cast tags say so'));
     check('src: scene population is setting-state with continuity',
@@ -703,7 +746,7 @@ function defaultPatterns() { return '<details>[\\s\\S]*?</details>\n\\{[A-Z_]+\\
         && src.includes('expectJson: structuredSingle') && src.includes("style === 'tags' && castEntryCount > 0"));
     check('src: who-retry fires only when the who schema was actually sent',
         src.includes('const schemaSent = maxPanels > 1 || structuredSingle;')
-        && src.includes('panels.length && schemaSent && whoCoverage(panels)'));
+        && src.includes('panels.length && schemaSent && whoOmitted(panels) && castEntryCount'));
     check('src: FRAME_LAWS is canonical — defined once, cited by exactly the two builder modes',
         src.includes('const FRAME_LAWS = `') && src.split('${FRAME_LAWS}').length - 1 === 2);
     check('src: debug WHO line is honest when the schema was not sent',

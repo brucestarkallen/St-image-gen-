@@ -12,7 +12,7 @@ import { getBase64Async, saveBase64AsFile } from '../../../utils.js';
 import { callGenericPopup, POPUP_TYPE } from '../../../popup.js';
 
 const MODULE = 'sceneSnap';
-const VERSION = '0.15.0';
+const VERSION = '0.16.0';
 
 const defaultSettings = Object.freeze({
     enabled: true,
@@ -133,6 +133,7 @@ const FRAME_LAWS = `PANEL DISCIPLINE (binding rules for every panel):
 - A panel that carries a dialogue bubble must SHOW ITS SPEAKER'S FACE: dialogue never rides a from-behind, neck-down, or faceless framing of its own speaker. Only a character in THIS panel's "who" may speak in this panel — a line belonging to anyone else moves to the panel that draws them, or is dropped. The extension enforces this. The extension inserts each character's appearance block VERBATIM from the cast sheet, welds their state onto it, and computes the counts — one contiguous run per character, so the image model cannot give one character's laugh or wound to another. The panel "prompt" therefore contains ONLY what is shared: camera, lighting, atmosphere, environment, and scene-wide effects. A per-character detail in the shared prompt, or any appearance trait anywhere, is a failed panel.
 - The character an effect happens TO carries it in their OWN "state": the exploding sword detonates in its holder's state, the wound bleeds in the wounded one's state — a climax panel whose victim is missing from "who" is a failed panel. Healing, striking, carrying, restraining: BOTH parties in "who", each with their own state; "hand on patient" with no patient listed is a failed panel.
 - Characters not in physical contact get explicit spatial-relation tags in the prompt (distance between them, one far in the background, facing from across the field).
+- A frame may legitimately have NO named principal: when the beat belongs to the place or to the crowd itself (the courtyard erupting, three hundred people roaring, an empty room after everyone leaves), declare "who": [] and let the environment and the crowd carry the frame. An empty "who" must still be present as a field — omitting it is non-compliance and gets the panel rejected. A scene whose crowd reacts is not told by four frames of individual faces: give the crowd its own frame.
 - WHO IS PRINCIPALS ONLY — the people this frame is ABOUT, drawn at readable size. A character who is far away, tiny, a silhouette, or seen from behind at a distance is NOT a principal and does NOT go in "who": name them in the prompt as an environment element ("a distant figure on the far side of the courtyard"). Listing a background figure in "who" spends a subject slot and a count tag on someone three pixels tall, and the model splits its attention — both people come out degraded. The extension demotes them.
 - BOTH principals must share ONE interaction: two people in a frame are looking at, speaking to, touching, or reacting to EACH OTHER. Two people doing unrelated things in different parts of the location are TWO panels, never one frame — a single prompt cannot bind separate actions to separate distant bodies, and the model fuses them into one person carrying both.
 - SHOT GRAMMAR (every panel's "prompt", mandatory): exactly ONE framing tag (close-up / upper body / cowboy shot / full body / wide shot) + exactly ONE angle tag (from below / from behind / from side / eye level / dutch angle) + lighting and atmosphere tags (dramatic lighting, sunlight, lens flare, backlighting, wind, dust motes, motion blur where there is motion).
@@ -399,6 +400,7 @@ function parsePanels(raw, style, maxPanels, opts = {}) {
                         return {
                             sentence: stripLayoutMeta(String(p?.sentence ?? '').replace(/["`\n]+/g, ' ')).replace(/\s{2,}/g, ' ').trim().slice(0, 220),
                             who,
+                            whoDeclared: Array.isArray(p?.who),
                             prompt: normalizeCountTags(softSanitize(typeof p === 'string' ? p : String(p?.prompt ?? ''), style)),
                             bubbles: wantBubbles ? sanitizeBubbles(p?.bubbles, sceneText, who) : [],
                         };
@@ -407,7 +409,7 @@ function parsePanels(raw, style, maxPanels, opts = {}) {
                     .slice(0, maxPanels);
                 if (panels.length) {
                     const capTags = (v, n) => stripLayoutMeta(String(v ?? '')).split(',').map(t => t.trim()).filter(Boolean).slice(0, n).join(', ');
-                    panels.setting = capTags(obj?.setting, 16);
+                    panels.setting = stripTransientFromSetting(capTags(obj?.setting, 16));
                     panels.dress = capTags(obj?.dress, 8);
                     return panels;
                 }
@@ -471,6 +473,14 @@ function filterRankGarments(tagList) {
 // it is not description — it is a competing instruction to the image model.
 const CODE_OWNED_TAG = /^(?:\d+\s*(?:boys?|girls?|others?|men|man|women|woman)|multiple\s+(?:boys|girls|others)|crowd|solo)$/i;
 
+// A garment tag in `state` is a SECOND outfit competing with the one the code welds —
+// the field run put "shinigami uniform" beside "black shihakusho" and the model blended
+// them into a modern military uniform. Clothing has exactly one source per character.
+// Exception: a garment token that also carries a condition word is describing what
+// happened TO the clothing (torn, open, removed, blowing), which is state, not wardrobe,
+// and the explicit-scene rules depend on it.
+const GARMENT_CONDITION = /\b(?:torn|ripped|shredded|tattered|slashed|cut|open|opened|undone|unbuttoned|unfastened|loose|falling|fallen|removed|discarded|missing|soaked|wet|bloodied|bloody|dirty|muddy|burned|burnt|singed|scorched|disheveled|askew|pulled|lifted|hiked|blowing|billowing|fluttering|stirring|flaring|swirling|damaged|half-?off)\b/i;
+
 function scrubState(state, blockTags) {
     const blockToks = String(blockTags || '').split(',').map(t => t.trim()).filter(Boolean);
     const blockSet = new Set(blockToks.map(t => t.toLowerCase()));
@@ -492,6 +502,7 @@ function scrubState(state, blockTags) {
         const low = t.toLowerCase();
         if (blockSet.has(low)) continue;
         if (CODE_OWNED_TAG.test(low)) continue;
+        if (hasGarment(low) && !GARMENT_CONDITION.test(low)) continue;
         if (low.length >= 4 && blockToks.some(b => b.toLowerCase() !== low && b.toLowerCase().startsWith(low))) continue;
         const words = low.split(/[\s-]+/).filter(Boolean);
         if (words.length >= 2 && words.every(w => blockWords.has(w))) continue;
@@ -666,6 +677,16 @@ function enforceShotGrammar(prompt) {
         out.push(t);
     }
     return out.join(', ');
+}
+
+// What a population is momentarily DOING cannot live in a description stamped unchanged
+// onto every panel. Strip the activity, keep the population and its dress: "dispersing
+// crowd of shinigami in black shihakusho" -> "crowd of shinigami in black shihakusho".
+const TRANSIENT_ACTIVITY = /\b(?:dispersing|scattering|leaving|departing|exiting|arriving|entering|gathering|filing|marching|fleeing|running|walking|streaming|cheering|chanting|roaring|shouting|applauding|clapping|celebrating|mourning|weeping|kneeling|bowing|saluting|erupting|surging|charging|rushing|dancing|drinking|eating|fighting)\s+/gi;
+
+function stripTransientFromSetting(setting) {
+    return String(setting || '').split(',').map(t => t.replace(TRANSIENT_ACTIVITY, '').trim())
+        .filter(Boolean).join(', ');
 }
 
 function appendAnchor(prompt, anchor) {
@@ -946,6 +967,8 @@ STRIP RULES (sequence mode only):
 - Panels are the SCENE's beats in strict chronological order, first key moment to last — and the climax action itself (the strike, the explosion, the reveal) MUST be one of the panels; a strip that skips its own climax is a failed strip.
 - CONTINUITY: consecutive panels are one continuous moment in one place — carry the previous panel's consequences forward (smoke from a blast lingers in the next panel; wounds, debris, and damage persist; light and weather never change mid-scene). No panel may contradict a state an earlier panel established.
 - A beat with three or more principals is SPLIT into consecutive panels (panels are unlimited; frames are not).
+- ONE BEAT PER PANEL. If the scene has more distinct beats than you have panels, DROP the weakest beats — never merge two beats into one frame. Two beats crammed into a frame ("X salutes by the stone while Y shouts across the courtyard") is a failed panel twice over: a single prompt cannot bind two separate actions to two separate bodies, and the model fuses them.
+- Do not spend two panels on one continuous action. A sword leaving its sheath and that same sword held overhead is ONE beat rendered twice — pick the stronger image and spend the freed panel on a beat nothing else covers.
 - In a strip, a two-person exchange may also play as a shot/reverse-shot pair across two panels. Defaulting everything to solo is a failed strip.
 - Consecutive panels NEVER repeat the same framing+angle pair — vary the camera like a filmed scene.${bubblesOn ? '\n\n' + BUBBLE_RULES : ''}\nOUTPUT (replaces the single-line requirement above): strict JSON only — no reasoning, no commentary, no markdown: {"setting":"<location/environment/population tags for this scene>","dress":"<what people of this world wear, as tags>","panels":[{"who":[{"name":"Exact Cast Name","state":"<THIS character's pose, expression, wounds, and action tags>"},{"name":"...","state":"..."}],"prompt":"<camera, lighting, atmosphere, shared effects, environment ONLY>","sentence":"<ONE plain-English sentence describing only how the characters are arranged toward each other and the space — spatial relations and interaction, no appearance words>"${bubbleSchema}}]}`;
     } else if (structuredSingle) {
@@ -968,14 +991,14 @@ ${FRAME_LAWS}${bubblesOn ? '\n\n' + BUBBLE_RULES : ''}\nOUTPUT (replaces the sin
     // Enforcement, not hope: a builder that ignores the who schema gets exactly one
     // corrective re-call. Whichever output covers more panels with who wins; the image
     // is never blocked on compliance.
-    const whoCoverage = ps => ps.reduce((n, p) => n + (p.who && p.who.length ? 1 : 0), 0);
     const schemaSent = maxPanels > 1 || structuredSingle;
-    if (panels.length && schemaSent && whoCoverage(panels) < panels.length && castEntryCount) {
-        console.warn('[SceneSnap] builder ignored the who schema on', panels.length - whoCoverage(panels), 'panel(s) — issuing one corrective retry');
+    const whoOmitted = ps => ps.reduce((n, p) => n + (p.whoDeclared ? 0 : 1), 0);
+    if (panels.length && schemaSent && whoOmitted(panels) && castEntryCount) {
+        console.warn('[SceneSnap] builder omitted the who field on', whoOmitted(panels), 'panel(s) — issuing one corrective retry');
         try {
             const raw2 = await callLLM(fullSystem + `\n\nPREVIOUS OUTPUT REJECTED: every panel MUST include the "who" array of EXACT cast-sheet names, and the "prompt" must contain ZERO appearance traits of named characters. Re-output the complete corrected JSON now.`, user, maxTokens);
             const panels2 = parsePanels(raw2, style, maxPanels, { bubbles: bubblesOn, sceneText: scene, expectJson: structuredSingle });
-            if (panels2.length && whoCoverage(panels2) > whoCoverage(panels)) { panels = panels2; raw = raw2; }
+            if (panels2.length && whoOmitted(panels2) < whoOmitted(panels)) { panels = panels2; raw = raw2; }
         } catch (e) { console.warn('[SceneSnap] corrective retry failed, keeping first output:', e); }
     }
     // World anchor: builder-derived, cast-mined as backstop. Stamped onto every panel by
@@ -1001,19 +1024,25 @@ ${FRAME_LAWS}${bubblesOn ? '\n\n' + BUBBLE_RULES : ''}\nOUTPUT (replaces the sin
     }
     const anchorText = [panels.setting || '', dress].filter(Boolean).join(', ');
     for (const p of panels) {
-        if (!p.who || !p.who.length) continue;
+        const crowdHere = framesCrowd(anchorText) || framesCrowd(p.prompt);
+        p.crowd = crowdHere;
+        p.sentence = replaceNamesInSentence(p.sentence, activeSheet);
+        if (!p.who || !p.who.length) {
+            // An establishing frame: the crowd or the place IS the subject. It gets the
+            // population count and the shot grammar, and no identity weld to skip.
+            p.prompt = enforceShotGrammar([crowdHere ? 'crowd' : '', p.prompt].filter(Boolean).join(', '));
+            p.welded = false;
+            continue;
+        }
         const { principals, background } = splitPrincipals(p.who);
         if (background.length) console.warn('[SceneSnap] background figure(s) demoted out of who:', background.map(w => w.name));
-        const crowd = framesCrowd(anchorText) || framesCrowd(p.prompt);
-        const id = assembleIdentity(principals, activeSheet, { crowd, dress: firstGarmentTag(dress) });
+        const id = assembleIdentity(principals, activeSheet, { crowd: crowdHere, dress: firstGarmentTag(dress) });
         if (id.missing.length) console.warn('[SceneSnap] panel "who" names still not in cast sheet:', id.missing);
         const bgTag = background.length ? 'distant figure in the background' : '';
         p.prompt = enforceShotGrammar([id.counts, ...id.blocks, bgTag, p.prompt].filter(Boolean).join(', '));
         p.who = principals;
-        p.crowd = crowd;
         // Identity welded by code — the seed no longer has to protect subject appearance.
         p.welded = id.blocks.length > 0;
-        p.sentence = replaceNamesInSentence(p.sentence, activeSheet);
     }
     return { panels, style, raw: String(raw), setting: panels.setting || '', dress, schemaSent };
 }
@@ -1350,7 +1379,7 @@ async function illustrateMessage(mesId, { force = false } = {}) {
                     `CAST — "${getActiveCastName()}": ${castEntries.length} entr${castEntries.length === 1 ? 'y' : 'ies'}${castEntries[0] ? ` (first: ${castEntries[0].name}: ${castEntries[0].tags.slice(0, 60)})` : ''}`,
                 );
             }
-            panels.forEach((p, i) => debugPrompts.push(`PANEL ${i + 1} WHO — ${p.who && p.who.length ? p.who.map(w => w.state ? `${w.name} [${w.state}]` : w.name).join(' | ') : (schemaSent ? '(builder ignored the who schema)' : '(single frame — builder-written identity)')}`));
+            panels.forEach((p, i) => debugPrompts.push(`PANEL ${i + 1} WHO — ${p.who && p.who.length ? p.who.map(w => w.state ? `${w.name} [${w.state}]` : w.name).join(' | ') : (p.whoDeclared ? '(establishing frame — crowd is the subject)' : schemaSent ? '(builder omitted the who field)' : '(single frame — builder-written identity)')}`));
             panels.forEach((p, i) => p.bubbles.forEach(b => debugPrompts.push(`PANEL ${i + 1} BUBBLE — ${b.speaker || '?'}: "${b.text}"`)));
             console.log(`[SceneSnap] ${finals.length} panel(s) (${style}):`, finals);
             // One seed for the whole strip: same character rendering in every panel.
