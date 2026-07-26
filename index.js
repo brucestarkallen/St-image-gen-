@@ -12,7 +12,7 @@ import { getBase64Async, saveBase64AsFile } from '../../../utils.js';
 import { callGenericPopup, POPUP_TYPE } from '../../../popup.js';
 
 const MODULE = 'sceneSnap';
-const VERSION = '0.23.0';
+const VERSION = '0.24.0';
 
 const defaultSettings = Object.freeze({
     enabled: true,
@@ -60,6 +60,17 @@ const BACKEND_QUALITY = {
 const BACKEND_NEGATIVE = {
     novelai: 'blurry, lowres, error, worst quality, bad quality, jpeg artifacts, very displeasing, chromatic aberration, multiple views, logo, watermark, film grain, scan artifacts',
 };
+// NAI V4.5 emphasis transport (docs.novelai.net/en/image/strengthening-weakening + ST
+// route source): ST's /api/novelai/generate-image hardcodes qualityToggle: false and
+// use_order: true. The NAI website default is qualityToggle ON, which PREPENDS this
+// exact block — position is strength under use_order, and a quality block appended
+// after the trailing composition sentence is the weakest position on the route. The
+// emphasis syntax itself survives the route untouched: it travels inside
+// v4_prompt.caption.base_caption, which NAI parses server-side. The tail carries
+// V4.5 negative emphasis — the docs' own rescue for flat, washed output
+// ("-2.5::flat color :: can fancy it right up"); 1.5 is the moderate dose.
+const BACKEND_QUALITY_FRONT = { novelai: '{very aesthetic, best quality, amazing quality}' };
+const BACKEND_QUALITY_TAIL = { novelai: 'no text, detailed background, -1.5::flat color ::' };
 
 let lastDebug = null;
 
@@ -975,6 +986,13 @@ function effectiveNegative() {
 
 function composePositive(built, style) {
     built = foldTagDiacritics(built);
+    const cur = String(settings.forcedTags || '').trim();
+    // Untouched default + a backend with an emphasis transport: quality goes FIRST
+    // (the website's own behavior) and the V4.5 negative-emphasis rescue rides the
+    // tail. A user-edited forcedTags field keeps the classic append-everywhere path.
+    if (cur === defaultSettings.forcedTags.trim() && style === 'tags' && BACKEND_QUALITY_FRONT[settings.backend]) {
+        return `${BACKEND_QUALITY_FRONT[settings.backend]}, ${built}, ${BACKEND_QUALITY_TAIL[settings.backend]}`;
+    }
     const forced = effectiveForcedTags();
     if (!forced) return built;
     if (style === 'natural') return `${built} ${forced.split(',').map(s => s.trim()).filter(Boolean).join(', ')}.`.trim();

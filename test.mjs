@@ -56,7 +56,7 @@ function extractConst(name) {
     if (!line) throw new Error(`extractConst: ${name} not found`);
     return line;
 }
-const CONSTS = ['escRe', 'BACKGROUND_STATE', 'CODE_OWNED_TAG', 'GARMENT_CONDITION', 'TRANSIENT_ACTIVITY', 'FRAMING_TAG', 'ANGLE_TAG', 'SIZE_WORD', 'SIZE_NOUN', 'GARMENT_WORDS', 'RANK_WORD', 'DECORATION_WORD', 'BEAT_STOPWORD'];
+const CONSTS = ['escRe', 'BACKGROUND_STATE', 'CODE_OWNED_TAG', 'GARMENT_CONDITION', 'TRANSIENT_ACTIVITY', 'FRAMING_TAG', 'ANGLE_TAG', 'SIZE_WORD', 'SIZE_NOUN', 'GARMENT_WORDS', 'RANK_WORD', 'DECORATION_WORD', 'BEAT_STOPWORD', 'BACKEND_QUALITY_FRONT', 'BACKEND_QUALITY_TAIL'];
 
 const sandboxPath = '/tmp/ss_sandbox_' + process.pid + '.mjs';
 writeFileSync(sandboxPath, prelude + '\n' + CONSTS.map(extractConst).join('\n') + '\n' + FUNCS.map(extract).join('\n\n')
@@ -251,6 +251,23 @@ function defaultPatterns() { return '<details>[\\s\\S]*?</details>\n\\{[A-Z_]+\\
     S._setSettings({ forcedTags: 'masterpiece, best quality', backend: 'runware' });
     check('lock: composePositive dedupes forced tags',
         S.composePositive('1girl, masterpiece, alley', 'tags') === '1girl, masterpiece, alley, best quality');
+
+    // NAI emphasis transport (0.24.0): quality PREPENDED like the website's own
+    // qualityToggle, V4.5 negative emphasis on the tail — default field, tags style.
+    {
+        S._setSettings({ backend: 'novelai', forcedTags: 'masterpiece, best quality, absurdres, detailed background' });
+        const out = S.composePositive('1boy, shouting, courtyard', 'tags');
+        check('nai: quality block prepended with emphasis braces',
+            out.startsWith('{very aesthetic, best quality, amazing quality}, 1boy, shouting, courtyard'));
+        check('nai: tail carries no-text + the docs-backed flat-color rescue',
+            /no text, detailed background, -1\.5::flat color ::$/.test(out));
+        check('nai: natural style keeps the classic append path',
+            !S.composePositive('An anime illustration of a courtyard', 'natural').startsWith('{'));
+        S._setSettings({ forcedTags: 'my custom tags' });
+        check('nai: user-edited forcedTags bypass the emphasis transport',
+            S.composePositive('1boy, shouting', 'tags') === '1boy, shouting, my custom tags');
+        S._setSettings({ forcedTags: 'masterpiece, best quality, absurdres, detailed background', backend: 'runware' });
+    }
 
     check('lock: sanitizeBuilderOutput strips fences and think blocks',
         S.sanitizeBuilderOutput('<think>x</think>```\n1girl, red eyes, alley, night\n```', 'tags') === '1girl, red eyes, alley, night');

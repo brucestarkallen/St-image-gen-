@@ -114,6 +114,13 @@ Stella: girl, long crimson hair, red eyes, large breasts, hair ribbon, school un
 
 ## Changelog
 
+### 0.24.0 — the NAI emphasis transport (docs-backed)
+- **Quality tags now go FIRST on NovelAI, in emphasis braces** — `{very aesthetic, best quality, amazing quality}`. ST's `/api/novelai/generate-image` hardcodes `qualityToggle: false` and `use_order: true`; the NAI website default is qualityToggle ON, which *prepends* exactly this block. Under `use_order`, position is strength, and the extension's quality block sat dead-last, after the composition sentence — the weakest position on the route. (Source: ST route code + docs.novelai.net/en/image/strengthening-weakening.)
+- **The tail carries V4.5 negative emphasis: `-1.5::flat color ::`.** The official strengthening/weakening doc's own rescue for flat, lifeless output ("-2.5::flat color :: can fancy it right up"), at a moderate dose. Emphasis syntax travels untouched inside `v4_prompt.caption.base_caption` — NAI parses it server-side.
+- Scope: fires only when the quality-tags field is at its default, backend is NovelAI, and style is tags. A user-edited field keeps the classic append path; Runware/Pollinations unchanged.
+- Gate: 239 → 243 checks; the transport negative-tested against a disabled scratch copy (exit 1).
+- Confirmed impossible via ST's route (so, not attempted): V4.5 `characterPrompts`/char_captions — ST hardcodes `characterPrompts: []`. Multi-character binding stays with the code weld.
+
 ### 0.23.0 — role-uniforms die at the weld
 - **Fixed: the modern-military blend coming from the CAST block itself.** `scrubState` has dropped `uniform` garments from builder state since 0.12.x, but the auto-built cast sheet now carried `shinigami uniform` — and the weld had no such guard. The field run rendered black gakuran with gold buttons over a `black shihakusho` world, the explicit positive overriding the anti-modern negative. New `neutralizeRoleUniforms()`: when the anti-modern gate fires for the world, `uniform`-bearing tokens are removed from welded cast blocks in code, and the world's own first garment takes their place via the existing undressed-principal weld. Modern worlds are untouched.
 - **Fixed: `lieutenant armband` surviving the rank-insignia strip.** `armband` joins `DECORATION_WORD` — a rank+decoration token (`lieutenant armband`) is dropped, a plain visible garment (`white armband on left arm`) is kept.
