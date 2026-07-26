@@ -30,7 +30,7 @@ const FUNCS = [
     'parsePanels', 'parseCastSheet', 'mergeCastLines', 'effectiveForcedTags',
     'composePositive', 'scanPresenceIn', 'markerDetails', 'ledgerStateLines',
     'stripScene', 'explainError', 'isStaleSession', 'stripLayoutMeta', 'appendAnchor', 'mineDressTags', 'normalizeCountTags', 'filterRankGarments', 'assembleIdentity', 'scrubState', 'seedForPanel', 'replaceNamesInSentence', 'capTagSafe', 'antiModernNegative', 'isPlaceholderTags', 'stripPlaceholderLines', 'getSize',
-    'backgroundFigureTag', 'dedupeAgainstAnchor', 'neutralizeRoleUniforms', 'unifyStripLighting',
+    'backgroundFigureTag', 'dedupeAgainstAnchor', 'neutralizeRoleUniforms', 'unifyStripLighting', 'applyUndress', 'hoistCrowdTokens',
 ];
 
 const prelude = `
@@ -56,7 +56,7 @@ function extractConst(name) {
     if (!line) throw new Error(`extractConst: ${name} not found`);
     return line;
 }
-const CONSTS = ['escRe', 'BACKGROUND_STATE', 'CODE_OWNED_TAG', 'GARMENT_CONDITION', 'TRANSIENT_ACTIVITY', 'FRAMING_TAG', 'ANGLE_TAG', 'SIZE_WORD', 'SIZE_NOUN', 'GARMENT_WORDS', 'RANK_WORD', 'DECORATION_WORD', 'BEAT_STOPWORD', 'BACKEND_QUALITY_FRONT', 'BACKEND_QUALITY_TAIL', 'LIGHT_TOKEN'];
+const CONSTS = ['escRe', 'BACKGROUND_STATE', 'CODE_OWNED_TAG', 'GARMENT_CONDITION', 'TRANSIENT_ACTIVITY', 'FRAMING_TAG', 'ANGLE_TAG', 'SIZE_WORD', 'SIZE_NOUN', 'GARMENT_WORDS', 'RANK_WORD', 'DECORATION_WORD', 'BEAT_STOPWORD', 'BACKEND_QUALITY_FRONT', 'BACKEND_QUALITY_TAIL', 'LIGHT_TOKEN', 'EXPLICIT_STATE', 'CROWD_ANCHOR_TOKEN'];
 
 const sandboxPath = '/tmp/ss_sandbox_' + process.pid + '.mjs';
 writeFileSync(sandboxPath, prelude + '\n' + CONSTS.map(extractConst).join('\n') + '\n' + FUNCS.map(extract).join('\n\n')
@@ -837,6 +837,52 @@ function defaultPatterns() { return '<details>[\\s\\S]*?</details>\n\\{[A-Z_]+\\
         S.unifyStripLighting('white sundress, smiling', anchor) === 'white sundress, smiling');
 }
 
+// ---------------------------------------------------------------- NSFW weld + crowd hoist (0.26.0)
+{
+    // The weld dressed everybody; a state of undress must undress the weld.
+    check('undress: nude strips every welded garment, keeps body traits',
+        S.applyUndress('woman, long red hair, violet eyes, black dress, gloves', 'completely nude, nipples, breasts')
+            === 'woman, long red hair, violet eyes');
+    check('undress: condition token strips only the named garment',
+        S.applyUndress('man, white hair, black kosode, black hakama', 'kosode removed, chest bare')
+            === 'man, white hair, black hakama');
+    check('undress: plain state untouched',
+        S.applyUndress('man, black kosode', 'standing tall, shouting') === 'man, black kosode');
+    check('undress: empty tolerated', S.applyUndress('', 'nude') === '');
+    // Anatomy tags pass through the state scrub untouched.
+    check('undress: explicit anatomy survives scrubState',
+        /nipples/.test(S.scrubState('nipples, breasts, pussy, blush', 'woman, long hair, black dress')));
+    // Explicit frames never demote — a from-behind partner is the position.
+    const ex = S.splitPrincipals([
+        { name: 'A', state: 'nude, breasts, on all fours' },
+        { name: 'B', state: 'nude, penis, seen from behind, doggystyle' },
+    ]);
+    check('undress: explicit frame keeps both principals (the 0.25.0 NSFW regression)',
+        ex.principals.length === 2 && ex.background.length === 0);
+    // And the weld end-to-end: no garment survives a nude state.
+    const nid = S.assembleIdentity([{ name: 'Mira', state: 'completely nude, nipples, breasts, kneeling' }],
+        'Mira: girl, long silver hair, blue eyes, school uniform', { dress: 'blazer', worldDress: 'blazer' });
+    check('undress: welded block carries anatomy and NO garments',
+        !/uniform|blazer|dress/.test(nid.blocks[0]) && /nipples/.test(nid.blocks[0]));
+
+    // Crowd hoist: anchor's crowd words move forward only when the frame has a crowd.
+    const anch = 'barracks courtyard, pale sun, packed standing crowd of shinigami spectators, stone fountain';
+    check('hoist: crowd words hoisted when the frame has a crowd',
+        S.hoistCrowdTokens(anch, true) === 'packed standing crowd of shinigami spectators');
+    check('hoist: silent when the frame has no crowd', S.hoistCrowdTokens(anch, false) === '');
+    check('hoist: non-crowd anchor tokens never hoisted', !/courtyard|fountain/.test(S.hoistCrowdTokens(anch, true)));
+
+    // Welded garment goes BEFORE the state, braced in a traditional world.
+    const gid = S.assembleIdentity([{ name: 'Rukia', state: 'hands folded, tears forming' }],
+        'Rukia: woman, short black hair, violet eyes, petite', { dress: 'black shihakusho', worldDress: 'black shihakusho' });
+    const gb = gid.blocks[0];
+    check('garment: welded dress precedes state and is emphasis-braced',
+        gb.indexOf('{black shihakusho}') !== -1 && gb.indexOf('{black shihakusho}') < gb.indexOf('hands folded'));
+    // appendAnchor sees through the braces — no tail duplicate.
+    check('garment: anchor dedupe sees through emphasis braces',
+        S.appendAnchor('1girl, {black shihakusho}, wind', 'black shihakusho, courtyard') === '1girl, {black shihakusho}, wind, courtyard');
+}
+
 // ---------------------------------------------------------------- source-level invariants
 {
     check('src: single-panel bubble mode requests strict JSON', src.includes('exactly one panel'));
@@ -874,9 +920,12 @@ function defaultPatterns() { return '<details>[\\s\\S]*?</details>\n\\{[A-Z_]+\\
         src.includes('.filter(w => w.name).slice(0, 2) : [];')
         && src.includes('for (const entry of (who || []).slice(0, 2))'));
     check('src: the crowd lives in the setting, not in the tag run (0.21.0 revert)',
-        !src.includes('`crowd in ${crowdDress}`') && !src.includes('crowdTag')
+        !src.includes('`crowd in ${crowdDress}`')
         && src.includes("const anchorFor = () => [setting, dress].filter(Boolean).join(', ');")
         && src.includes("that population's dress"));
+    check('src: crowd hoist repositions the SETTING\'s own words only (0.26.0)',
+        src.includes('const crowdTag = hoistCrowdTokens(anchorText, p.crowd);')
+        && src.includes('CROWD_ANCHOR_TOKEN.test(t)'));
     check('src: an establishing frame gets a real headcount, not a mood tag',
         src.includes("crowdHere ? '6+boys, 6+girls, crowd' : ''"));
     check('src: stacked size cues cannot shrink an adult into a child',
@@ -938,7 +987,7 @@ function defaultPatterns() { return '<details>[\\s\\S]*?</details>\n\\{[A-Z_]+\\
         && src.includes('nazi, swastika, iron cross'));
     check('src: the count run follows block order',
         src.includes('const counts = seen.map(k => label(k, nOf(k))).join(\', \');')
-        && src.includes('[id.counts, ...id.blocks, bgTag, unifyStripLighting(dedupeAgainstAnchor(p.prompt, anchorText), anchorText)]'));
+        && src.includes('[id.counts, ...id.blocks, bgTag, crowdTag, unifyStripLighting(dedupeAgainstAnchor(p.prompt, anchorText), anchorText)]'));
     check('src: anchor owns the environment — dedupe wired into BOTH panel paths',
         src.includes("crowdHere ? '6+boys, 6+girls, crowd' : '', unifyStripLighting(dedupeAgainstAnchor(p.prompt, anchorText), anchorText)")
         && src.includes('const bgTag = background.length ? backgroundFigureTag(background, activeSheet) : \'\';'));
@@ -1005,7 +1054,8 @@ function defaultPatterns() { return '<details>[\\s\\S]*?</details>\n\\{[A-Z_]+\\
         src.includes('"state":"<THIS character') && src.includes('welds their state onto it')
         && src.includes("carries it in their OWN \"state\"")
         && src.includes('const scrubbed = stripRankInsignia(scrubState(state, tags));')
-        && src.includes('blocks.push(scrubbed ? `${tags}, ${scrubbed}${clothing}` : `${tags}${clothing}`);'));
+        && src.includes('const dressed = applyUndress(tags, scrubbed);')
+        && src.includes('blocks.push([dressed, clothing, scrubbed].filter(Boolean).join(\', \'));'));
     check('src: setting and dress are tag-capped in code',
         src.includes('capTags(obj?.setting, 16)') && src.includes('capTags(obj?.dress, 8)'));
     check('src: the cast author copies canon verbatim — no synonyms, adults are man/woman',

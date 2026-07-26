@@ -12,7 +12,7 @@ import { getBase64Async, saveBase64AsFile } from '../../../utils.js';
 import { callGenericPopup, POPUP_TYPE } from '../../../popup.js';
 
 const MODULE = 'sceneSnap';
-const VERSION = '0.25.0';
+const VERSION = '0.26.0';
 
 const defaultSettings = Object.freeze({
     enabled: true,
@@ -645,8 +645,15 @@ const BACKGROUND_STATE = /\b(?:in the (?:far )?(?:background|distance)|at a dist
 
 // Principals get identity blocks and counts; background figures get one shared tag.
 // Never returns zero principals: a frame with no subject is not a frame.
+// Explicit frames: never demote. A partner "seen from behind" IS the position, not
+// scenery — the 0.25.0 demotion broke NSFW positioning by turning partners into
+// 'distant figure' (field regression). One anatomy/position tag anywhere in the
+// frame's states marks it explicit.
+const EXPLICIT_STATE = /\b(?:nude|naked|nipples?|areolae?|breasts?|penis|erection|testicles?|pussy|vulva|vagina|anus|anal|sex|orgasm|clitoris|labia|pubic|cum|semen|creampie|fellatio|paizuri|cunnilingus|doggystyle|cowgirl|missionary)\b/i;
+
 function splitPrincipals(who) {
     const list = (who || []).filter(w => w && String(w.name || '').trim());
+    if (list.some(w => EXPLICIT_STATE.test(String(w?.state || '')))) return { principals: list, background: [] };
     const fore = list.filter(w => !BACKGROUND_STATE.test(String(w.state || '')));
     const back = list.filter(w => BACKGROUND_STATE.test(String(w.state || '')));
     if (!fore.length && back.length) return { principals: [back[0]], background: back.slice(1) };
@@ -706,6 +713,29 @@ function dedupeAgainstAnchor(prompt, anchor) {
     return out.join(', ');
 }
 
+// A welded cast block dresses every character. In an explicit frame the state says
+// what came OFF, and a welded garment fights the anatomy — the model draws clothes
+// over it (NSFW field regression: a welded 'black dress' beside 'nipples' rendered
+// the dress ON). 'nude'/'naked' in the state strips every garment token from the
+// block; a condition token ('dress removed', 'shirt open') strips just that garment.
+function applyUndress(blockTags, state) {
+    const blockToks = String(blockTags || '').split(',').map(t => t.trim()).filter(Boolean);
+    const st = String(state || '');
+    if (!st.trim()) return blockToks.join(', ');
+    if (/\b(?:completely |fully |totally )?(?:nude|naked)\b/i.test(st)) {
+        return blockToks.filter(t => !hasGarment(t)).join(', ');
+    }
+    const off = new Set();
+    for (const tok of st.toLowerCase().split(',')) {
+        if (!GARMENT_CONDITION.test(tok)) continue;
+        for (const w of tok.split(/[\s-]+/)) {
+            if (GARMENT_WORDS.some(g => w === g || w === g + 's')) off.add(w);
+        }
+    }
+    if (!off.size) return blockToks.join(', ');
+    return blockToks.filter(t => ![...off].some(w => t.toLowerCase().includes(w))).join(', ');
+}
+
 function assembleIdentity(who, sheetText, opts = {}) {
     const cast = parseCastSheet(sheetText);
     const byName = new Map(cast.map(c => [c.name.toLowerCase(), c]));
@@ -718,11 +748,23 @@ function assembleIdentity(who, sheetText, opts = {}) {
         if (hit && !isPlaceholderTags(hit.tags)) {
             const tags = neutralizeRoleUniforms(stripRankInsignia(stripNameTags(hit.tags, hit.name)), opts.worldDress || opts.dress);
             const scrubbed = stripRankInsignia(scrubState(state, tags));
+            // A state of undress UNDRESSES the weld, or the welded garment wins.
+            const dressed = applyUndress(tags, scrubbed);
+            // A character the state undressed never gets re-dressed by the world
+            // (the gate caught the weld putting a blazer on a 'completely nude').
+            const undressing = dressed !== tags
+                || /\b(?:completely |fully |totally )?(?:nude|naked)\b/i.test(scrubbed);
             // Clothing is identity too: if neither the sheet nor the state dresses this
             // character, the world's base outfit is welded in rather than left to priors.
+            // It goes BEFORE the state — the tail of a block is the weakest position,
+            // and a t-shirt prior beat a trailing 'black shihakusho' (field). In a
+            // world the anti-modern gate fires on, the garment is emphasis-braced.
             const worldDress = String(opts.dress || '').trim();
-            const clothing = (!hasGarment(tags) && !hasGarment(scrubbed) && worldDress) ? `, ${worldDress}` : '';
-            blocks.push(scrubbed ? `${tags}, ${scrubbed}${clothing}` : `${tags}${clothing}`);
+            const needsDress = !undressing && !hasGarment(dressed) && !hasGarment(scrubbed) && worldDress;
+            const clothing = needsDress
+                ? (antiModernNegative(opts.worldDress || worldDress) ? `{${worldDress}}` : worldDress)
+                : '';
+            blocks.push([dressed, clothing, scrubbed].filter(Boolean).join(', '));
         }
         else missing.push(name.trim() || '(unnamed)');
     }
@@ -829,6 +871,19 @@ function seedForPanel(runSeed, whoNames, identityWelded) {
 // panel's shared prompt — the same words the image model will read.
 function framesCrowd(text) {
     return /\b(?:crowds?|crowded|audience|spectators?|onlookers?|bystanders?|throngs?|thronged|mob|multitude|packed|rows of|ranks of|lined with|standing officers|three hundred)\b/i.test(String(text || ''));
+}
+
+// Crowd presence is positional (use_order: true): a crowd named only in the anchor
+// tail is the ~50th token and the model treats it as weather — the field run shipped
+// three principals against empty backgrounds while the crowd sat in the tail. When
+// the frame HAS a crowd, the anchor's own crowd words are hoisted to directly after
+// the identity blocks. Same words, front position; appendAnchor dedupes the tail.
+const CROWD_ANCHOR_TOKEN = /\b(?:crowds?|spectators?|audience|onlookers?|bystanders?|throngs?|mob|multitude|packed|ranks)\b/i;
+
+function hoistCrowdTokens(anchor, crowdHere) {
+    if (!crowdHere) return '';
+    return String(anchor || '').split(',').map(t => t.trim())
+        .filter(t => t && CROWD_ANCHOR_TOKEN.test(t)).join(', ');
 }
 
 // The law mandates exactly ONE framing tag and ONE angle tag per panel. A law the code
@@ -947,8 +1002,11 @@ function validatePlan(plan, castNames, maxPanels, opts = {}) {
 
 function appendAnchor(prompt, anchor) {
     const base = String(prompt || '');
-    const have = new Set(base.split(',').map(t => t.trim().toLowerCase()).filter(Boolean));
-    const add = String(anchor || '').split(',').map(t => t.trim()).filter(t => t && !have.has(t.toLowerCase()));
+    // Emphasis syntax is invisible to ownership: a braced '{black shihakusho}' IS the
+    // anchor's 'black shihakusho' and must not be re-stamped at the tail.
+    const bare = t => t.trim().toLowerCase().replace(/[{}]/g, '').replace(/^-?\d+(?:\.\d+)?::/, '').replace(/::\s*$/, '').trim();
+    const have = new Set(base.split(',').map(bare).filter(Boolean));
+    const add = String(anchor || '').split(',').map(t => t.trim()).filter(t => t && !have.has(bare(t)));
     return add.length ? `${base}, ${add.join(', ')}` : base;
 }
 
@@ -1348,7 +1406,8 @@ ${FRAME_LAWS}${bubblesOn ? '\n\n' + BUBBLE_RULES : ''}\nOUTPUT (replaces the sin
         const id = assembleIdentity(principals, activeSheet, { dress: firstGarmentTag(dress), worldDress: dress });
         if (id.missing.length) console.warn('[SceneSnap] panel "who" names still not in cast sheet:', id.missing);
         const bgTag = background.length ? backgroundFigureTag(background, activeSheet) : '';
-        p.prompt = enforceShotGrammar([id.counts, ...id.blocks, bgTag, unifyStripLighting(dedupeAgainstAnchor(p.prompt, anchorText), anchorText)].filter(Boolean).join(', '));
+        const crowdTag = hoistCrowdTokens(anchorText, p.crowd);
+        p.prompt = enforceShotGrammar([id.counts, ...id.blocks, bgTag, crowdTag, unifyStripLighting(dedupeAgainstAnchor(p.prompt, anchorText), anchorText)].filter(Boolean).join(', '));
         p.who = principals;
         // Identity welded by code — the seed no longer has to protect subject appearance.
         p.welded = id.blocks.length > 0;
