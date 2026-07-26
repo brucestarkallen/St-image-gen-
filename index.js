@@ -12,7 +12,7 @@ import { getBase64Async, saveBase64AsFile } from '../../../utils.js';
 import { callGenericPopup, POPUP_TYPE } from '../../../popup.js';
 
 const MODULE = 'sceneSnap';
-const VERSION = '0.19.0';
+const VERSION = '0.19.1';
 
 const defaultSettings = Object.freeze({
     enabled: true,
@@ -834,12 +834,6 @@ function validatePlan(plan, castNames, maxPanels, opts = {}) {
         problems.push('This scene has a crowd reacting and no panel gives the crowd the frame. Make one panel "who": [].');
     }
     return problems;
-}
-
-// Render the approved plan back into the render call, so the second pass decides tags
-// and nothing else — the beats, the order, and the cast of each frame are settled.
-function planAsBrief(plan) {
-    return plan.panels.map((p, i) => `Panel ${i + 1} — beat: ${p.beat}\n  who: ${(p.who || []).length ? (p.who || []).join(', ') : '(nobody — the crowd or the place is the subject)'}`).join('\n');
 }
 
 function appendAnchor(prompt, anchor) {

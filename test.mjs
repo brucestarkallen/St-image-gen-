@@ -25,7 +25,7 @@ function extract(name) {
 
 const FUNCS = [
     'splitPrincipals', 'framesCrowd', 'enforceShotGrammar', 'hasGarment', 'firstGarmentTag', 'stripTransientFromSetting', 'capSentenceSafe', 'foldTagDiacritics',
-    'stripRankInsignia', 'stripNameTags', 'parsePlan', 'validatePlan', 'planAsBrief', 'beatWords', 'beatsAreTheSame',
+    'stripRankInsignia', 'stripNameTags', 'parsePlan', 'validatePlan', 'beatWords', 'beatsAreTheSame',
     'normalizeForMatch', 'sanitizeBubbles', 'sanitizeBuilderOutput', 'softSanitize',
     'parsePanels', 'parseCastSheet', 'mergeCastLines', 'effectiveForcedTags',
     'composePositive', 'scanPresenceIn', 'markerDetails', 'ledgerStateLines',
@@ -499,8 +499,6 @@ function defaultPatterns() { return '<details>[\\s\\S]*?</details>\n\\{[A-Z_]+\\
             S.validatePlan(goodPlan, ['Jovan Oda', 'Rukia Kuchiki', 'Ashida Tetsuzan'], 4, { crowd: true }).length === 0);
         check('plan: the chain is carried, panel 1 needs no antecedent',
             goodPlan.panels[0].follows === '' && goodPlan.panels[1].follows.includes('blade is up'));
-        check('plan: the brief names every panel for the render pass',
-            S.planAsBrief(goodPlan).includes('Panel 3') && S.planAsBrief(goodPlan).includes('(nobody'));
     }
     // Field regression, v0.16.0: the same beat spent twice, and an all-solo strip.
     check('plan: one beat rendered twice is caught',
