@@ -116,6 +116,12 @@ Stella: girl, long crimson hair, red eyes, large breasts, hair ribbon, school un
 
 ## Changelog
 
+### 0.9.6 — the world stays itself, automatically
+- **No manual dress-code line needed anymore.** The builder now derives this world's clothing style and this scene's setting ONCE, as data (`dress` + `setting` fields), and **the extension stamps both onto every panel prompt in code** — per-panel drift into modern uniforms or wrong architecture is structurally impossible instead of a memory test for the builder. Duplicate tags are deduped on stamping.
+- **Cast-sheet mining backstop**: if the builder returns no dress field, the cast sheet is treated as the world's wardrobe — garment-bearing tags are mined from it (generic garment lexicon, world-agnostic) and stamped instead.
+- **Public addresses look public**: a line spoken to a group is drawn as the speaker with the addressed group visible and attending — never a private two-shot.
+- The anti-modernize guard is explicit: no modern dress or architecture unless cast tags or scene text literally describe them.
+
 ### 0.9.5
 - **Panel discipline contract** (fixes outfit drift, character blending, wrong poses, and speakers ignoring their audience): max two named characters per panel with full cast tags each and explicit count tags first; clothing may come only from cast tags and scene wording — never from role words ("officer" is a job, not an outfit); crowds get one collective emotion and world-accurate dress; a panel's speaker faces their audience; actions are single concrete danbooru tags ("clapping"), never compound phrases image models misread.
 - Tip: for strict world dress codes, add one line to **Extra builder rules** naming what people canonically wear — the contract will then quote it into every crowd and character.

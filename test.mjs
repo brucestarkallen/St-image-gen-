@@ -27,7 +27,7 @@ const FUNCS = [
     'normalizeForMatch', 'sanitizeBubbles', 'sanitizeBuilderOutput', 'softSanitize',
     'parsePanels', 'parseCastSheet', 'mergeCastLines', 'effectiveForcedTags',
     'composePositive', 'scanPresenceIn', 'markerDetails', 'ledgerStateLines',
-    'stripScene', 'isCorsProxyDisabled', 'explainError', 'isStaleSession', 'classifyFetchDeath', 'stripLayoutMeta', 'getSize',
+    'stripScene', 'isCorsProxyDisabled', 'explainError', 'isStaleSession', 'classifyFetchDeath', 'stripLayoutMeta', 'appendAnchor', 'mineDressTags', 'getSize',
 ];
 
 const prelude = `
@@ -262,6 +262,23 @@ function defaultPatterns() { return '<details>[\\s\\S]*?</details>\n\\{[A-Z_]+\\
     S._setSettings({ sizePreset: 'portrait' });
 }
 
+// ---------------------------------------------------------------- world anchor stamping
+{
+    check('anchor: appended without duplicating existing tokens',
+        S.appendAnchor('1girl, barracks courtyard, snow', 'barracks courtyard, black kimono, snow, white sash')
+            === '1girl, barracks courtyard, snow, black kimono, white sash');
+    check('anchor: empty anchor is a no-op', S.appendAnchor('1boy, smile', '') === '1boy, smile');
+    check('anchor: case-insensitive dedupe', S.appendAnchor('1girl, Black Kimono', 'black kimono') === '1girl, Black Kimono');
+
+    const cast = 'Jovan Oda: man, medium white hair, black kosode, no insignia\nRukia Kuchiki: woman, violet eyes, shinigami uniform, lieutenant armband\nShunsui: man, pink flowered kimono, captain haori, eyepatch';
+    const mined = S.mineDressTags(cast);
+    check('mine: garment tags collected across cast, non-garments excluded',
+        mined.includes('black kosode') && mined.includes('shinigami uniform') && mined.includes('lieutenant armband')
+        && mined.includes('captain haori') && !/violet eyes|white hair|eyepatch/.test(mined));
+    check('mine: names never leak (only post-colon tags scanned)', !/Jovan|Rukia|Shunsui/.test(mined));
+    check('mine: empty cast tolerated', S.mineDressTags('') === '');
+}
+
 // ---------------------------------------------------------------- layout-meta scrub
 {
     // The exact field leak: builder prefixed a panel prompt with page-layout language,
@@ -330,6 +347,11 @@ function defaultPatterns() { return '<details>[\\s\\S]*?</details>\n\\{[A-Z_]+\\
         && src.includes('Number.isInteger(seed) ? seed : Math.floor'));
     check('src: stitch is a rigid cover-filled grid with framed cells',
         src.includes('cx.drawImage(img2, sx, sy, sw, sh, gutter, y, cellW, cellH)') && src.includes('cx.strokeRect(gutter + 2'));
+    check('src: world derived once as data and stamped onto every panel by code',
+        src.includes('"setting":"<location/environment tags') && src.includes('appendAnchor(p.prompt, anchor)')
+        && src.includes('mineDressTags(getActiveCastSheet())'));
+    check('src: public address is speaker + attending group, never a private two-shot',
+        src.includes('never a private two-shot for a public address'));
     check('src: panel discipline — count tags, two-character cap, no role-word clothing, speaker orientation, concrete actions',
         src.includes('At most TWO named characters drawn per panel')
         && src.includes('jobs, not outfits')

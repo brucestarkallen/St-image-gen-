@@ -12,7 +12,7 @@ import { getBase64Async, saveBase64AsFile } from '../../../utils.js';
 import { callGenericPopup, POPUP_TYPE } from '../../../popup.js';
 
 const MODULE = 'sceneSnap';
-const VERSION = '0.9.5';
+const VERSION = '0.9.6';
 
 const defaultSettings = Object.freeze({
     enabled: true,
@@ -366,7 +366,11 @@ function parsePanels(raw, style, maxPanels, opts = {}) {
                     }))
                     .filter(p => p.prompt)
                     .slice(0, maxPanels);
-                if (panels.length) return panels;
+                if (panels.length) {
+                    panels.setting = stripLayoutMeta(String(obj?.setting ?? '')).slice(0, 300);
+                    panels.dress = stripLayoutMeta(String(obj?.dress ?? '')).slice(0, 300);
+                    return panels;
+                }
             } catch { /* fall through to regex recovery */ }
         }
         // Truncated/dirty JSON: recover every completed "prompt":"..." value.
@@ -382,6 +386,32 @@ function parsePanels(raw, style, maxPanels, opts = {}) {
         if (recovered.length) return recovered.slice(0, maxPanels);
     }
     return [{ prompt: sanitizeBuilderOutput(cleaned, style), bubbles: [] }];
+}
+
+// Append anchor tags to a prompt without duplicating tokens the prompt already has.
+function appendAnchor(prompt, anchor) {
+    const base = String(prompt || '');
+    const have = new Set(base.split(',').map(t => t.trim().toLowerCase()).filter(Boolean));
+    const add = String(anchor || '').split(',').map(t => t.trim()).filter(t => t && !have.has(t.toLowerCase()));
+    return add.length ? `${base}, ${add.join(', ')}` : base;
+}
+
+// Backstop when the builder returns no dress field: the cast sheet IS the world's
+// wardrobe. Mine garment-bearing tags (generic garment lexicon, not world-specific).
+function mineDressTags(castText) {
+    const garments = ['kimono', 'kosode', 'hakama', 'haori', 'shihakusho', 'shihakush\u014d', 'sash', 'obi', 'uniform', 'armband', 'robe', 'cloak', 'cape', 'coat', 'dress', 'skirt', 'scarf', 'hat', 'gloves', 'boots', 'suit'];
+    const seen = new Set();
+    const out = [];
+    for (const line of String(castText || '').split('\n')) {
+        const tags = line.split(':').slice(1).join(':');
+        for (const t of tags.split(',')) {
+            const tag = t.trim();
+            const low = tag.toLowerCase();
+            if (!tag || seen.has(low)) continue;
+            if (garments.some(g => low.includes(g))) { seen.add(low); out.push(tag); }
+        }
+    }
+    return out.slice(0, 10).join(', ');
 }
 
 function effectiveForcedTags() {
@@ -664,7 +694,9 @@ PANEL DISCIPLINE (binding rules for every panel):
 - Clothing comes ONLY from cast tags and explicit scene wording. NEVER derive clothing or armor from rank/role words: 'officer', 'captain', 'soldier', 'guard', 'division' are jobs, not outfits — writing 'military uniform' because the scene says 'officers' is a failed panel.
 - A background crowd is scenery: give it ONE collective emotion and describe its dress by copying the scene's world (what these people canonically wear), never by role words.
 - The panel's speaker (if it has a bubble) is drawn mid-speech, body and face oriented toward whoever they address — a speaker addressing a crowd faces the crowd, not the camera.
-- Actions are single concrete danbooru tags (clapping, arms crossed, pointing, hand on own chest) — never compound phrases like 'hands clapping together', which image models misread.${bubblesOn ? '\n\n' + BUBBLE_RULES : ''}\nOUTPUT (replaces the single-line requirement above): strict JSON only — no reasoning, no commentary, no markdown: {"panels":[{"prompt":"<one prompt following all rules above>"${bubbleSchema}}]}`;
+- Actions are single concrete danbooru tags (clapping, arms crossed, pointing, hand on own chest) — never compound phrases like 'hands clapping together', which image models misread.
+- A line spoken to a group is drawn as the speaker prominent with the addressed group visible and attending — never a private two-shot for a public address.
+WORLD (derive once, as data): from the SCENE text and CAST tags, infer this world's shared clothing style and this scene's physical setting. Never modernize: no modern uniforms, coats, neckties, or architecture unless cast tags or scene text explicitly describe them. Output both as flat tag lists in the top-level "dress" and "setting" fields — the extension stamps them onto every panel itself, so do NOT restate them inside panel prompts.${bubblesOn ? '\n\n' + BUBBLE_RULES : ''}\nOUTPUT (replaces the single-line requirement above): strict JSON only — no reasoning, no commentary, no markdown: {"setting":"<location/environment tags for this scene>","dress":"<what people of this world wear, as tags>","panels":[{"prompt":"<one prompt following all rules above>"${bubbleSchema}}]}`;
     } else if (bubblesOn) {
         fullSystem += `\n\n${BUBBLE_RULES}\nOUTPUT (replaces the single-line requirement above): strict JSON only — no reasoning, no commentary, no markdown, exactly one panel: {"panels":[{"prompt":"<one prompt following all rules above>"${bubbleSchema}}]}`;
     }
@@ -678,7 +710,12 @@ PANEL DISCIPLINE (binding rules for every panel):
         raw = await callLLM(fullSystem, user, maxTokens);
     }
     console.log('[SceneSnap] raw builder output:', String(raw).slice(0, 600));
-    return { panels: parsePanels(raw, style, maxPanels, { bubbles: bubblesOn, sceneText: scene }), style, raw: String(raw) };
+    const panels = parsePanels(raw, style, maxPanels, { bubbles: bubblesOn, sceneText: scene });
+    // World anchor: builder-derived, cast-mined as backstop. Stamped onto every panel by
+    // the extension (appendAnchor) — per-panel drift to modern dress/architecture becomes
+    // structurally impossible instead of being a memory test for the builder.
+    const dress = panels.dress || mineDressTags(getActiveCastSheet());
+    return { panels, style, raw: String(raw), setting: panels.setting || '', dress };
 }
 
 // ------------------------------------------------------------------ backends
@@ -1184,8 +1221,9 @@ async function illustrateMessage(mesId, { force = false } = {}) {
             }
         }
         if (!multiRan) {
-            const { panels, style, raw } = await buildScenePrompt(mesId);
-            const finals = panels.map(p => composePositive(p.prompt, style));
+            const { panels, style, raw, setting, dress } = await buildScenePrompt(mesId);
+            const anchor = [setting, dress].filter(Boolean).join(', ');
+            const finals = panels.map(p => composePositive(appendAnchor(p.prompt, anchor), style));
             debugRaw = raw;
             debugPrompts = finals.slice();
             panels.forEach((p, i) => p.bubbles.forEach(b => debugPrompts.push(`PANEL ${i + 1} BUBBLE — ${b.speaker || '?'}: "${b.text}"`)));
