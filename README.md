@@ -106,6 +106,7 @@ Stella: girl, long crimson hair, red eyes, large breasts, hair ribbon, school un
 - **"Prompt builder returned an empty response"** — the profile model may be reasoning-only or unreachable; pick another profile or leave on Main API.
 - **Runware "invalid model"** — re-copy the AIR from Civitai; version IDs change when models update.
 - **NovelAI 401** — set your NovelAI key under API Connections (NovelAI) first.
+- **"Something in this browser blocked the image request"** — the server answered a liveness probe, so the multi-char request was killed inside the browser itself: an ad/privacy shield or content blocker (common on mobile browsers with built-in blocking). Allow this SillyTavern address in the blocker. SceneSnap ships a single-prompt image in the meantime.
 - **"This page is older than the SillyTavern server"** — ST was restarted after this tab loaded, so its session died and ST rejects every call until the page is reloaded. One reload fixes it.
 - **"SillyTavern's server didn't answer"** — the button was pressed while ST was restarting or down. The page stays open but its server is gone, so every call fails instantly. Wait for the startup banner, reload the page, press again. (Since 0.8.1 all requests are same-origin, so this is the only thing a browser-level fetch failure can mean.)
 - **Multi-char warns that the CORS proxy is off** — NovelAI's API refuses direct browser calls, so multi-character mode rides SillyTavern's proxy route. One line in `config.yaml`: `enableCorsProxy: true`, restart ST (or launch with `--corsProxy`). Until then SceneSnap ships a single-prompt image instead of failing.
@@ -114,6 +115,10 @@ Stella: girl, long crimson hair, red eyes, large breasts, hair ribbon, school un
 - **Auto mode fired on an old message** — it only targets the newest AI message and suppresses itself for a moment after chat switches; if you see otherwise, report the console log.
 
 ## Changelog
+
+### 0.8.4
+- **Multi-char proxy URL is now percent-encoded** (`/proxy/https%3A%2F%2F...`). A raw `https://` embedded in a request path is the exact shape content/privacy blockers kill as "proxy circumvention", and some stacks normalize the double slash; the encoded form is byte-identical server-side (verified against a live ST) and gives filters nothing to match.
+- **Fetch deaths are measured, not assumed**: if the proxy request dies at browser level, SceneSnap probes `GET /version`. Server up → "a blocker in this browser killed the request" (and falls back to single-prompt so the image still ships). Server down → the existing unreachable message. No more guessing which one it was.
 
 ### 0.8.3
 - The full multi-char pipeline was verified against a live SillyTavern instance: request routing through `/proxy/`, CSRF, Authorization forwarding, and byte-perfect binary zip piping into SceneSnap's extractor; the disabled-proxy detector was validated against ST's real response.

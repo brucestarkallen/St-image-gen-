@@ -27,7 +27,7 @@ const FUNCS = [
     'normalizeForMatch', 'sanitizeBubbles', 'sanitizeBuilderOutput', 'softSanitize',
     'parsePanels', 'parseCastSheet', 'mergeCastLines', 'effectiveForcedTags',
     'composePositive', 'scanPresenceIn', 'markerDetails', 'ledgerStateLines',
-    'stripScene', 'isCorsProxyDisabled', 'explainError', 'isStaleSession',
+    'stripScene', 'isCorsProxyDisabled', 'explainError', 'isStaleSession', 'classifyFetchDeath',
 ];
 
 const prelude = `
@@ -234,6 +234,15 @@ function defaultPatterns() { return '<details>[\\s\\S]*?</details>\n\\{[A-Z_]+\\
     check('cors-guard: empty body tolerated', !S.isCorsProxyDisabled(404, ''));
 }
 
+// ---------------------------------------------------------------- fetch-death classification
+{
+    check('death: server unreachable -> null (unreachable message owns it)', S.classifyFetchDeath(false) === null);
+    const blocked = S.classifyFetchDeath(true);
+    check('death: server up -> blocked-in-browser error with flag',
+        blocked instanceof Error && blocked.blockedInBrowser === true && /blocker|shield/i.test(blocked.message));
+    check('death: blocked message never claims the server is down', !/restarting|down/i.test(blocked.message.replace('shields', '')));
+}
+
 // ---------------------------------------------------------------- stale-session guard
 {
     // Body captured verbatim from a live ST instance rejecting a stale CSRF token.
@@ -262,8 +271,10 @@ function defaultPatterns() { return '<details>[\\s\\S]*?</details>\n\\{[A-Z_]+\\
     check('src: overlay failures ship the clean panel', src.includes('bubble overlay failed, shipping the clean panel'));
     check('src: no direct cross-origin fetch to NovelAI remains',
         !src.includes("fetch('https://image.novelai.net"));
-    check('src: multi-char rides the same-origin ST CORS proxy route',
-        src.includes('/proxy/${NAI_IMAGE_ENDPOINT}'));
+    check('src: proxy target is percent-encoded into the path',
+        src.includes('/proxy/${encodeURIComponent(NAI_IMAGE_ENDPOINT)}') && !src.includes('/proxy/${NAI_IMAGE_ENDPOINT}'));
+    check('src: fetch death is classified by probing /version, not assumed',
+        src.includes("fetch('/version'") && src.includes('classifyFetchDeath(await probeServerUp())'));
     check('src: generateRaw fallback precedes quiet prompt',
         src.indexOf('ctx.generateRaw') !== -1 && src.indexOf('ctx.generateRaw') < src.indexOf('ctx.generateQuietPrompt'));
     check('src: version stamp matches manifest', (() => {

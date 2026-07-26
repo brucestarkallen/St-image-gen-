@@ -12,7 +12,7 @@ import { getBase64Async, saveBase64AsFile } from '../../../utils.js';
 import { callGenericPopup, POPUP_TYPE } from '../../../popup.js';
 
 const MODULE = 'sceneSnap';
-const VERSION = '0.8.3';
+const VERSION = '0.8.4';
 
 const defaultSettings = Object.freeze({
     enabled: true,
@@ -784,6 +784,26 @@ function isStaleSession(status, bodyText) {
     return status === 403 && /invalid csrf token/i.test(String(bodyText || ''));
 }
 
+// Cheap same-origin liveness check: GET carries no CSRF requirement in ST.
+async function probeServerUp() {
+    try {
+        const res = await fetch('/version', { method: 'GET', cache: 'no-store' });
+        return res.ok;
+    } catch {
+        return false;
+    }
+}
+
+// After a browser-level fetch death, decide what it means from evidence:
+// server unreachable -> null (explainError names it); server answering -> the
+// request was selectively killed inside this browser (content/privacy blocker).
+function classifyFetchDeath(serverUp) {
+    if (!serverUp) return null;
+    const err = new Error('Something in this browser blocked the image request (an ad/privacy shield or content blocker) — the SillyTavern server itself is fine. Allow this site in the blocker, then try again. Generating single-prompt for now.');
+    err.blockedInBrowser = true;
+    return err;
+}
+
 async function generateNovelAIMulti(base, charTags, negative) {
     const token = String(settings.naiToken || '').trim();
     if (!token) throw new Error('NovelAI persistent token not set — needed for multi-character mode (get it at NovelAI → User Settings → Account → Get Persistent API Token)');
@@ -846,14 +866,22 @@ async function generateNovelAIMulti(base, charTags, negative) {
     // Same-origin only: browsers block direct calls to image.novelai.net (NAI's API sends
     // no CORS headers), so this must ride SillyTavern's CORS proxy. ST's own headers carry
     // the CSRF token; the proxy strips it (with all browser-identity headers) before forwarding.
-    const res = await fetch(`/proxy/${NAI_IMAGE_ENDPOINT}`, {
-        method: 'POST',
-        headers: {
-            ...getRequestHeaders(),
-            'Authorization': `Bearer ${token}`,
-        },
-        body: JSON.stringify(body),
-    });
+    // The target URL is percent-encoded into the path: a raw 'https://...' embedded in
+    // a path is the exact shape content blockers kill as proxy circumvention, and some
+    // stacks normalize the double slash. Express decodes params, so ST sees the same URL.
+    let res;
+    try {
+        res = await fetch(`/proxy/${encodeURIComponent(NAI_IMAGE_ENDPOINT)}`, {
+            method: 'POST',
+            headers: {
+                ...getRequestHeaders(),
+                'Authorization': `Bearer ${token}`,
+            },
+            body: JSON.stringify(body),
+        });
+    } catch (fetchErr) {
+        throw classifyFetchDeath(await probeServerUp()) || fetchErr;
+    }
     if (!res.ok) {
         const text = await res.text().catch(() => '');
         if (isStaleSession(res.status, text)) throw new Error(STALE_SESSION_MSG);
@@ -1094,9 +1122,10 @@ async function illustrateMessage(mesId, { force = false } = {}) {
                 multiRan = true;
                 console.log(`[SceneSnap] NAI multi-char: 1 base + ${spec.chars.length} character panels`);
             } catch (e) {
-                if (!e?.corsProxyDisabled) throw e;
+                if (!e?.corsProxyDisabled && !e?.blockedInBrowser) throw e;
                 // Same degradation ladder as a missing token/cast: the image still ships,
-                // the exact fix is named once per session.
+                // the exact fix (enable the proxy / allow the site in the blocker) is named
+                // once per session.
                 if (!corsWarned) { corsWarned = true; toastr.warning(e.message, 'SceneSnap', { timeOut: 15000 }); }
                 console.warn('[SceneSnap] multi-char unavailable (CORS proxy disabled) — falling back to single prompt');
             }
