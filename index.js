@@ -12,7 +12,7 @@ import { getBase64Async, saveBase64AsFile } from '../../../utils.js';
 import { callGenericPopup, POPUP_TYPE } from '../../../popup.js';
 
 const MODULE = 'sceneSnap';
-const VERSION = '0.18.0';
+const VERSION = '0.19.0';
 
 const defaultSettings = Object.freeze({
     enabled: true,
@@ -104,7 +104,7 @@ Name: girl|boy|woman|man, hair length + hair color, eye color, 2-5 distinctive p
 Example:
 Akane: girl, long black hair, ponytail, brown eyes, athletic build, school uniform, red ribbon
 Rules: visual traits only — never personality, locations, positions, or current actions. Max 12 tags per character, Danbooru-style tags, prefer information from character tracker blocks when present, skip characters already listed in EXISTING SHEET.
-CANONICAL NAME TAG (do this FIRST for every character who comes from a published work — anime, manga, game, novel — that an anime image model would know): begin their tag list with their danbooru character tag, then the work's danbooru tag, then the description. Danbooru character tags are lowercase and surname-first with the given name after: "kuchiki rukia, bleach", "abarai renji, bleach", "megumin, konosuba". The image model already knows what these characters look like and what they wear, and their own tag invokes that knowledge directly — it binds harder than any description and it never drifts between panels. Keep the description after it anyway: the tag carries the canonical look, the description carries this story's version. ORIGINAL characters have no such tag and get description only — never invent a character tag for an OC, and never guess a tag you are not sure exists.
+NO CHARACTER NAMES IN THE TAGS, EVER — not the character's, not the work's. A name tag makes the image model draw its own idea of that character, which then fights the body you described, and the two blend into something that is neither. Describe the BODY: sex, build, hair colour and length, eye colour, distinguishing marks, then clothing. "man, tall, lean, long red hair in a high ponytail, brown eyes, black tribal tattoos over brows and shoulders, white headband" — never "abarai renji", never "bleach".
 APPEARANCE SOURCE ORDER: 1) CANON WIKI DATA when present — it is authoritative; convert its prose faithfully into danbooru tags. 2) Story memory and chat text. 3) For an ESTABLISHED CANON CHARACTER of the story's fandom that neither source describes, use their widely known canonical appearance in standard danbooru tags — canon characters are never "unknown". Reserve "Name: gender, (appearance unknown — fill in)" strictly for ORIGINAL characters no source describes.
 RANK IS NOT AN OUTFIT, in the cast line either: write the garment you can SEE ('white armband on left arm'), never the rank that garment signifies ('lieutenant's badge', 'captain's insignia', 'officer's braid') — an image model reads a rank word as modern military dress and returns gold cuff braid and shoulder boards.
 COPY, never compose: take each trait's wording from the story/memory VERBATIM where it appears — never synonymize or re-style ('lieutenant armband' stays 'armband', never 'badge'; 'medium white hair' never becomes 'short white hair'). Adults are 'man'/'woman'; 'boy'/'girl' ONLY for characters the story marks as children or child-statured. Always include eye color and exact hair length when the story states them; never drop a distinguishing trait the memory contains; base clothing (uniform/kimono) is listed per character, not assumed. ALWAYS include the story's protagonist/viewpoint character — the player's character counts as a character. If a required character's appearance is never described, still output their line as: Name: gender, (appearance unknown — fill in). If there are no new characters at all, output NONE.`;
@@ -156,9 +156,11 @@ WORLD (derive once, as data): from the SCENE text and CAST tags, infer this worl
 // named — and code could not catch any of them, because the plan arrived already fused
 // to its own rendering. So the strip is planned first, in plain language, small enough
 // to check: the panel list is validated (and repaired) BEFORE a single tag is written.
-const PLAN_LAWS = `You are laying out a comic strip. Do NOT write image tags yet — plan the panels.
+const PLAN_LAWS = `PLAN FIRST, IN THE SAME ANSWER. Before you write a single tag, lay the strip out as a list of beats — this is the "plan" array of your JSON, and the "panels" array renders it one for one, in the same order.
 
 PANELS: pick how many the scene's climax needs (2 to %MAX%). One DISTINCT beat each, in the order they happen, ending on the final beat, and the climax action itself MUST be one of them.
+- THE BEATS ARE A CHAIN, NOT A LIST. Beat 2 is what happens NEXT because of beat 1; beat 3 follows beat 2. Every panel after the first states in "follows" what makes it the next moment — "the blade is now overhead, and the courtyard answers it", "his shout has landed and the old man responds to it". A panel whose "follows" could be deleted without anyone noticing is an independent picture, not a strip.
+- STRICT CHRONOLOGY: the strip runs forward in time. Never open on the crowd's reaction and then cut back to the action that caused it.
 - Every panel a different beat. One action stretched over two panels (a sword leaving its sheath, then that same sword held overhead) is ONE beat; pick the stronger image and spend the freed panel elsewhere.
 - More beats than panels: drop the weakest. Never merge two beats into one frame.
 
@@ -171,8 +173,7 @@ WHO is the people the beat's action passes BETWEEN, and nobody else:
 
 WORLD, derived once: "setting" is the standing description of the place stamped on every panel — location, architecture, weather, light, AND the scene's population with what that population wears ("packed stands of shinigami in black shihakusho"). Never what the population is momentarily doing. "dress" is ONLY the universal base outfit an ordinary person of this world wears — never rank- or status-specific garments.
 
-OUTPUT strict JSON only, no commentary, no markdown:
-{"setting":"<place tags + population + population's dress>","dress":"<the world's base outfit, as tags>","panels":[{"beat":"<one plain sentence: what this frame shows>","who":["Exact Cast Name"]}]}`;
+The plan entry for each panel is: {"beat":"<one plain sentence: what this frame shows>","follows":"<how this moment follows the previous panel — omit on panel 1>","who":["Exact Cast Name"]}`;
 
 // Same default presence-marker patterns as Summaryception's ledger: a preset's
 // [IST: name|state] in-scene tracker and [ACW: name|...] off-screen watchlist.
@@ -496,6 +497,26 @@ const DECORATION_WORD = /\b(?:badge|insignia|pin|medal|medals|star|stars|stripe|
 // not just the world dress: the field run kept rendering a lieutenant in a black
 // military tunic with collar tabs and an eagle because her own cast line said
 // "lieutenant's badge". The garment survives; only the rank decoration goes.
+// A cast tag that is just the character's own name (in either order) is a name tag —
+// drop it. Sheets built under 0.17.0 carry them; this needs no rebuild to take effect.
+function stripNameTags(tagList, characterName) {
+    const parts = String(characterName || '').toLowerCase().split(/\s+/).filter(w => w.length > 2);
+    if (!parts.length) return String(tagList || '');
+    const nameWords = new Set(parts);
+    const toks = String(tagList || '').split(',').map(t => t.trim()).filter(Boolean);
+    const out = [];
+    for (let i = 0; i < toks.length; i++) {
+        const w = toks[i].toLowerCase().replace(/[^a-z0-9\s]/g, ' ').split(/\s+/).filter(Boolean);
+        const isName = w.length && w.length <= parts.length && w.every(x => nameWords.has(x));
+        if (!isName) { out.push(toks[i]); continue; }
+        // 0.17.0 emitted the character tag and the work's tag as a pair ("abarai renji,
+        // bleach"). A work tag summons the model's whole cast of that franchise, which is
+        // the same failure as the name tag. Drop the single-word partner with it.
+        if (i + 1 < toks.length && !/\s/.test(toks[i + 1])) i++;
+    }
+    return out.join(', ');
+}
+
 function stripRankInsignia(tagList) {
     return String(tagList || '').split(',').map(t => t.trim())
         .filter(t => t && !(RANK_WORD.test(t) && DECORATION_WORD.test(t)))
@@ -621,7 +642,7 @@ function assembleIdentity(who, sheetText, opts = {}) {
         const state = typeof entry === 'object' && entry ? String(entry.state ?? '').trim() : '';
         const hit = byName.get(name.trim().toLowerCase());
         if (hit && !isPlaceholderTags(hit.tags)) {
-            const tags = stripRankInsignia(hit.tags);
+            const tags = stripRankInsignia(stripNameTags(hit.tags, hit.name));
             const scrubbed = stripRankInsignia(scrubState(state, tags));
             // Clothing is identity too: if neither the sheet nor the state dresses this
             // character, the world's base outfit is welded in rather than left to priors.
@@ -761,9 +782,10 @@ function parsePlan(raw, maxPanels) {
     if (!match) return null;
     let obj;
     try { obj = JSON.parse(match[0]); } catch { return null; }
-    const arr = Array.isArray(obj?.panels) ? obj.panels : [];
+    const arr = Array.isArray(obj?.plan) ? obj.plan : [];
     const panels = arr.map(p => ({
         beat: stripLayoutMeta(String(p?.beat ?? '').replace(/["`\n]+/g, ' ')).replace(/\s{2,}/g, ' ').trim().slice(0, 200),
+        follows: String(p?.follows ?? '').replace(/["`\n]+/g, ' ').replace(/\s{2,}/g, ' ').trim().slice(0, 200),
         who: Array.isArray(p?.who) ? p.who.map(w => String(typeof w === 'object' && w ? w.name ?? '' : w ?? '').trim()).filter(Boolean).slice(0, 2) : null,
     })).filter(p => p.beat).slice(0, maxPanels);
     if (!panels.length) return null;
@@ -797,6 +819,8 @@ function validatePlan(plan, castNames, maxPanels, opts = {}) {
         for (const n of (p.who || [])) {
             if (known.size && !known.has(n.toLowerCase())) problems.push(`Panel ${i + 1} names "${n}", who is not in the cast sheet. Use an exact cast-sheet name or drop them.`);
         }
+        if (i > 0 && !p.follows) problems.push(`Panel ${i + 1} does not say how it follows panel ${i}. Every panel after the first must state what makes it the next moment — a panel that does not follow the one before it is an independent picture, not a strip.`);
+        if (i > 0 && p.follows && beatsAreTheSame(p.follows, p.beat)) problems.push(`Panel ${i + 1}'s "follows" just restates its own beat. Say what changed since panel ${i}.`);
         for (let j = i + 1; j < plan.panels.length; j++) {
             if (beatsAreTheSame(p.beat, plan.panels[j].beat)) problems.push(`Panels ${i + 1} and ${j + 1} are the same beat. Replace one with a beat the strip does not already cover.`);
         }
@@ -1091,7 +1115,7 @@ async function buildScenePrompt(mesId) {
     fullSystem += NSFW_RULE;
     const bubbleSchema = bubblesOn ? ',"bubbles":[{"speaker":"<name>","text":"<verbatim quote>"}]' : '';
     if (maxPanels > 1) {
-        fullSystem += `\n\nSEQUENCE MODE (active):\nBuild a vertical comic strip: decide how many panels (2 to ${maxPanels}) the scene's climax needs — one panel per DISTINCT visual beat, chronological order, ending on the final beat. Never fewer than 2 panels: the reader asked for a strip. Every character repeats their FULL appearance tag set verbatim in every panel they appear in — never change outfits, hair, or colors between panels. Each panel prompt describes exactly ONE moment in ONE frame — never write layout words (comic, panel, panels, page, grid, multiple views).
+        fullSystem += `\n\n${PLAN_LAWS.replace('%MAX%', String(maxPanels))}\n\nSEQUENCE MODE (active):\nBuild a vertical comic strip: decide how many panels (2 to ${maxPanels}) the scene's climax needs — one panel per DISTINCT visual beat, chronological order, ending on the final beat. Never fewer than 2 panels: the reader asked for a strip. Every character repeats their FULL appearance tag set verbatim in every panel they appear in — never change outfits, hair, or colors between panels. Each panel prompt describes exactly ONE moment in ONE frame — never write layout words (comic, panel, panels, page, grid, multiple views).
 ${FRAME_LAWS}
 STRIP RULES (sequence mode only):
 - Panels are the SCENE's beats in strict chronological order, first key moment to last — and the climax action itself (the strike, the explosion, the reveal) MUST be one of the panels; a strip that skips its own climax is a failed strip.
@@ -1099,7 +1123,7 @@ STRIP RULES (sequence mode only):
 - A beat with three or more principals is SPLIT into consecutive panels (panels are unlimited; frames are not).
 - ONE BEAT PER PANEL, and every panel a DIFFERENT beat. More beats than panels: drop the weakest, never merge two into one frame. One action stretched over two panels (a sword leaving its sheath, then that same sword held overhead) is one beat rendered twice — pick the stronger image and spend the freed panel on a beat nothing else covers.
 - A two-person exchange may play as a shot/reverse-shot pair across two panels.
-- Consecutive panels NEVER repeat the same framing+angle pair — vary the camera like a filmed scene.${bubblesOn ? '\n\n' + BUBBLE_RULES : ''}\nOUTPUT (replaces the single-line requirement above): strict JSON only — no reasoning, no commentary, no markdown: {"setting":"<location/environment/population tags for this scene>","dress":"<what people of this world wear, as tags>","panels":[{"who":[{"name":"Exact Cast Name","state":"<THIS character's pose, expression, wounds, and action tags>"},{"name":"...","state":"..."}],"prompt":"<camera, lighting, atmosphere, shared effects, environment ONLY>","sentence":"<ONE plain-English sentence describing only how the characters are arranged toward each other and the space — spatial relations and interaction, no appearance words>"${bubbleSchema}}]}`;
+- Consecutive panels NEVER repeat the same framing+angle pair — vary the camera like a filmed scene.${bubblesOn ? '\n\n' + BUBBLE_RULES : ''}\nOUTPUT (replaces the single-line requirement above): strict JSON only — no reasoning, no commentary, no markdown. The "plan" array comes FIRST and the "panels" array renders it one for one: {"plan":[{"beat":"<one plain sentence>","follows":"<how this follows the previous panel; omit on panel 1>","who":["Exact Cast Name"]}],"setting":"<location/environment/population tags for this scene>","dress":"<what people of this world wear, as tags>","panels":[{"who":[{"name":"Exact Cast Name","state":"<THIS character's pose, expression, wounds, and action tags>"},{"name":"...","state":"..."}],"prompt":"<camera, lighting, atmosphere, shared effects, environment ONLY>","sentence":"<ONE plain-English sentence describing only how the characters are arranged toward each other and the space — spatial relations and interaction, no appearance words>"${bubbleSchema}}]}`;
     } else if (structuredSingle) {
         fullSystem += `\n\nSINGLE FRAME (active):\nDepict exactly ONE frozen frame: the scene's FINAL visual beat — the last thing a camera would see. Choose that beat's principals for "who" and fold everyone else into the crowd; never montage, never split the moment.
 ${FRAME_LAWS}${bubblesOn ? '\n\n' + BUBBLE_RULES : ''}\nOUTPUT (replaces the single-line requirement above): strict JSON only — no reasoning, no commentary, no markdown, exactly one panel: {"setting":"<location/environment/population tags for this scene>","dress":"<what people of this world wear, as tags>","panels":[{"who":[{"name":"Exact Cast Name","state":"<THIS character's pose, expression, wounds, and action tags>"},{"name":"...","state":"..."}],"prompt":"<camera, lighting, atmosphere, shared effects, environment ONLY>","sentence":"<ONE plain-English sentence describing only how the characters are arranged toward each other and the space — spatial relations and interaction, no appearance words>"${bubbleSchema}}]}`;
@@ -1109,39 +1133,11 @@ ${FRAME_LAWS}${bubblesOn ? '\n\n' + BUBBLE_RULES : ''}\nOUTPUT (replaces the sin
 
     const maxTokens = maxPanels > 1 ? Math.min(3600, 500 + 650 * maxPanels) : structuredSingle ? 1300 : (bubblesOn ? 1100 : 800);
 
-    // ---- pass 1: plan the strip, check the list, repair it once if it is wrong ----
+    // The plan arrives in the SAME answer as the panels — no second round trip. It is
+    // validated after parsing, and only a plan that fails validation costs an extra call.
     let plan = null;
     let planNotes = [];
-    if (maxPanels > 1) {
-        const planSystem = `${system}\n\n${PLAN_LAWS.replace('%MAX%', String(maxPanels))}`;
-        try {
-            const planRaw = await callLLM(planSystem, user, 900);
-            plan = parsePlan(planRaw, maxPanels);
-            if (plan) {
-                const castNames = parseCastSheet(getActiveCastSheet()).map(c => c.name);
-                const wantsCrowd = framesCrowd(plan.setting) || framesCrowd(scene);
-                let problems = validatePlan(plan, castNames, maxPanels, { crowd: wantsCrowd });
-                if (problems.length) {
-                    console.warn('[SceneSnap] plan rejected:', problems);
-                    planNotes = problems.slice();
-                    const fixRaw = await callLLM(
-                        `${planSystem}\n\nYOUR PREVIOUS PLAN WAS REJECTED:\n- ${problems.join('\n- ')}\nRe-output the complete corrected plan JSON now.`,
-                        user, 900);
-                    const fixed = parsePlan(fixRaw, maxPanels);
-                    if (fixed && validatePlan(fixed, castNames, maxPanels, { crowd: wantsCrowd }).length < problems.length) plan = fixed;
-                }
-                console.log('[SceneSnap] plan:', plan.panels.map((p, i) => `${i + 1}. [${(p.who || []).join(', ') || 'crowd'}] ${p.beat}`));
-            }
-        } catch (e) {
-            console.warn('[SceneSnap] plan pass failed, falling back to single-call builder:', e);
-            plan = null;
-        }
-    }
-    if (plan) {
-        fullSystem += `\n\nTHE STRIP IS ALREADY PLANNED — render exactly these panels, in this order. Do NOT change the beats, do NOT change who is in a frame, do NOT add or remove panels. Your only job now is the tags, states, camera, and composition sentence for each frame:\n${planAsBrief(plan)}`;
-    }
 
-    // ---- pass 2: render the plan (or the whole job, when there is no plan) ----
     let raw;
     try {
         raw = await callLLM(fullSystem, user, maxTokens);
@@ -1155,6 +1151,28 @@ ${FRAME_LAWS}${bubblesOn ? '\n\n' + BUBBLE_RULES : ''}\nOUTPUT (replaces the sin
     // corrective re-call. Whichever output covers more panels with who wins; the image
     // is never blocked on compliance.
     const schemaSent = maxPanels > 1 || structuredSingle;
+    if (maxPanels > 1) {
+        plan = parsePlan(raw, maxPanels);
+        if (plan) {
+            const castNames = parseCastSheet(getActiveCastSheet()).map(c => c.name);
+            const wantsCrowd = framesCrowd(plan.setting) || framesCrowd(scene);
+            const problems = validatePlan(plan, castNames, maxPanels, { crowd: wantsCrowd });
+            if (problems.length) {
+                console.warn('[SceneSnap] plan rejected:', problems);
+                planNotes = problems.slice();
+                try {
+                    const rawFix = await callLLM(`${fullSystem}\n\nYOUR PLAN WAS REJECTED:\n- ${problems.join('\n- ')}\nRe-output the complete corrected JSON now — plan AND panels.`, user, maxTokens);
+                    const planFix = parsePlan(rawFix, maxPanels);
+                    if (planFix && validatePlan(planFix, castNames, maxPanels, { crowd: wantsCrowd }).length < problems.length) {
+                        const panelsFix = parsePanels(rawFix, style, maxPanels, { bubbles: bubblesOn, sceneText: scene, expectJson: structuredSingle });
+                        if (panelsFix.length) { plan = planFix; panels = panelsFix; raw = rawFix; }
+                    }
+                } catch (e) { console.warn('[SceneSnap] plan repair failed, keeping first output:', e); }
+            }
+            console.log('[SceneSnap] plan:', plan.panels.map((p, i) => `${i + 1}. [${(p.who || []).join(', ') || 'crowd'}] ${p.beat}`));
+        }
+    }
+
     const whoOmitted = ps => ps.reduce((n, p) => n + (p.whoDeclared ? 0 : 1), 0);
     if (panels.length && schemaSent && whoOmitted(panels) && castEntryCount) {
         console.warn('[SceneSnap] builder omitted the who field on', whoOmitted(panels), 'panel(s) — issuing one corrective retry');

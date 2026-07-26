@@ -25,7 +25,7 @@ function extract(name) {
 
 const FUNCS = [
     'splitPrincipals', 'framesCrowd', 'enforceShotGrammar', 'hasGarment', 'firstGarmentTag', 'stripTransientFromSetting', 'capSentenceSafe', 'foldTagDiacritics',
-    'stripRankInsignia', 'parsePlan', 'validatePlan', 'planAsBrief', 'beatWords', 'beatsAreTheSame',
+    'stripRankInsignia', 'stripNameTags', 'parsePlan', 'validatePlan', 'planAsBrief', 'beatWords', 'beatsAreTheSame',
     'normalizeForMatch', 'sanitizeBubbles', 'sanitizeBuilderOutput', 'softSanitize',
     'parsePanels', 'parseCastSheet', 'mergeCastLines', 'effectiveForcedTags',
     'composePositive', 'scanPresenceIn', 'markerDetails', 'ledgerStateLines',
@@ -488,15 +488,17 @@ function defaultPatterns() { return '<details>[\\s\\S]*?</details>\n\\{[A-Z_]+\\
 
     // The plan pass: the strip is laid out and checked as a LIST before any tag exists.
     {
-        const goodPlan = S.parsePlan(JSON.stringify({ setting: 'courtyard, crowd of shinigami in black shihakusho', dress: 'black shihakusho', panels: [
+        const goodPlan = S.parsePlan(JSON.stringify({ setting: 'courtyard, crowd of shinigami in black shihakusho', dress: 'black shihakusho', plan: [
             { beat: 'He raises the blade over the courtyard.', who: ['Jovan Oda', 'Rukia Kuchiki'] },
-            { beat: 'The old soldier salutes the memorial stone.', who: ['Ashida Tetsuzan'] },
-            { beat: 'The whole courtyard erupts into the chant.', who: [] },
+            { beat: 'The old soldier salutes the memorial stone.', follows: 'the blade is up now, and the veteran answers it', who: ['Ashida Tetsuzan'] },
+            { beat: 'The whole courtyard erupts into the chant.', follows: 'the salute breaks the silence and three hundred voices follow', who: [] },
         ] }), 4);
         check('plan: parsed into beats and who, world carried',
             goodPlan.panels.length === 3 && goodPlan.panels[2].who.length === 0 && goodPlan.dress === 'black shihakusho');
         check('plan: a valid plan raises no problems',
             S.validatePlan(goodPlan, ['Jovan Oda', 'Rukia Kuchiki', 'Ashida Tetsuzan'], 4, { crowd: true }).length === 0);
+        check('plan: the chain is carried, panel 1 needs no antecedent',
+            goodPlan.panels[0].follows === '' && goodPlan.panels[1].follows.includes('blade is up'));
         check('plan: the brief names every panel for the render pass',
             S.planAsBrief(goodPlan).includes('Panel 3') && S.planAsBrief(goodPlan).includes('(nobody'));
     }
@@ -507,17 +509,32 @@ function defaultPatterns() { return '<details>[\\s\\S]*?</details>\n\\{[A-Z_]+\\
     check('plan: an all-solo strip is caught',
         S.validatePlan({ panels: [
             { beat: 'He raises the blade.', who: ['Jovan Oda'] },
-            { beat: 'She shouts with the division.', who: ['Rukia Kuchiki'] },
-            { beat: 'The old soldier salutes.', who: ['Ashida Tetsuzan'] },
+            { beat: 'She shouts with the division.', follows: 'his shout lands', who: ['Rukia Kuchiki'] },
+            { beat: 'The old soldier salutes.', follows: 'her voice carries to the ranks', who: ['Ashida Tetsuzan'] },
         ] }, ['Jovan Oda', 'Rukia Kuchiki', 'Ashida Tetsuzan'], 4, {})
             .some(p => p.includes('Every panel is a single person')));
+    // Field regression, snap_31 v0.18.0: five panels in no order — the crowd already
+    // roaring in panel 1, the sword raise that caused it in panel 4.
+    check('plan: a panel that does not follow the one before it is caught',
+        S.validatePlan({ panels: [
+            { beat: 'He raises the blade.', who: ['Jovan Oda'] },
+            { beat: 'The old soldier salutes.', who: ['Ashida Tetsuzan'] },
+        ] }, ['Jovan Oda', 'Ashida Tetsuzan'], 4, {})
+            .some(p => p.includes('does not say how it follows')));
+    check('plan: a follows that merely restates its own beat is caught',
+        S.validatePlan({ panels: [
+            { beat: 'He raises the blade.', who: ['Jovan Oda'] },
+            { beat: 'The old soldier salutes the memorial stone.', follows: 'the old soldier salutes the memorial stone', who: ['Ashida Tetsuzan'] },
+        ] }, ['Jovan Oda', 'Ashida Tetsuzan'], 4, {})
+            .some(p => p.includes('just restates its own beat')));
     check('plan: an unknown name and a missing who field are caught',
-        S.validatePlan({ panels: [{ beat: 'A stranger waves.', who: ['Nobody Here'] }, { beat: 'Wind moves.', who: null }] }, ['Jovan Oda'], 4, {}).length === 2);
+        (() => { const p = S.validatePlan({ panels: [{ beat: 'A stranger waves.', who: ['Nobody Here'] }, { beat: 'Wind moves.', follows: 'the square empties', who: null }] }, ['Jovan Oda'], 4, {});
+            return p.some(x => x.includes('not in the cast sheet')) && p.some(x => x.includes('no "who" field')); })());
     check('plan: a crowd scene with no crowd frame is caught',
         S.validatePlan({ panels: [
             { beat: 'He raises the blade.', who: ['Jovan Oda'] },
-            { beat: 'She shouts beside him.', who: ['Jovan Oda', 'Rukia Kuchiki'] },
-            { beat: 'The old soldier salutes.', who: ['Ashida Tetsuzan'] },
+            { beat: 'She chants at his shoulder.', follows: 'the blade is up and she answers it', who: ['Jovan Oda', 'Rukia Kuchiki'] },
+            { beat: 'The old soldier salutes.', follows: 'her voice carries into the ranks', who: ['Ashida Tetsuzan'] },
         ] }, ['Jovan Oda', 'Rukia Kuchiki', 'Ashida Tetsuzan'], 4, { crowd: true })
             .some(p => p.includes('gives the crowd the frame')));
     check('plan: unparseable output returns null so the caller can fall back',
@@ -527,6 +544,18 @@ function defaultPatterns() { return '<details>[\\s\\S]*?</details>\n\\{[A-Z_]+\\
     // collar tabs and an eagle, because her own cast line said "lieutenant's badge".
     check('rank: a rank decoration is stripped from the cast block itself',
         S.stripRankInsignia("woman, petite, violet eyes, lieutenant's badge") === 'woman, petite, violet eyes');
+    // Field regression, snap_31 v0.18.0: 0.17.0 put a character name tag AND a body
+    // description in one block; the model's own idea of the character fought the body
+    // and returned a Renji with a woman's chest.
+    check('name: a character name tag and its work tag are stripped from the welded block',
+        (() => { const b = S.assembleIdentity([{ name: 'Renji Abarai', state: 'arms crossed' }],
+            'Renji Abarai: man, abarai renji, bleach, long red hair, brown eyes, muscular', {}).blocks[0];
+            return !b.includes('abarai renji') && !b.includes('bleach') && b.includes('long red hair') && b.includes('muscular'); })());
+    check('name: a sheet with no name tag is untouched',
+        S.stripNameTags('man, tall, muscular, white headband', 'Renji Abarai') === 'man, tall, muscular, white headband');
+    check('name: a body word that happens to match nothing survives',
+        S.stripNameTags('woman, petite, short black hair, violet eyes', 'Rukia Kuchiki') === 'woman, petite, short black hair, violet eyes');
+
     check('rank: the WELDED block never carries a rank decoration',
         (() => { const b = S.assembleIdentity([{ name: 'Rukia Kuchiki', state: 'shouting' }],
             "Rukia Kuchiki: woman, petite, short black hair, violet eyes, lieutenant's badge",
@@ -716,18 +745,24 @@ function defaultPatterns() { return '<details>[\\s\\S]*?</details>\n\\{[A-Z_]+\\
         src.includes('variety_boost: !landscape,'));
     check('src: the dress anchor lands once, not three times',
         src.includes('.filter(t => t && !(bound && bound.toLowerCase().includes(t.toLowerCase())))'));
-    check('src: canon characters get their danbooru character tag; OCs never do',
-        src.includes('CANONICAL NAME TAG') && src.includes('kuchiki rukia, bleach')
-        && src.includes('never invent a character tag for an OC')
+    check('src: auto-build describes bodies, never characters by name',
+        src.includes('NO CHARACTER NAMES IN THE TAGS, EVER') && src.includes('Describe the BODY')
         && src.includes('RANK IS NOT AN OUTFIT, in the cast line either'));
-    check('src: the strip is planned before it is rendered, and the plan is checked',
-        src.includes('const PLAN_LAWS = `') && src.includes('parsePlan(planRaw, maxPanels)')
+    check('src: the plan rides in the SAME call as the panels — no second round trip',
+        src.includes('const PLAN_LAWS = `') && src.includes('PLAN FIRST, IN THE SAME ANSWER')
+        && src.includes('plan = parsePlan(raw, maxPanels);')
         && src.includes('validatePlan(plan, castNames, maxPanels, { crowd: wantsCrowd })')
-        && src.includes('YOUR PREVIOUS PLAN WAS REJECTED:')
-        && src.includes('THE STRIP IS ALREADY PLANNED — render exactly these panels'));
-    check('src: a failed plan pass falls back to the single-call builder, never blocks the image',
-        src.includes("console.warn('[SceneSnap] plan pass failed, falling back to single-call builder:', e);")
-        && src.includes('plan = null;'));
+        && src.includes('YOUR PLAN WAS REJECTED:')
+        && !src.includes('const planRaw = await callLLM'));
+    check('src: only a plan that fails validation costs an extra call',
+        src.split('await callLLM(').length - 1 === 6);
+    check('src: beats must chain — a panel states how it follows the one before it',
+        src.includes('THE BEATS ARE A CHAIN, NOT A LIST')
+        && src.includes('STRICT CHRONOLOGY') && src.includes('does not say how it follows panel'));
+    check('src: no character or work name reaches the tags',
+        src.includes('NO CHARACTER NAMES IN THE TAGS, EVER')
+        && src.includes('stripRankInsignia(stripNameTags(hit.tags, hit.name))')
+        && !src.includes('kuchiki rukia'));
     check('src: the plan owns the world, and is surfaced in the debug popup',
         src.includes('if (plan.setting) panels.setting = stripTransientFromSetting(plan.setting);')
         && src.includes("'PLAN — (single-call builder; no plan pass)'"));
