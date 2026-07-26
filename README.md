@@ -114,6 +114,12 @@ Stella: girl, long crimson hair, red eyes, large breasts, hair ribbon, school un
 
 ## Changelog
 
+### 0.11.0 — identity is written by code
+- **The builder no longer writes any named character's appearance — ever.** Each panel now carries a `who` list of exact cast names; the extension inserts every listed character's full tag block **verbatim from the cast sheet** and computes the count tags itself. Substitution (Lisa-for-Yumichika), omission (healing a missing patient), blending (three people fused into a child), and trait drift (skin tone changing between panels) are mechanically impossible for named characters — the builder physically cannot write their looks. Unknown names are reported, never invented. At 3+ characters the extension auto-appends placement tags in `who` order.
+- **Contract**: the climax panel's victim must be in `who` (an explosion without the person it hits is a failed panel); healing/striking panels list BOTH parties; the panel prompt itself is actions/expressions/poses/effects/camera/scene only.
+- **Crowds are setting-state**: the scene's standing population belongs in `setting` and is stamped on every panel; established spectators vanishing is now a named continuity violation.
+- **NSFW skin-tone lock**: complexion joins sizes and marks as cast-sheet truth — identical in every panel and image.
+
 ### 0.10.2
 - **Effects belong to their victim.** New contract: explosion/impact/glow/wound tags live inside the block of the character they happen TO — the exploding sword detonates in its holder's hands, never in the observer's block — and that character is the panel's primary. Characters not in contact must carry explicit spatial-relation tags, and with 3+ characters every block ends with a placement tag (left/center/right/foreground/background) so the model can keep people apart.
 - **No substitutions, no hybrids, no children.** Only beat-named characters may appear, each copied verbatim from the cast; blending two people into one and rendering anyone as a child (unless their sheet says so) are contract violations. More than four foregrounded → fold extras into the crowd.

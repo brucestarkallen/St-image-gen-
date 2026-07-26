@@ -27,7 +27,7 @@ const FUNCS = [
     'normalizeForMatch', 'sanitizeBubbles', 'sanitizeBuilderOutput', 'softSanitize',
     'parsePanels', 'parseCastSheet', 'mergeCastLines', 'effectiveForcedTags',
     'composePositive', 'scanPresenceIn', 'markerDetails', 'ledgerStateLines',
-    'stripScene', 'explainError', 'isStaleSession', 'stripLayoutMeta', 'appendAnchor', 'mineDressTags', 'normalizeCountTags', 'filterRankGarments', 'getSize',
+    'stripScene', 'explainError', 'isStaleSession', 'stripLayoutMeta', 'appendAnchor', 'mineDressTags', 'normalizeCountTags', 'filterRankGarments', 'assembleIdentity', 'getSize',
 ];
 
 const prelude = `
@@ -269,6 +269,30 @@ function defaultPatterns() { return '<details>[\\s\\S]*?</details>\n\\{[A-Z_]+\\
     check('mine: empty cast tolerated', S.mineDressTags('') === '');
 }
 
+// ---------------------------------------------------------------- code-written identity
+{
+    const sheet = 'Jovan Oda: man, medium white hair, pale blue eyes, black kosode, no insignia\nRukia Kuchiki: woman, short black hair, violet eyes, shinigami uniform\nKenpachi Zaraki: man, long black hair, spiked hair with bells, eyepatch, towering muscular build\nIsane Kotetsu: woman, short silver hair, grey eyes, tall, captain haori';
+
+    const duo = S.assembleIdentity(['Isane Kotetsu', 'Kenpachi Zaraki'], sheet);
+    check('identity: counts derived from cast blocks, both parties present verbatim',
+        duo.counts === '1boy, 1girl'
+        && duo.blocks[0].startsWith('woman, short silver hair')
+        && duo.blocks[1].startsWith('man, long black hair, spiked hair with bells')
+        && duo.missing.length === 0);
+    check('identity: no placement tags at two characters', !/foreground|background|center/.test(duo.blocks.join('|')));
+
+    const trio = S.assembleIdentity(['Jovan Oda', 'Rukia Kuchiki', 'Isane Kotetsu'], sheet);
+    check('identity: three-plus get automatic placement tags in who order',
+        trio.blocks[0].endsWith(', foreground left') && trio.blocks[1].endsWith(', center') && trio.blocks[2].endsWith(', foreground right'));
+
+    const bad = S.assembleIdentity(['Jovan Oda', 'Elderly Stranger'], sheet);
+    check('identity: unknown names reported, never invented',
+        bad.missing.length === 1 && bad.missing[0] === 'Elderly Stranger' && bad.blocks.length === 1);
+    check('identity: name lookup is case-insensitive',
+        S.assembleIdentity(['jovan oda'], sheet).blocks.length === 1);
+    check('identity: empty who tolerated', S.assembleIdentity([], sheet).counts === '');
+}
+
 // ---------------------------------------------------------------- count-tag normalization
 {
     check('counts: stacked alternatives collapse to first-of-class (the field 2boys,1boy,1other bug)',
@@ -326,26 +350,30 @@ function defaultPatterns() { return '<details>[\\s\\S]*?</details>\n\\{[A-Z_]+\\
     check('src: stitch is a rigid cover-filled grid with framed cells',
         src.includes('cx.drawImage(img2, sx, sy, sw, sh, gutter, y, cellW, cellH)') && src.includes('cx.strokeRect(gutter + 2'));
     check('src: world derived once as data and stamped onto every panel by code',
-        src.includes('"setting":"<location/environment tags') && src.includes('appendAnchor(p.prompt, anchor)')
+        src.includes('"setting":"<location/environment/population tags') && src.includes('appendAnchor(p.prompt, anchor)')
         && src.includes('mineDressTags(getActiveCastSheet())'));
     check('src: public address is speaker + attending group, never a private two-shot',
         src.includes('never a private two-shot for a public address'));
-    check('src: panel discipline v3 — chronology+climax, continuity, both parties, four-cap, role-word ban, speaker orientation',
+    check('src: panel discipline — chronology+climax, continuity, both parties via who, four-cap, role-word ban, speaker orientation',
         src.includes('MUST be one of the panels') && src.includes('strict chronological order')
         && src.includes("carry the previous panel's consequences forward")
-        && src.includes('the object of the action is never cropped out')
-        && src.includes('Up to FOUR named characters per panel')
+        && src.includes('BOTH parties in "who"')
+        && src.includes('up to FOUR; fold extras into the crowd')
         && src.includes('jobs, not outfits')
         && src.includes('oriented toward whoever they address'));
     check('src: explicit scenes are tagged explicitly, anatomy locked to cast sheet',
         src.includes('EXPLICIT SCENES:') && src.includes('never euphemize') && src.includes('fullSystem += NSFW_RULE;'));
-    check('src: contract v4 — effect ownership, spatial relations, placement tags, verbatim cast, no child, one count expression',
-        src.includes('an exploding sword detonates in its holder')
-        && src.includes('explicit spatial-relation tags')
-        && src.includes('END every character block with a placement tag')
-        && src.includes('never blend two people into one')
-        && src.includes('never render anyone as a child unless their cast tags say so')
-        && src.includes("never stack alternatives like '2boys, 1boy'"));
+    check('src: contract v5 — builder never writes identity; who + code assembly own it',
+        src.includes('WHO writes identity, and WHO is not you')
+        && src.includes('zero appearance traits')
+        && src.includes("a climax panel whose victim is missing from \"who\" is a failed panel")
+        && src.includes('assembleIdentity(p.who, activeSheet)')
+        && src.includes('Never blend two people into one')
+        && src.includes('never render anyone as a child unless their cast tags say so'));
+    check('src: scene population is setting-state with continuity',
+        src.includes('standing population') && src.includes('established spectators never vanish'));
+    check('src: skin tone locked to cast tags across panels',
+        src.includes('may never change complexion between panels'));
     check('src: counts normalized and anchor rank-filtered in code, not just by contract',
         src.includes('normalizeCountTags(softSanitize(') && src.includes('filterRankGarments(panels.dress)'));
     check('src: dress field excludes rank garments by contract',

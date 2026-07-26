@@ -12,7 +12,7 @@ import { getBase64Async, saveBase64AsFile } from '../../../utils.js';
 import { callGenericPopup, POPUP_TYPE } from '../../../popup.js';
 
 const MODULE = 'sceneSnap';
-const VERSION = '0.10.2';
+const VERSION = '0.11.0';
 
 const defaultSettings = Object.freeze({
     enabled: true,
@@ -112,7 +112,7 @@ Alongside each panel prompt, pick 0-2 spoken lines for that panel's beat, copied
 // and body position accuracy is the hardest part of any scene. One canonical rule.
 const NSFW_RULE = `
 
-EXPLICIT SCENES: when the scene is sexual or nude, tag it exactly — never euphemize or fade to black. State per character: state of undress (specific garments removed/open), exposed anatomy with concrete danbooru anatomy tags (breast size class and nipples, penis/erection/testicles, pussy/vulva, pubic hair state, skin tone and texture details), and body proportions CONSISTENT with that character's cast tags in every panel. Name the exact position by its danbooru term (missionary, cowgirl position, doggystyle, standing sex, ...), the penetration or contact state, hand and leg placement, and fluids. In natural-language mode, express the same specifics as prose. Anatomy follows the cast sheet: if a character's sheet fixes sizes or marks, keep them identical in every image.`;
+EXPLICIT SCENES: when the scene is sexual or nude, tag it exactly — never euphemize or fade to black. State per character: state of undress (specific garments removed/open), exposed anatomy with concrete danbooru anatomy tags (breast size class and nipples, penis/erection/testicles, pussy/vulva, pubic hair state, skin tone and texture details), and body proportions CONSISTENT with that character's cast tags in every panel. Name the exact position by its danbooru term (missionary, cowgirl position, doggystyle, standing sex, ...), the penetration or contact state, hand and leg placement, and fluids. In natural-language mode, express the same specifics as prose. Anatomy follows the cast sheet: sizes, marks, and SKIN TONE come from cast tags and stay identical in every panel and every image — a character may never change complexion between panels.`;
 
 // One canonical grounding-authority rule, cited by both builder paths — never restated.
 const GROUNDING_RULE = `
@@ -347,6 +347,7 @@ function parsePanels(raw, style, maxPanels, opts = {}) {
                 const arr = Array.isArray(obj?.panels) ? obj.panels : [];
                 const panels = arr
                     .map(p => ({
+                        who: Array.isArray(p?.who) ? p.who.map(n => String(n).trim()).filter(Boolean).slice(0, 4) : [],
                         prompt: normalizeCountTags(softSanitize(String(p?.prompt ?? p ?? ''), style)),
                         bubbles: wantBubbles ? sanitizeBubbles(p?.bubbles, sceneText) : [],
                     }))
@@ -399,6 +400,37 @@ function filterRankGarments(tagList) {
     return String(tagList || '').split(',').map(t => t.trim())
         .filter(t => t && !/captain|lieutenant|commander|general|sergeant|king|queen|royal/i.test(t))
         .join(', ');
+}
+
+// Identity is written by code, not by the builder: look up each "who" name in the cast
+// sheet, insert its tag block verbatim, and derive the count tags from the blocks'
+// leading gender words. Substitution, omission, blending, and trait drift become
+// mechanically impossible for named characters. Placement tags are auto-appended at 3+.
+function assembleIdentity(who, sheetText) {
+    const cast = parseCastSheet(sheetText);
+    const byName = new Map(cast.map(c => [c.name.toLowerCase(), c]));
+    const blocks = [];
+    const missing = [];
+    for (const rawName of (who || []).slice(0, 4)) {
+        const hit = byName.get(String(rawName).toLowerCase());
+        if (hit) blocks.push(hit.tags);
+        else missing.push(rawName);
+    }
+    const places = ['foreground left', 'center', 'foreground right', 'background'];
+    const placed = blocks.length >= 3 ? blocks.map((b, i) => `${b}, ${places[i]}`) : blocks;
+    let boys = 0, girls = 0, others = 0;
+    for (const b of blocks) {
+        const first = String(b).split(',')[0].trim().toLowerCase();
+        if (/^(man|boy|male)$/.test(first)) boys++;
+        else if (/^(woman|girl|female)$/.test(first)) girls++;
+        else others++;
+    }
+    const counts = [
+        boys ? `${boys === 1 ? '1boy' : boys + 'boys'}` : '',
+        girls ? `${girls === 1 ? '1girl' : girls + 'girls'}` : '',
+        others ? `${others === 1 ? '1other' : others + 'others'}` : '',
+    ].filter(Boolean).join(', ');
+    return { counts, blocks: placed, missing };
 }
 
 // Append anchor tags to a prompt without duplicating tokens the prompt already has.
@@ -655,17 +687,16 @@ PANEL DISCIPLINE (binding rules for every panel):
 - Panels are the SCENE's beats in strict chronological order, first key moment to last — and the climax action itself (the strike, the explosion, the reveal) MUST be one of the panels; a strip that skips its own climax is a failed strip.
 - CONTINUITY: consecutive panels are one continuous moment in one place — carry the previous panel's consequences forward (smoke from a blast lingers in the next panel; wounds, debris, and damage persist; light and weather never change mid-scene). No panel may contradict a state an earlier panel established.
 - When someone acts ON another person (healing, striking, carrying, restraining), the panel shows BOTH — the object of the action is never cropped out. A medic kneels beside a VISIBLE patient.
-- Up to FOUR named characters per panel when the beat genuinely needs them; prefer the fewest that carry it — solo close-ups bind a character's look perfectly. Open with exact danbooru count tags (1boy / 1girl / 2boys, 1girl / multiple boys ...), then each character's FULL cast tag set as one contiguous block, primary character first. Never interleave two characters' traits.
-- The character an effect happens TO owns it: explosion, impact, glow, and wound tags live inside THAT character's block — an exploding sword detonates in its holder's hands, not in the observer's block. The panel's PRIMARY character is whoever the beat happens to.
-- Characters not in physical contact get explicit spatial-relation tags (distance between them, one in far background, facing from across the field); with THREE or more characters, END every character block with a placement tag (left / center / right / foreground / background) so the image model can keep them apart.
-- Only characters the beat names may appear, each copied VERBATIM from CAST — never substitute one cast member's traits for another, never blend two people into one, and never render anyone as a child unless their cast tags say so. If more than four people are foregrounded, keep the four most central and fold the rest into the crowd.
-- Exactly ONE count expression opens the prompt and matches the characters listed, danbooru forms only (1boy / 1girl / 2boys, 1girl / 1other) — never stack alternatives like '2boys, 1boy'.
+- WHO writes identity, and WHO is not you: list each panel's characters by their EXACT cast-sheet names in the "who" array (primary first, up to FOUR; fold extras into the crowd). The extension inserts every listed character's full appearance block VERBATIM from the cast sheet and computes the count tags itself — therefore the panel "prompt" must contain ZERO appearance traits of named characters (no hair, eyes, build, skin, clothing): only actions, expressions, poses, effects, camera, and scene. Writing a named character's looks in the prompt is a failed panel.
+- The character an effect happens TO is IN "who" and the effect tags are theirs: the exploding sword detonates around its holder — a climax panel whose victim is missing from "who" is a failed panel. Healing, striking, carrying, restraining: BOTH parties in "who"; "hand on patient" with no patient listed is a failed panel.
+- Characters not in physical contact get explicit spatial-relation tags in the prompt (distance between them, one far in the background, facing from across the field). With three or more in "who", the extension appends a placement tag to each block automatically in "who" order.
+- Never blend two people into one, and never render anyone as a child unless their cast tags say so.
 - Clothing comes ONLY from cast tags and explicit scene wording. NEVER derive clothing or armor from rank/role words: 'officer', 'captain', 'soldier', 'guard', 'division' are jobs, not outfits — writing 'military uniform' because the scene says 'officers' is a failed panel.
 - A background crowd is scenery: give it ONE collective emotion and describe its dress by copying the scene's world (what these people canonically wear), never by role words.
 - The panel's speaker (if it has a bubble) is drawn mid-speech, body and face oriented toward whoever they address — a speaker addressing a crowd faces the crowd, not the camera.
 - Actions are single concrete danbooru tags (clapping, arms crossed, pointing, hand on own chest) — never compound phrases like 'hands clapping together', which image models misread.
 - A line spoken to a group is drawn as the speaker prominent with the addressed group visible and attending — never a private two-shot for a public address.
-WORLD (derive once, as data): from the SCENE text and CAST tags, infer this world's shared clothing style and this scene's physical setting. "dress" is ONLY the universal base outfit every ordinary person wears — never rank- or status-specific garments (captain's coats/haori, armbands, crowns, insignia): those belong exclusively to the cast tags of whoever holds the rank. Never modernize: no modern uniforms, coats, neckties, or architecture unless cast tags or scene text explicitly describe them. Output both as flat tag lists in the top-level "dress" and "setting" fields — the extension stamps them onto every panel itself, so do NOT restate them inside panel prompts.${bubblesOn ? '\n\n' + BUBBLE_RULES : ''}\nOUTPUT (replaces the single-line requirement above): strict JSON only — no reasoning, no commentary, no markdown: {"setting":"<location/environment tags for this scene>","dress":"<what people of this world wear, as tags>","panels":[{"prompt":"<one prompt following all rules above>"${bubbleSchema}}]}`;
+WORLD (derive once, as data): from the SCENE text and CAST tags, infer this world's shared clothing style and this scene's physical setting. "dress" is ONLY the universal base outfit every ordinary person wears — never rank- or status-specific garments (captain's coats/haori, armbands, crowns, insignia): those belong exclusively to the cast tags of whoever holds the rank. Never modernize: no modern uniforms, coats, neckties, or architecture unless cast tags or scene text explicitly describe them. "setting" also names the scene's standing population — packed spectator stands, an empty room, a busy street: an arena full of watchers shows watchers in every panel that shows the surroundings, and established spectators never vanish (that is a continuity violation). Output both as flat tag lists in the top-level "dress" and "setting" fields — the extension stamps them onto every panel itself, so do NOT restate them inside panel prompts.${bubblesOn ? '\n\n' + BUBBLE_RULES : ''}\nOUTPUT (replaces the single-line requirement above): strict JSON only — no reasoning, no commentary, no markdown: {"setting":"<location/environment/population tags for this scene>","dress":"<what people of this world wear, as tags>","panels":[{"who":["Exact Cast Name","..."],"prompt":"<actions, expressions, poses, effects, camera, scene ONLY — zero appearance traits>"${bubbleSchema}}]}`;
     } else if (bubblesOn) {
         fullSystem += `\n\n${BUBBLE_RULES}\nOUTPUT (replaces the single-line requirement above): strict JSON only — no reasoning, no commentary, no markdown, exactly one panel: {"panels":[{"prompt":"<one prompt following all rules above>"${bubbleSchema}}]}`;
     }
@@ -684,6 +715,13 @@ WORLD (derive once, as data): from the SCENE text and CAST tags, infer this worl
     // the extension (appendAnchor) — per-panel drift to modern dress/architecture becomes
     // structurally impossible instead of being a memory test for the builder.
     const dress = filterRankGarments(panels.dress) || mineDressTags(getActiveCastSheet());
+    const activeSheet = getActiveCastSheet();
+    for (const p of panels) {
+        if (!p.who || !p.who.length) continue;
+        const id = assembleIdentity(p.who, activeSheet);
+        if (id.missing.length) console.warn('[SceneSnap] panel "who" names not in cast sheet:', id.missing);
+        p.prompt = [id.counts, ...id.blocks, p.prompt].filter(Boolean).join(', ');
+    }
     return { panels, style, raw: String(raw), setting: panels.setting || '', dress };
 }
 
