@@ -44,3 +44,12 @@
     opacity: 0.55;
     margin: 1px 0 3px 0;
 }
+
+/* Full-bleed comics: SceneSnap images fill the message column instead of ST's 40vh
+   thumbnail cap — the strip reads inline, no tap-to-fullscreen needed. */
+.mes.scenesnap-media .mes_img_container { width: 100%; }
+.mes.scenesnap-media .mes_img {
+    max-height: none;
+    width: 100%;
+    height: auto;
+}

@@ -27,7 +27,7 @@ const FUNCS = [
     'normalizeForMatch', 'sanitizeBubbles', 'sanitizeBuilderOutput', 'softSanitize',
     'parsePanels', 'parseCastSheet', 'mergeCastLines', 'effectiveForcedTags',
     'composePositive', 'scanPresenceIn', 'markerDetails', 'ledgerStateLines',
-    'stripScene', 'isCorsProxyDisabled', 'explainError', 'isStaleSession', 'classifyFetchDeath', 'getSize',
+    'stripScene', 'isCorsProxyDisabled', 'explainError', 'isStaleSession', 'classifyFetchDeath', 'stripLayoutMeta', 'getSize',
 ];
 
 const prelude = `
@@ -262,6 +262,20 @@ function defaultPatterns() { return '<details>[\\s\\S]*?</details>\n\\{[A-Z_]+\\
     S._setSettings({ sizePreset: 'portrait' });
 }
 
+// ---------------------------------------------------------------- layout-meta scrub
+{
+    // The exact field leak: builder prefixed a panel prompt with page-layout language,
+    // so NAI drew a comic page inside the panel (nested grids).
+    const leaked = 'comic strip, 4 panels, vertical layout, panel 1: wide shot, 1boy, medium white hair, black kosode, crowd, barracks courtyard';
+    const clean = S.stripLayoutMeta(leaked);
+    check('layout: leaked page language scrubbed, scene tags intact',
+        !/comic|panel|layout/i.test(clean) && clean.includes('wide shot, 1boy, medium white hair') && clean.includes('barracks courtyard'));
+    check('layout: normal prompts untouched',
+        S.stripLayoutMeta('1girl, short black hair, violet eyes, courtyard, snow') === '1girl, short black hair, violet eyes, courtyard, snow');
+    check('layout: multiple views and manga page variants scrubbed',
+        !/multiple views|manga page|4koma/i.test(S.stripLayoutMeta('multiple views, manga page, 4koma, 1boy, smile')));
+}
+
 // ---------------------------------------------------------------- fetch-death classification
 {
     check('death: server unreachable -> null (unreachable message owns it)', S.classifyFetchDeath(false) === null);
@@ -316,6 +330,12 @@ function defaultPatterns() { return '<details>[\\s\\S]*?</details>\n\\{[A-Z_]+\\
         && src.includes('Number.isInteger(seed) ? seed : Math.floor'));
     check('src: stitch is a rigid cover-filled grid with framed cells',
         src.includes('cx.drawImage(img2, sx, sy, sw, sh, gutter, y, cellW, cellH)') && src.includes('cx.strokeRect(gutter + 2'));
+    check('src: panel prompts are single frames by contract (rule + scrub wired)',
+        src.includes('never write layout words') && src.includes('stripLayoutMeta(t.replace'));
+    check('src: blocked multichar transport latches off for the session',
+        src.includes('multiCharDeadThisSession = true') && src.includes('!multiCharDeadThisSession && settings.backend'));
+    check('src: SceneSnap media renders full-bleed and survives reloads',
+        src.includes("scenesnap: true,") && src.includes('markSceneSnapMedia') && src.includes("$mes.addClass('scenesnap-media')"));
     check('src: the outfit contract is verbatim per panel',
         src.includes('never change outfits, hair, or colors between panels'));
     check('src: sequence mode floors at 2 panels — the strip is guaranteed',

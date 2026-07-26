@@ -116,6 +116,11 @@ Stella: girl, long crimson hair, red eyes, large breasts, hair ribbon, school un
 
 ## Changelog
 
+### 0.9.4
+- **Strips render full-width inline.** SceneSnap images now fill the whole message column instead of SillyTavern's 40vh thumbnail — the comic reads in the chat, no tap-to-fullscreen. Survives reloads (SceneSnap media is flagged and re-marked on chat render).
+- **No more comics-inside-panels.** Builders that leak page-layout language ("comic strip, 4 panels, panel 1:") into a panel prompt made the image model draw a nested grid inside the panel. Panel prompts are single frames by contract now: the rule is in the builder prompt AND a deterministic scrub removes layout words from every prompt. Negative-tested.
+- **Multi-char stops burning attempts.** If the browser blocks its transport once, SceneSnap skips it for the rest of the session — no repeated toast, no wasted first call, strips unaffected. The settings hint says so.
+
 ### 0.9.2
 - **Same person in every panel.** The whole strip now shares one generation seed: identical seed + identical appearance tags = the same rendition of each character across panels, instead of a fresh re-roll per panel. Works on NovelAI, Runware, and Pollinations.
 - **Rigid printed-comic grid.** Every panel cover-fills an identical cell — thin gutters, black panel frames, no letterboxing, and no stray panel size can break the layout.

@@ -12,7 +12,7 @@ import { getBase64Async, saveBase64AsFile } from '../../../utils.js';
 import { callGenericPopup, POPUP_TYPE } from '../../../popup.js';
 
 const MODULE = 'sceneSnap';
-const VERSION = '0.9.3';
+const VERSION = '0.9.4';
 
 const defaultSettings = Object.freeze({
     enabled: true,
@@ -281,9 +281,21 @@ function sanitizeBuilderOutput(text, style) {
         t = lines.join(' ').replace(/^\s*(prompt|output)\s*:\s*/i, '');
     }
 
-    t = t.replace(/^["'`]+|["'`]+$/g, '').replace(/\s+/g, ' ').trim();
+    t = stripLayoutMeta(t.replace(/^["'`]+|["'`]+$/g, '').replace(/\s+/g, ' ').trim());
     if (!t) throw new Error('Prompt builder output was empty after cleanup');
     return t.slice(0, 1500);
+}
+
+// Builders sometimes leak layout meta-language ("comic strip, 4 panels, panel 1: ...")
+// into a panel prompt, which makes the image model draw a comic page INSIDE the panel —
+// nested grids. Panels are single frames by contract; scrub layout words deterministically.
+function stripLayoutMeta(text) {
+    const layoutMetaRe = /\b(comic(?:\s+(?:strip|page))?|manga\s+page|\d+\s*panels?|panel\s*\d+\s*:?|(?:vertical|horizontal|grid|page)\s+layout|multiple\s+views|4-?koma)\b/gi;
+    return String(text || '')
+        .replace(layoutMetaRe, '')
+        .replace(/\s*,(\s*,)+/g, ',')
+        .replace(/^[\s,]+|[\s,]+$/g, '')
+        .replace(/\s{2,}/g, ' ');
 }
 
 function softSanitize(text, style) {
@@ -645,7 +657,7 @@ async function buildScenePrompt(mesId) {
     if (grounding.has) fullSystem += GROUNDING_RULE;
     const bubbleSchema = bubblesOn ? ',"bubbles":[{"speaker":"<name>","text":"<verbatim quote>"}]' : '';
     if (maxPanels > 1) {
-        fullSystem += `\n\nSEQUENCE MODE (active):\nBuild a vertical comic strip: decide how many panels (2 to ${maxPanels}) the scene's climax needs — one panel per DISTINCT visual beat, chronological order, ending on the final beat. Never fewer than 2 panels: the reader asked for a strip. Every character repeats their FULL appearance tag set verbatim in every panel they appear in — never change outfits, hair, or colors between panels.${bubblesOn ? '\n\n' + BUBBLE_RULES : ''}\nOUTPUT (replaces the single-line requirement above): strict JSON only — no reasoning, no commentary, no markdown: {"panels":[{"prompt":"<one prompt following all rules above>"${bubbleSchema}}]}`;
+        fullSystem += `\n\nSEQUENCE MODE (active):\nBuild a vertical comic strip: decide how many panels (2 to ${maxPanels}) the scene's climax needs — one panel per DISTINCT visual beat, chronological order, ending on the final beat. Never fewer than 2 panels: the reader asked for a strip. Every character repeats their FULL appearance tag set verbatim in every panel they appear in — never change outfits, hair, or colors between panels. Each panel prompt describes exactly ONE moment in ONE frame — never write layout words (comic, panel, panels, page, grid, multiple views).${bubblesOn ? '\n\n' + BUBBLE_RULES : ''}\nOUTPUT (replaces the single-line requirement above): strict JSON only — no reasoning, no commentary, no markdown: {"panels":[{"prompt":"<one prompt following all rules above>"${bubbleSchema}}]}`;
     } else if (bubblesOn) {
         fullSystem += `\n\n${BUBBLE_RULES}\nOUTPUT (replaces the single-line requirement above): strict JSON only — no reasoning, no commentary, no markdown, exactly one panel: {"panels":[{"prompt":"<one prompt following all rules above>"${bubbleSchema}}]}`;
     }
@@ -1123,7 +1135,7 @@ async function illustrateMessage(mesId, { force = false } = {}) {
         }
 
         const negative = effectiveNegative();
-        const useMultiChar = settings.backend === 'novelai' && settings.naiMultiChar
+        const useMultiChar = !multiCharDeadThisSession && settings.backend === 'novelai' && settings.naiMultiChar
             && String(settings.naiToken || '').trim() && parseCastSheet(getActiveCastSheet()).length > 0;
 
         let panelImages = [];
@@ -1158,6 +1170,8 @@ async function illustrateMessage(mesId, { force = false } = {}) {
                 // the standard route (the one Test backend exercises). The obstruction is
                 // named once per session and recorded verbatim for Show last generation.
                 multiCharError = String(e?.message || e);
+                // A browser-blocked transport stays blocked: stop burning an attempt per press.
+                if (/failed to fetch|networkerror|load failed/i.test(multiCharError)) multiCharDeadThisSession = true;
                 if (!corsWarned) { corsWarned = true; toastr.warning(`Multi-char skipped: ${multiCharError}`, 'SceneSnap', { timeOut: 15000 }); }
                 console.warn('[SceneSnap] multi-char failed — falling back to single prompt:', e);
             }
@@ -1211,11 +1225,12 @@ async function illustrateMessage(mesId, { force = false } = {}) {
             title: positive,
             negative,
             source: 'generated',
+            scenesnap: true,
         });
         msg.extra.media_index = msg.extra.media.length - 1;
 
         const $mes = $(`#chat .mes[mesid="${mesId}"]`);
-        if ($mes.length) appendMediaToMessage(msg, $mes, 'keep');
+        if ($mes.length) { appendMediaToMessage(msg, $mes, 'keep'); $mes.addClass('scenesnap-media'); }
         await ctx2.saveChat();
     } catch (err) {
         const msg = explainError(err?.message || err);
@@ -1264,12 +1279,24 @@ function onCharacterMessageRendered(mesId) {
     setTimeout(() => illustrateMessage(mesId), 100);
 }
 
+// Full-bleed comics survive reloads: any message whose media list contains a SceneSnap
+// image gets the class that lifts ST's 40vh thumbnail cap (see style.css).
+function markSceneSnapMedia() {
+    try {
+        const ctx = getContext();
+        (ctx.chat || []).forEach((m, i) => {
+            if (m?.extra?.media?.some(x => x?.scenesnap)) $(`#chat .mes[mesid="${i}"]`).addClass('scenesnap-media');
+        });
+    } catch { /* cosmetic only */ }
+}
+
 function onChatChanged() {
     suppressAutoUntil = Date.now() + 2500;
     autoDone.clear();
     setTimeout(() => {
         addAllMessageButtons();
         refreshCastUI();
+        markSceneSnapMedia();
     }, 500);
 }
 
@@ -1337,6 +1364,7 @@ function mergeCastLines(existing, incoming) {
 const castBootstrapAttempted = new Set();
 const sheetWarned = new Set();
 let corsWarned = false;
+let multiCharDeadThisSession = false;
 
 // ------------------------------------------------------------------ cast auto-build
 
@@ -1448,7 +1476,7 @@ function settingsHtml() {
                     </div>
                     <small class="snapshot_hint">Steps capped at 28 — the free-generation limit on Opus. Scale = prompt adherence, ~5 for V4.5.</small>
                     <label class="checkbox_label"><input id="snapshot_nai_multichar" type="checkbox"><span>Multi-character mode (per-character panels)</span></label>
-                    <small class="snapshot_hint">The big accuracy upgrade: sends each named character in the scene as its own NAI character panel (base scene + separate appearance per person), eliminating trait-bleed — the same structure that produces clean multi-person images in NAI's web UI. Needs the persistent token below, a cast sheet with the characters, and SillyTavern's CORS proxy (config.yaml → <code>enableCorsProxy: true</code>, restart ST). Falls back to a single prompt when any of the three is missing. Single-frame only (no comic panels).</small>
+                    <small class="snapshot_hint">The big accuracy upgrade: sends each named character in the scene as its own NAI character panel (base scene + separate appearance per person), eliminating trait-bleed — the same structure that produces clean multi-person images in NAI's web UI. Needs the persistent token below, a cast sheet with the characters, and SillyTavern's CORS proxy (config.yaml → <code>enableCorsProxy: true</code>, restart ST). Falls back to a single prompt when any of the three is missing. If this browser blocks the call (some mobile ad-shields do), SceneSnap auto-skips it for the rest of the session — strips are unaffected. Single-frame only (no comic panels).</small>
                     <label for="snapshot_nai_token">NovelAI persistent token (for multi-character mode)</label>
                     <input id="snapshot_nai_token" type="password" class="text_pole" placeholder="pst-..." autocomplete="off">
                     <small class="snapshot_hint">NovelAI → User Settings → Account → Get Persistent API Token. Different from the key ST uses for single-prompt mode. Only needed for multi-character mode.</small>
@@ -1779,7 +1807,7 @@ jQuery(async () => {
 
     eventSource.on(event_types.CHARACTER_MESSAGE_RENDERED, onCharacterMessageRendered);
     eventSource.on(event_types.CHAT_CHANGED, onChatChanged);
-    eventSource.on(event_types.APP_READY, () => setTimeout(() => { addAllMessageButtons(); refreshProfileOptions(); refreshCastUI(); }, 1000));
+    eventSource.on(event_types.APP_READY, () => setTimeout(() => { addAllMessageButtons(); refreshProfileOptions(); refreshCastUI(); markSceneSnapMedia(); }, 1000));
 
     setTimeout(addAllMessageButtons, 2000);
     console.log(`[SceneSnap] v${VERSION} loaded`);
