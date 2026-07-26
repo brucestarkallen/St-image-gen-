@@ -114,6 +114,11 @@ Stella: girl, long crimson hair, red eyes, large breasts, hair ribbon, school un
 
 ## Changelog
 
+### 0.11.1
+- **The who schema is enforced, not requested.** If the builder returns panels without `who` while a cast sheet exists, SceneSnap rejects the output and issues exactly one corrective re-call; whichever output covers more panels wins, and the image is never blocked on compliance.
+- **Compliance is visible**: Show last generation now prints a `PANEL n WHO — ...` line per panel. Verbatim cast blocks in the prompt = the new engine ran; a WHO line reading "(builder ignored the who schema)" after the retry = the builder profile itself is the problem — switch the Prompt builder LLM profile.
+- **Native-language leaks scrubbed**: builders that drop CJK tokens into tag prompts ("trail of脚印") no longer reach the image model.
+
 ### 0.11.0 — identity is written by code
 - **The builder no longer writes any named character's appearance — ever.** Each panel now carries a `who` list of exact cast names; the extension inserts every listed character's full tag block **verbatim from the cast sheet** and computes the count tags itself. Substitution (Lisa-for-Yumichika), omission (healing a missing patient), blending (three people fused into a child), and trait drift (skin tone changing between panels) are mechanically impossible for named characters — the builder physically cannot write their looks. Unknown names are reported, never invented. At 3+ characters the extension auto-appends placement tags in `who` order.
 - **Contract**: the climax panel's victim must be in `who` (an explosion without the person it hits is a failed panel); healing/striking panels list BOTH parties; the panel prompt itself is actions/expressions/poses/effects/camera/scene only.

@@ -12,7 +12,7 @@ import { getBase64Async, saveBase64AsFile } from '../../../utils.js';
 import { callGenericPopup, POPUP_TYPE } from '../../../popup.js';
 
 const MODULE = 'sceneSnap';
-const VERSION = '0.11.0';
+const VERSION = '0.11.1';
 
 const defaultSettings = Object.freeze({
     enabled: true,
@@ -263,6 +263,9 @@ function sanitizeBuilderOutput(text, style) {
             t = lines[0];
         }
         t = t.replace(/^\s*(tags?|prompt|output)\s*:\s*/i, '').replace(/\.\s*$/, '');
+        // Some builders leak native-language tokens into tag prompts ('trail of脚印' — field
+        // bug); image models read English danbooru tags, so CJK runs are stripped in tags mode.
+        t = t.replace(/[\u3000-\u9fff\uf900-\ufaff\u3040-\u30ff]+/g, '').replace(/\s{2,}/g, ' ').replace(/\s*,(\s*,)+/g, ',');
     } else {
         t = lines.join(' ').replace(/^\s*(prompt|output)\s*:\s*/i, '');
     }
@@ -710,7 +713,19 @@ WORLD (derive once, as data): from the SCENE text and CAST tags, infer this worl
         raw = await callLLM(fullSystem, user, maxTokens);
     }
     console.log('[SceneSnap] raw builder output:', String(raw).slice(0, 600));
-    const panels = parsePanels(raw, style, maxPanels, { bubbles: bubblesOn, sceneText: scene });
+    let panels = parsePanels(raw, style, maxPanels, { bubbles: bubblesOn, sceneText: scene });
+    // Enforcement, not hope: a builder that ignores the who schema gets exactly one
+    // corrective re-call. Whichever output covers more panels with who wins; the image
+    // is never blocked on compliance.
+    const whoCoverage = ps => ps.reduce((n, p) => n + (p.who && p.who.length ? 1 : 0), 0);
+    if (panels.length && whoCoverage(panels) < panels.length && parseCastSheet(getActiveCastSheet()).length) {
+        console.warn('[SceneSnap] builder ignored the who schema on', panels.length - whoCoverage(panels), 'panel(s) — issuing one corrective retry');
+        try {
+            const raw2 = await callLLM(fullSystem + `\n\nPREVIOUS OUTPUT REJECTED: every panel MUST include the "who" array of EXACT cast-sheet names, and the "prompt" must contain ZERO appearance traits of named characters. Re-output the complete corrected JSON now.`, user, maxTokens);
+            const panels2 = parsePanels(raw2, style, maxPanels, { bubbles: bubblesOn, sceneText: scene });
+            if (panels2.length && whoCoverage(panels2) > whoCoverage(panels)) { panels = panels2; raw = raw2; }
+        } catch (e) { console.warn('[SceneSnap] corrective retry failed, keeping first output:', e); }
+    }
     // World anchor: builder-derived, cast-mined as backstop. Stamped onto every panel by
     // the extension (appendAnchor) — per-panel drift to modern dress/architecture becomes
     // structurally impossible instead of being a memory test for the builder.
@@ -1030,6 +1045,7 @@ async function illustrateMessage(mesId, { force = false } = {}) {
             const finals = panels.map(p => composePositive(appendAnchor(p.prompt, anchor), style));
             debugRaw = raw;
             debugPrompts = finals.slice();
+            panels.forEach((p, i) => debugPrompts.push(`PANEL ${i + 1} WHO — ${p.who && p.who.length ? p.who.join(', ') : '(builder ignored the who schema)'}`));
             panels.forEach((p, i) => p.bubbles.forEach(b => debugPrompts.push(`PANEL ${i + 1} BUBBLE — ${b.speaker || '?'}: "${b.text}"`)));
             console.log(`[SceneSnap] ${finals.length} panel(s) (${style}):`, finals);
             // One seed for the whole strip: same character rendering in every panel.

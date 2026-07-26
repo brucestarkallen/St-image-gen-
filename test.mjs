@@ -269,6 +269,14 @@ function defaultPatterns() { return '<details>[\\s\\S]*?</details>\n\\{[A-Z_]+\\
     check('mine: empty cast tolerated', S.mineDressTags('') === '');
 }
 
+// ---------------------------------------------------------------- CJK leak scrub
+{
+    check('cjk: native-language leak stripped from tag prompts (the field 脚印 bug)',
+        S.sanitizeBuilderOutput('1boy, walking, trail of脚印 in sand, dust', 'tags') === '1boy, walking, trail of in sand, dust');
+    check('cjk: pure-english prompts untouched',
+        S.sanitizeBuilderOutput('1girl, snow, courtyard', 'tags') === '1girl, snow, courtyard');
+}
+
 // ---------------------------------------------------------------- code-written identity
 {
     const sheet = 'Jovan Oda: man, medium white hair, pale blue eyes, black kosode, no insignia\nRukia Kuchiki: woman, short black hair, violet eyes, shinigami uniform\nKenpachi Zaraki: man, long black hair, spiked hair with bells, eyepatch, towering muscular build\nIsane Kotetsu: woman, short silver hair, grey eyes, tall, captain haori';
@@ -363,6 +371,10 @@ function defaultPatterns() { return '<details>[\\s\\S]*?</details>\n\\{[A-Z_]+\\
         && src.includes('oriented toward whoever they address'));
     check('src: explicit scenes are tagged explicitly, anatomy locked to cast sheet',
         src.includes('EXPLICIT SCENES:') && src.includes('never euphemize') && src.includes('fullSystem += NSFW_RULE;'));
+    check('src: who schema is enforced with one corrective retry and surfaced in the debug popup',
+        src.includes('PREVIOUS OUTPUT REJECTED: every panel MUST include the "who" array')
+        && src.includes('whoCoverage(panels2) > whoCoverage(panels)')
+        && src.includes('(builder ignored the who schema)'));
     check('src: contract v5 — builder never writes identity; who + code assembly own it',
         src.includes('WHO writes identity, and WHO is not you')
         && src.includes('zero appearance traits')
