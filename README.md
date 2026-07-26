@@ -114,6 +114,10 @@ Stella: girl, long crimson hair, red eyes, large breasts, hair ribbon, school un
 
 ## Changelog
 
+### 0.11.2
+- **Every generation self-identifies.** Show last generation now opens with `ENGINE vX.Y.Z` and `CAST — "name": N entries (first: ...)`, and the popup header carries the version. A pasted dump can never again be ambiguous about which engine ran or which cast sheet identity was copied from — the two questions that burned this session's last three rounds.
+- Reminder the provenance line makes actionable: **each chat remembers its own active cast.** If the CAST line names an auto-built slot with paraphrased entries instead of your curated sheet, switch the cast dropdown for that chat — verbatim insertion is only as good as the sheet it copies.
+
 ### 0.11.1
 - **The who schema is enforced, not requested.** If the builder returns panels without `who` while a cast sheet exists, SceneSnap rejects the output and issues exactly one corrective re-call; whichever output covers more panels wins, and the image is never blocked on compliance.
 - **Compliance is visible**: Show last generation now prints a `PANEL n WHO — ...` line per panel. Verbatim cast blocks in the prompt = the new engine ran; a WHO line reading "(builder ignored the who schema)" after the retry = the builder profile itself is the problem — switch the Prompt builder LLM profile.

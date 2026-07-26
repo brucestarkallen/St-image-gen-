@@ -12,7 +12,7 @@ import { getBase64Async, saveBase64AsFile } from '../../../utils.js';
 import { callGenericPopup, POPUP_TYPE } from '../../../popup.js';
 
 const MODULE = 'sceneSnap';
-const VERSION = '0.11.1';
+const VERSION = '0.11.2';
 
 const defaultSettings = Object.freeze({
     enabled: true,
@@ -1045,6 +1045,13 @@ async function illustrateMessage(mesId, { force = false } = {}) {
             const finals = panels.map(p => composePositive(appendAnchor(p.prompt, anchor), style));
             debugRaw = raw;
             debugPrompts = finals.slice();
+            {
+                const castEntries = parseCastSheet(getActiveCastSheet());
+                debugPrompts.unshift(
+                    `ENGINE v${VERSION}`,
+                    `CAST — "${getActiveCastName()}": ${castEntries.length} entr${castEntries.length === 1 ? 'y' : 'ies'}${castEntries[0] ? ` (first: ${castEntries[0].name}: ${castEntries[0].tags.slice(0, 60)})` : ''}`,
+                );
+            }
             panels.forEach((p, i) => debugPrompts.push(`PANEL ${i + 1} WHO — ${p.who && p.who.length ? p.who.join(', ') : '(builder ignored the who schema)'}`));
             panels.forEach((p, i) => p.bubbles.forEach(b => debugPrompts.push(`PANEL ${i + 1} BUBBLE — ${b.speaker || '?'}: "${b.text}"`)));
             console.log(`[SceneSnap] ${finals.length} panel(s) (${style}):`, finals);
@@ -1063,7 +1070,7 @@ async function illustrateMessage(mesId, { force = false } = {}) {
         positive = finals.join('  \u25ba  ');
 
 
-        lastDebug = { time: new Date().toLocaleTimeString(), backend: settings.backend, style: resolveStyle(), raw: debugRaw, prompts: debugPrompts, negative, error: null };
+        lastDebug = { time: new Date().toLocaleTimeString(), engine: VERSION, backend: settings.backend, style: resolveStyle(), raw: debugRaw, prompts: debugPrompts, negative, error: null };
 
         const base64 = panelImages.length > 1
             ? await stitchPanels(panelImages, panelFormat)
@@ -1099,7 +1106,7 @@ async function illustrateMessage(mesId, { force = false } = {}) {
     } catch (err) {
         const msg = explainError(err?.message || err);
         if (lastDebug) lastDebug.error = msg;
-        else lastDebug = { time: new Date().toLocaleTimeString(), backend: settings.backend, style: resolveStyle(), raw: '(builder did not run)', prompts: [], negative: effectiveNegative(), error: msg };
+        else lastDebug = { time: new Date().toLocaleTimeString(), engine: VERSION, backend: settings.backend, style: resolveStyle(), raw: '(builder did not run)', prompts: [], negative: effectiveNegative(), error: msg };
         notifyError(err);
     } finally {
         inFlight.delete(mesId);
@@ -1543,7 +1550,7 @@ function bindSettings() {
         const esc = s => String(s ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;');
         const html = `<div style="text-align:left;max-height:70vh;overflow:auto">
             <h4>SceneSnap — last generation</h4>
-            <b>${esc(lastDebug.time)} · ${esc(lastDebug.backend)} · ${esc(lastDebug.style)}${lastDebug.error ? ' · <span style="color:#e66">FAILED</span>' : ''}</b>
+            <b>${esc(lastDebug.time)} · v${esc(lastDebug.engine || '?')} · ${esc(lastDebug.backend)} · ${esc(lastDebug.style)}${lastDebug.error ? ' · <span style=\"color:#e66\">FAILED</span>' : ''}</b>
             ${lastDebug.error ? `<h5>Error</h5><pre style="white-space:pre-wrap;color:#e66">${esc(lastDebug.error)}</pre>` : ''}
             <h5>Final prompt(s) sent to the image model</h5><pre style="white-space:pre-wrap">${esc((lastDebug.prompts || []).join('\n\n--- panel ---\n\n')) || '(none)'}</pre>
             <h5>Negative</h5><pre style="white-space:pre-wrap">${esc(lastDebug.negative)}</pre>

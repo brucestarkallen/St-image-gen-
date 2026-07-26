@@ -371,6 +371,11 @@ function defaultPatterns() { return '<details>[\\s\\S]*?</details>\n\\{[A-Z_]+\\
         && src.includes('oriented toward whoever they address'));
     check('src: explicit scenes are tagged explicitly, anatomy locked to cast sheet',
         src.includes('EXPLICIT SCENES:') && src.includes('never euphemize') && src.includes('fullSystem += NSFW_RULE;'));
+    check('src: every generation self-identifies — engine version + cast provenance in the debug record',
+        src.includes('`ENGINE v${VERSION}`')
+        && src.includes('CAST — "${getActiveCastName()}"')
+        && src.includes('engine: VERSION,')
+        && src.includes('v${esc(lastDebug.engine'));
     check('src: who schema is enforced with one corrective retry and surfaced in the debug popup',
         src.includes('PREVIOUS OUTPUT REJECTED: every panel MUST include the "who" array')
         && src.includes('whoCoverage(panels2) > whoCoverage(panels)')
