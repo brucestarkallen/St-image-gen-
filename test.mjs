@@ -30,6 +30,7 @@ const FUNCS = [
     'parsePanels', 'parseCastSheet', 'mergeCastLines', 'effectiveForcedTags',
     'composePositive', 'scanPresenceIn', 'markerDetails', 'ledgerStateLines',
     'stripScene', 'explainError', 'isStaleSession', 'stripLayoutMeta', 'appendAnchor', 'mineDressTags', 'normalizeCountTags', 'filterRankGarments', 'assembleIdentity', 'scrubState', 'seedForPanel', 'replaceNamesInSentence', 'capTagSafe', 'antiModernNegative', 'isPlaceholderTags', 'stripPlaceholderLines', 'getSize',
+    'backgroundFigureTag', 'dedupeAgainstAnchor',
 ];
 
 const prelude = `
@@ -710,6 +711,53 @@ function defaultPatterns() { return '<details>[\\s\\S]*?</details>\n\\{[A-Z_]+\\
         legacy.length === 1 && legacy[0].prompt === '1boy, white hair, courtyard, snow' && !legacy[0].who);
 }
 
+// ---------------------------------------------------------------- background figure keeps its verb (0.22.0)
+{
+    const sheet = 'Jovan: man, white hair, pale-blue eyes, tall, lean, black kosode\nTetsuzan: man, old man, clouded eye, spotted hands, black shihakusho';
+    // Field bug: the saluting old man rendered HOLDING the distant figure's sword,
+    // because the demotion threw the demoted figure's state away.
+    const tag = S.backgroundFigureTag([{ name: 'Jovan', state: 'holding sword overhead, sky-blue blade, distant figure in the background' }], sheet);
+    check('bg: demoted figure carries its action', /holding sword overhead/.test(tag) && /sky-blue blade/.test(tag));
+    check('bg: constant prefix/suffix kept', tag.startsWith('distant figure ') && tag.endsWith(' in the background'));
+    // Appearance and garments are scrubbed by the owner's own cast block: no second identity.
+    const app = S.backgroundFigureTag([{ name: 'Jovan', state: 'white hair, black kosode, arm raised high' }], sheet);
+    check('bg: appearance + garment scrubbed, action survives', !/white hair|black kosode/.test(app) && /arm raised high/.test(app));
+    check('bg: no state -> the old constant', S.backgroundFigureTag([{ name: 'Jovan', state: '' }], sheet) === 'distant figure in the background');
+    check('bg: unknown name tolerated (state scrubbed against empty block)',
+        /raising both fists/.test(S.backgroundFigureTag([{ name: 'Nobody', state: 'raising both fists' }], sheet)));
+    const two = S.backgroundFigureTag([
+        { name: 'Jovan', state: 'holding sword overhead' },
+        { name: 'Tetsuzan', state: 'standing at attention' },
+    ], sheet);
+    check('bg: two demoted figures both contribute, tag-safely capped',
+        /holding sword overhead/.test(two) && two.length < 60 + 'distant figure  in the background'.length);
+}
+
+// ---------------------------------------------------------------- anchor owns the environment (0.22.0)
+{
+    const anchor = 'Thirteenth Division barracks courtyard, winter morning pale sun, wind in bare branches, plum tree bare, stone fountain, wooden barracks verandas, tiled barracks rooftops, crowd of shinigami in black shihakusho, officers standing on roof tiles, scattered plum blossoms on ground, black kosode';
+    // The field prompt: the whole courtyard block restated inside the panel prompt.
+    const restated = 'wide shot, dutch angle, dramatic lighting, stone fountain, tiled barracks rooftops, scattered plum blossoms on ground, officers standing on roof tiles, fists punching the cold air, speed lines';
+    const out = S.dedupeAgainstAnchor(restated, anchor);
+    check('dedupe: restated environment tokens removed',
+        !/stone fountain|tiled barracks rooftops|scattered plum blossoms|officers standing on roof tiles/.test(out));
+    check('dedupe: camera, lighting, and ACTION survive',
+        /wide shot/.test(out) && /dutch angle/.test(out) && /dramatic lighting/.test(out) && /fists punching the cold air/.test(out) && /speed lines/.test(out));
+    // Word-set overlap in any order counts as restatement.
+    check('dedupe: reordered restatement still caught',
+        S.dedupeAgainstAnchor('full body, branches in wind bare, shouting', anchor) === 'full body, shouting');
+    // An action phrase that merely SHARES words with the anchor is not a restatement.
+    const action = S.dedupeAgainstAnchor('crowd of shinigami in black shihakusho roaring', anchor);
+    check('dedupe: action phrase with extra words survives', action === 'crowd of shinigami in black shihakusho roaring');
+    // Single-word tokens are never anchor-claimed (too aggressive otherwise).
+    check('dedupe: single-word tokens survive', S.dedupeAgainstAnchor('wind, shouting', anchor) === 'wind, shouting');
+    // Self-duplicates inside one prompt collapse.
+    check('dedupe: self-duplicates collapse',
+        S.dedupeAgainstAnchor('wide shot, lens flare, lens flare, wind', '') === 'wide shot, lens flare, wind');
+    check('dedupe: empty anchor tolerated', S.dedupeAgainstAnchor('1boy, shouting', '') === '1boy, shouting');
+    check('dedupe: empty prompt tolerated', S.dedupeAgainstAnchor('', anchor) === '');
+}
+
 // ---------------------------------------------------------------- source-level invariants
 {
     check('src: single-panel bubble mode requests strict JSON', src.includes('exactly one panel'));
@@ -811,7 +859,10 @@ function defaultPatterns() { return '<details>[\\s\\S]*?</details>\n\\{[A-Z_]+\\
         && src.includes('nazi, swastika, iron cross'));
     check('src: the count run follows block order',
         src.includes('const counts = seen.map(k => label(k, nOf(k))).join(\', \');')
-        && src.includes('[id.counts, ...id.blocks, bgTag, p.prompt]'));
+        && src.includes('[id.counts, ...id.blocks, bgTag, dedupeAgainstAnchor(p.prompt, anchorText)]'));
+    check('src: anchor owns the environment — dedupe wired into BOTH panel paths',
+        src.includes("crowdHere ? '6+boys, 6+girls, crowd' : '', dedupeAgainstAnchor(p.prompt, anchorText)")
+        && src.includes('const bgTag = background.length ? backgroundFigureTag(background, activeSheet) : \'\';'));
     check('src: a two-shot must name what passes between the pair, and no lone repeat',
         src.includes('without saying what passes between them')
         && src.includes('Never give the same lone character two panels in a row')

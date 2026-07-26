@@ -12,7 +12,7 @@ import { getBase64Async, saveBase64AsFile } from '../../../utils.js';
 import { callGenericPopup, POPUP_TYPE } from '../../../popup.js';
 
 const MODULE = 'sceneSnap';
-const VERSION = '0.21.0';
+const VERSION = '0.22.0';
 
 const defaultSettings = Object.freeze({
     enabled: true,
@@ -639,6 +639,55 @@ function splitPrincipals(who) {
     return { principals: fore, background: back };
 }
 
+// A demoted background figure's STATE is demoted with it. 0.21.0 replaced the whole
+// entry with the constant "distant figure in the background", which threw the figure's
+// action away — the raised sky-blue blade floated free in the shared prompt and the
+// image model bound it to the only person left in the frame (field: the saluting old
+// man rendered HOLDING the sword, in black, because the blade's colour died with the
+// demoted state). The demotion now carries the figure's action along, scrubbed of
+// appearance and garments: a background figure gets no second identity, only its verb.
+function backgroundFigureTag(background, sheetText) {
+    const byName = new Map(parseCastSheet(sheetText).map(c => [c.name.toLowerCase(), c]));
+    const bits = [];
+    for (const w of (background || []).slice(0, 2)) {
+        const hit = byName.get(String(w?.name || '').trim().toLowerCase());
+        const action = scrubState(String(w?.state || ''), hit ? hit.tags : '');
+        if (action) bits.push(action);
+    }
+    const act = capTagSafe(bits.join(', '), 120);
+    return act ? `distant figure ${act} in the background` : 'distant figure in the background';
+}
+
+// Environment facts have exactly ONE owner: the world anchor (setting + dress),
+// stamped once per panel by appendAnchor. The builder keeps restating the whole
+// location block inside every panel's shared prompt (field: the same 15-tag
+// courtyard block in all four frames of one strip), which tripled prompt length,
+// drowned the character state tags, and — with atmosphere tags stacked three deep —
+// flattened the crowd into grey fog and then into nobody at all. Enforcement mirrors
+// scrubState: a shared-prompt token that restates an anchor token (exact, or every
+// word already owned by the anchor) is dropped, and the anchor's canonical wording is
+// what gets stamped. Self-duplicates inside the prompt go too. Runs ONLY on the
+// shared prompt — never on identity blocks, which own their tags outright.
+function dedupeAgainstAnchor(prompt, anchor) {
+    const anchorToks = String(anchor || '').split(',').map(t => t.trim().toLowerCase()).filter(Boolean);
+    const anchorSet = new Set(anchorToks);
+    const anchorWords = new Set(anchorToks.flatMap(t => t.split(/[\s-]+/)).filter(Boolean));
+    const seen = new Set();
+    const out = [];
+    for (const raw of String(prompt || '').split(',')) {
+        const t = raw.trim();
+        if (!t) continue;
+        const low = t.toLowerCase();
+        if (seen.has(low)) continue;
+        seen.add(low);
+        if (anchorSet.has(low)) continue;
+        const words = low.split(/[\s-]+/).filter(Boolean);
+        if (words.length >= 2 && words.every(w => anchorWords.has(w))) continue;
+        out.push(t);
+    }
+    return out.join(', ');
+}
+
 function assembleIdentity(who, sheetText, opts = {}) {
     const cast = parseCastSheet(sheetText);
     const byName = new Map(cast.map(c => [c.name.toLowerCase(), c]));
@@ -1221,7 +1270,9 @@ ${FRAME_LAWS}${bubblesOn ? '\n\n' + BUBBLE_RULES : ''}\nOUTPUT (replaces the sin
             // population count and the shot grammar, and no identity weld to skip.
             // `crowd` on its own describes a mood, not a headcount, and the field run
             // returned an empty courtyard. These are the tags that put people in a frame.
-            p.prompt = enforceShotGrammar([crowdHere ? '6+boys, 6+girls, crowd' : '', p.prompt].filter(Boolean).join(', '));
+            // Dedupe FIRST: the crowd-action tags this frame lives or dies by were
+            // drowning in a triple-restated location block.
+            p.prompt = enforceShotGrammar([crowdHere ? '6+boys, 6+girls, crowd' : '', dedupeAgainstAnchor(p.prompt, anchorText)].filter(Boolean).join(', '));
             p.welded = false;
             continue;
         }
@@ -1229,8 +1280,8 @@ ${FRAME_LAWS}${bubblesOn ? '\n\n' + BUBBLE_RULES : ''}\nOUTPUT (replaces the sin
         if (background.length) console.warn('[SceneSnap] background figure(s) demoted out of who:', background.map(w => w.name));
         const id = assembleIdentity(principals, activeSheet, { dress: firstGarmentTag(dress) });
         if (id.missing.length) console.warn('[SceneSnap] panel "who" names still not in cast sheet:', id.missing);
-        const bgTag = background.length ? 'distant figure in the background' : '';
-        p.prompt = enforceShotGrammar([id.counts, ...id.blocks, bgTag, p.prompt].filter(Boolean).join(', '));
+        const bgTag = background.length ? backgroundFigureTag(background, activeSheet) : '';
+        p.prompt = enforceShotGrammar([id.counts, ...id.blocks, bgTag, dedupeAgainstAnchor(p.prompt, anchorText)].filter(Boolean).join(', '));
         p.who = principals;
         // Identity welded by code — the seed no longer has to protect subject appearance.
         p.welded = id.blocks.length > 0;
