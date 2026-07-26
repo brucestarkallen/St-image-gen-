@@ -12,7 +12,7 @@ import { getBase64Async, saveBase64AsFile } from '../../../utils.js';
 import { callGenericPopup, POPUP_TYPE } from '../../../popup.js';
 
 const MODULE = 'sceneSnap';
-const VERSION = '0.8.4';
+const VERSION = '0.8.5';
 
 const defaultSettings = Object.freeze({
     enabled: true,
@@ -895,7 +895,14 @@ async function generateNovelAIMulti(base, charTags, negative) {
         throw new Error(`NovelAI multi-char: ${res.status} ${text.slice(0, 200)}`);
     }
     // Response is a zip containing image_0.png — extract the first PNG.
-    const buf = new Uint8Array(await res.arrayBuffer());
+    let bodyBytes;
+    try {
+        bodyBytes = await res.arrayBuffer();
+    } catch (bodyErr) {
+        // Body died mid-transfer: classify with evidence, same as a dead fetch.
+        throw classifyFetchDeath(await probeServerUp()) || bodyErr;
+    }
+    const buf = new Uint8Array(bodyBytes);
     const b64 = await extractFirstPngFromZip(buf);
     return { format: 'png', data: b64 };
 }
@@ -1102,6 +1109,7 @@ async function illustrateMessage(mesId, { force = false } = {}) {
         let debugPrompts = [];
 
         let multiRan = false;
+        let multiCharError = null;
         if (useMultiChar) {
             // NovelAI native multi-character: base scene + per-character panels, single generation.
             const scene = await getSceneText(mesId);
@@ -1122,12 +1130,12 @@ async function illustrateMessage(mesId, { force = false } = {}) {
                 multiRan = true;
                 console.log(`[SceneSnap] NAI multi-char: 1 base + ${spec.chars.length} character panels`);
             } catch (e) {
-                if (!e?.corsProxyDisabled && !e?.blockedInBrowser) throw e;
-                // Same degradation ladder as a missing token/cast: the image still ships,
-                // the exact fix (enable the proxy / allow the site in the blocker) is named
-                // once per session.
-                if (!corsWarned) { corsWarned = true; toastr.warning(e.message, 'SceneSnap', { timeOut: 15000 }); }
-                console.warn('[SceneSnap] multi-char unavailable (CORS proxy disabled) — falling back to single prompt');
+                // Multi-char is best-effort: whatever stopped it, the image still ships via
+                // the standard route (the one Test backend exercises). The obstruction is
+                // named once per session and recorded verbatim for Show last generation.
+                multiCharError = String(e?.message || e);
+                if (!corsWarned) { corsWarned = true; toastr.warning(`Multi-char skipped: ${multiCharError}`, 'SceneSnap', { timeOut: 15000 }); }
+                console.warn('[SceneSnap] multi-char failed — falling back to single prompt:', e);
             }
         }
         if (!multiRan) {
@@ -1151,7 +1159,7 @@ async function illustrateMessage(mesId, { force = false } = {}) {
         }
 
 
-        lastDebug = { time: new Date().toLocaleTimeString(), backend: settings.backend + (multiRan ? ' (multi-char)' : ''), style: multiRan ? 'nai-multichar' : resolveStyle(), raw: debugRaw, prompts: debugPrompts, negative, error: null };
+        lastDebug = { time: new Date().toLocaleTimeString(), backend: settings.backend + (multiRan ? ' (multi-char)' : (multiCharError ? ' (multi-char failed \u2192 single)' : '')), style: multiRan ? 'nai-multichar' : resolveStyle(), multiCharError, raw: debugRaw, prompts: debugPrompts, negative, error: null };
 
         const base64 = panelImages.length > 1
             ? await stitchPanels(panelImages, panelFormat)
@@ -1630,6 +1638,7 @@ function bindSettings() {
             <h4>SceneSnap — last generation</h4>
             <b>${esc(lastDebug.time)} · ${esc(lastDebug.backend)} · ${esc(lastDebug.style)}${lastDebug.error ? ' · <span style="color:#e66">FAILED</span>' : ''}</b>
             ${lastDebug.error ? `<h5>Error</h5><pre style="white-space:pre-wrap;color:#e66">${esc(lastDebug.error)}</pre>` : ''}
+            ${lastDebug.multiCharError ? `<h5>Multi-char skipped (image fell back to single prompt)</h5><pre style="white-space:pre-wrap;color:#ea3">${esc(lastDebug.multiCharError)}</pre>` : ''}
             <h5>Final prompt(s) sent to the image model</h5><pre style="white-space:pre-wrap">${esc((lastDebug.prompts || []).join('\n\n--- panel ---\n\n')) || '(none)'}</pre>
             <h5>Negative</h5><pre style="white-space:pre-wrap">${esc(lastDebug.negative)}</pre>
             <h5>Raw builder output</h5><pre style="white-space:pre-wrap">${esc(lastDebug.raw)}</pre>

@@ -116,6 +116,10 @@ Stella: girl, long crimson hair, red eyes, large breasts, hair ribbon, school un
 
 ## Changelog
 
+### 0.8.5
+- **The button always ships an image.** Multi-character mode is now best-effort: if its request fails for any reason at all, SceneSnap generates the same scene through the standard route (the exact path "Test backend" exercises) instead of erroring out with nothing. The obstruction is named once in a yellow toast ("Multi-char skipped: ...") and recorded verbatim in **Show last generation** under "Multi-char skipped".
+- Mid-transfer body deaths get the same evidence-based classification as dead fetches (server probed, verdict stated).
+
 ### 0.8.4
 - **Multi-char proxy URL is now percent-encoded** (`/proxy/https%3A%2F%2F...`). A raw `https://` embedded in a request path is the exact shape content/privacy blockers kill as "proxy circumvention", and some stacks normalize the double slash; the encoded form is byte-identical server-side (verified against a live ST) and gives filters nothing to match.
 - **Fetch deaths are measured, not assumed**: if the proxy request dies at browser level, SceneSnap probes `GET /version`. Server up → "a blocker in this browser killed the request" (and falls back to single-prompt so the image still ships). Server down → the existing unreachable message. No more guessing which one it was.

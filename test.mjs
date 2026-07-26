@@ -273,6 +273,12 @@ function defaultPatterns() { return '<details>[\\s\\S]*?</details>\n\\{[A-Z_]+\\
         !src.includes("fetch('https://image.novelai.net"));
     check('src: proxy target is percent-encoded into the path',
         src.includes('/proxy/${encodeURIComponent(NAI_IMAGE_ENDPOINT)}') && !src.includes('/proxy/${NAI_IMAGE_ENDPOINT}'));
+    check('src: multi-char degrades to single prompt on ANY failure (never selective rethrow)',
+        src.includes('multiCharError = String(e?.message || e)') && !src.includes("if (!e?.corsProxyDisabled && !e?.blockedInBrowser) throw e;"));
+    check('src: the multi-char obstruction is shown in the debug popup',
+        src.includes('Multi-char skipped (image fell back to single prompt)'));
+    check('src: mid-transfer body death gets the same evidence-based classification',
+        src.includes('classifyFetchDeath(await probeServerUp()) || bodyErr'));
     check('src: fetch death is classified by probing /version, not assumed',
         src.includes("fetch('/version'") && src.includes('classifyFetchDeath(await probeServerUp())'));
     check('src: generateRaw fallback precedes quiet prompt',
