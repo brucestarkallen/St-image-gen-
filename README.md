@@ -58,7 +58,7 @@ Check **Show last generation** to see the exact base prompt and per-character pa
 
 ## Comic sequence mode
 
-Set **Max panels** to 2–4 and the builder decides *per scene* whether the climax is one frozen frame or a sequence of distinct beats (a liver shot → the fold → the collar grab), keeping character tags identical across panels. Panels are generated back-to-back and stitched into a single comic strip (2–3 side by side, 4 in a grid). Default is 1 — behavior unchanged unless you raise it.
+Set **Max panels** to 2–4 and the builder decides *per scene* whether the climax is one frozen frame or a sequence of distinct beats (a liver shot → the fold → the collar grab), keeping character tags identical across panels. Panels are generated back-to-back and stitched into a single vertical strip — identical framed cells, printed-comic gutters, top-to-bottom read. Default is 1 — behavior unchanged unless you raise it.
 
 ## Dialogue bubbles (the comic-text upgrade)
 
@@ -113,6 +113,14 @@ Stella: girl, long crimson hair, red eyes, large breasts, hair ribbon, school un
 - **Auto mode fired on an old message** — it only targets the newest AI message and suppresses itself for a moment after chat switches; if you see otherwise, report the console log.
 
 ## Changelog
+
+### 0.13.0 — identity is code in EVERY mode
+- **Fixed: cast names containing "t" leaked into composition sentences.** The name-escape class had stray letters spliced into it, so any such name compiled to a regex demanding literal tab characters and silently never matched — "Matsumoto", "Hitsugaya", "Kotetsu" all rode into sentences verbatim, violating the names-are-semantic-zeros contract. Escaping now lives in one canonical top-level `escRe` helper (nested-template mangling is structurally impossible), it is behavior-tested against metacharacters and bracketed names (an unescaped `[` threw and killed the whole generation), and role words are now faithful to the sheet's gender word — a `boy` reads "the boy" in the sentence, never "the man".
+- **Single frames get the full structured contract.** With a cast sheet present (tags style), Max panels = 1 now sends the same `who`/`state`/`sentence`/`setting`/`dress` JSON schema as sequence mode: identity welded verbatim by code, states bound to their owners, shot grammar + acting density mandated, the world anchor stamped, the composition sentence riding at the end. Before this, single-frame identity was builder-written — every identity bug class the who-weld was built to kill still lived in the default mode.
+- **Fixed: one wasted builder call on every default-mode image.** The who-compliance retry demanded a schema that single-frame prompts never sent, so each single-frame generation with a cast burned a second, contradictory builder call — and whichever output happened to include `who` won, coin-flipping between two identity regimes. The retry now fires only when the schema was actually sent, and Show last generation says "(single frame — builder-written identity)" instead of falsely accusing the builder when it wasn't.
+- **One canonical `FRAME_LAWS` block** now carries the per-frame laws (who-weld, two-cap, shot grammar, acting density, sentence, clothing-from-cast-only, crowd, effect ownership, WORLD data contract), cited by both builder modes — strip-specific rules (chronology, continuity, panel-splitting, camera variation) stay in sequence mode. No restatement, no drift.
+- **Hardening:** overlong `who` states are cut at a tag boundary, never mid-word; a panel object without a `prompt` is dropped instead of becoming a literal "[object Object]" prompt; `multiple boys/girls` count tags keep their space instead of squishing into an invalid token; gender words are detected by word boundary, so `young man` / `old woman` sheet lines count and read correctly.
+- Gate: 127 → 146 checks; all seven new guards negative-tested (each bug reintroduced in a scratch copy must fail the harness, proven).
 
 ### 0.12.8
 - **Placeholder lines are empty slots, not entries.** `(appearance unknown — fill in)` no longer blocks anything: it counts as missing at assembly (junk tags can never enter a prompt), the cast author no longer sees it in the skip-list, and merging replaces it with the real line. The snap button heals them itself — from the wiki cache, story text, or canon knowledge — with zero manual steps, including no deleting.

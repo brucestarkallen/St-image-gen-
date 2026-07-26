@@ -12,7 +12,7 @@ import { getBase64Async, saveBase64AsFile } from '../../../utils.js';
 import { callGenericPopup, POPUP_TYPE } from '../../../popup.js';
 
 const MODULE = 'sceneSnap';
-const VERSION = '0.12.8';
+const VERSION = '0.13.0';
 
 const defaultSettings = Object.freeze({
     enabled: true,
@@ -121,6 +121,28 @@ EXPLICIT SCENES: when the scene is sexual or nude, tag it exactly — never euph
 const GROUNDING_RULE = `
 
 GROUND TRUTH: when a CURRENT WORLD STATE block is provided, it is authoritative — its ON SCREEN list defines who may be depicted (OFF SCREEN characters are forbidden even if the prose mentions them), and its per-character lines give current location, condition, activity, and clothing, overriding sheet defaults and any assumption. PRECEDING CONTEXT is reference only, for resolving pronouns, place, time, and outfits — the illustration always depicts the SCENE's final beat, never events from the preceding context.`;
+
+// One canonical per-frame law block, cited by BOTH builder modes (sequence and
+// structured single frame) — never restated. Identity/state welding, the two-cap,
+// shot grammar, acting density, the composition sentence, and the WORLD data contract
+// live here once.
+const FRAME_LAWS = `PANEL DISCIPLINE (binding rules for every panel):
+- When someone acts ON another person (healing, striking, carrying, restraining), the panel shows BOTH — the object of the action is never cropped out. A medic kneels beside a VISIBLE patient.
+- WHO writes identity AND owns state, and WHO is not you: list each panel's characters in "who" as {"name": exact cast-sheet name, "state": THAT character's pose, expression, wounds, and action tags} — primary first, AT MOST TWO. Two is model physics, not preference: single-prompt tag binding cannot reliably assign a garment or a wound across three people, so a frame never holds more than two principals — everyone else is crowd. The extension enforces the cap.
+- USE both slots when the beat has two people: a spoken line addressed to a present character is a TWO-shot (speaker AND addressee in "who") — solo frames are for reactions and for beats where a character is genuinely alone.
+- A panel that carries a dialogue bubble must SHOW ITS SPEAKER'S FACE: dialogue never rides a from-behind, neck-down, or faceless framing of its own speaker. The extension inserts each character's appearance block VERBATIM from the cast sheet, welds their state onto it, and computes the counts — one contiguous run per character, so the image model cannot give one character's laugh or wound to another. The panel "prompt" therefore contains ONLY what is shared: camera, lighting, atmosphere, environment, and scene-wide effects. A per-character detail in the shared prompt, or any appearance trait anywhere, is a failed panel.
+- The character an effect happens TO carries it in their OWN "state": the exploding sword detonates in its holder's state, the wound bleeds in the wounded one's state — a climax panel whose victim is missing from "who" is a failed panel. Healing, striking, carrying, restraining: BOTH parties in "who", each with their own state; "hand on patient" with no patient listed is a failed panel.
+- Characters not in physical contact get explicit spatial-relation tags in the prompt (distance between them, one far in the background, facing from across the field). With three or more in "who", the extension appends a placement tag to each block automatically in "who" order.
+- SHOT GRAMMAR (every panel's "prompt", mandatory): exactly ONE framing tag (close-up / upper body / cowboy shot / full body / wide shot) + exactly ONE angle tag (from below / from behind / from side / eye level / dutch angle) + lighting and atmosphere tags (dramatic lighting, sunlight, lens flare, backlighting, wind, dust motes, motion blur where there is motion).
+- ACTING DENSITY: each character's "state" is 4-8 concrete tags — pose AND expression AND gaze AND one physical emotive detail (tears streaming, clenched fist at chest, open mouth shouting, trembling hands). A two-tag state is a failed panel.
+- "sentence" is where natural language earns its keep: ONE short plain-English sentence per panel stating the spatial arrangement and interaction ("She kneels beside him at the crater's center, pressing both hands to his chest while the crowd watches from the stands."). Relations only — any appearance word there is a failed panel.
+- Never blend two people into one, and never render anyone as a child unless their cast tags say so.
+- Clothing comes ONLY from cast tags and explicit scene wording. NEVER derive clothing or armor from rank/role words: 'officer', 'captain', 'soldier', 'guard', 'division' are jobs, not outfits — writing 'military uniform' because the scene says 'officers' is a failed panel.
+- A background crowd is scenery: give it ONE collective emotion and describe its dress by copying the scene's world (what these people canonically wear), never by role words.
+- The panel's speaker (if it has a bubble) is drawn mid-speech, body and face oriented toward whoever they address — a speaker addressing a crowd faces the crowd, not the camera.
+- Actions are single concrete danbooru tags (clapping, arms crossed, pointing, hand on own chest) — never compound phrases like 'hands clapping together', which image models misread.
+- A line spoken to a group is drawn as the speaker prominent with the addressed group visible and attending — never a private two-shot for a public address.
+WORLD (derive once, as data): from the SCENE text and CAST tags, infer this world's shared clothing style and this scene's physical setting. "dress" is ONLY the universal base outfit every ordinary person wears — never rank- or status-specific garments (captain's coats/haori, armbands, crowns, insignia): those belong exclusively to the cast tags of whoever holds the rank. Never modernize: no modern uniforms, coats, neckties, or architecture unless cast tags or scene text explicitly describe them. "setting" also names the scene's standing population AND that population's dress ("packed stands of shinigami in black shihakushō", "crowd of villagers in gray work clothes") — an unnamed crowd dress is how background people modernize: an arena full of watchers shows watchers in every panel that shows the surroundings, and established spectators never vanish (that is a continuity violation). Output both as flat tag lists in the top-level "dress" and "setting" fields — the extension stamps them onto every panel itself, so do NOT restate them inside panel prompts.`;
 
 // Same default presence-marker patterns as Summaryception's ledger: a preset's
 // [IST: name|state] in-scene tracker and [ACW: name|...] off-screen watchlist.
@@ -345,7 +367,7 @@ function parsePanels(raw, style, maxPanels, opts = {}) {
         .replace(/<think>[\s\S]*?<\/think>/gi, '')
         .replace(/```json\n?|```/gi, '')
         .trim();
-    if (maxPanels > 1 || wantBubbles) {
+    if (maxPanels > 1 || wantBubbles || opts.expectJson) {
         const match = cleaned.match(/\{[\s\S]*\}/);
         if (match) {
             try {
@@ -355,10 +377,10 @@ function parsePanels(raw, style, maxPanels, opts = {}) {
                     .map(p => ({
                         sentence: stripLayoutMeta(String(p?.sentence ?? '').replace(/["`\n]+/g, ' ')).replace(/\s{2,}/g, ' ').trim().slice(0, 220),
                         who: Array.isArray(p?.who) ? p.who.map(w => {
-                            if (w && typeof w === 'object') return { name: String(w.name ?? '').trim(), state: stripLayoutMeta(String(w.state ?? '')).slice(0, 500) };
+                            if (w && typeof w === 'object') return { name: String(w.name ?? '').trim(), state: capTagSafe(stripLayoutMeta(String(w.state ?? '')), 500) };
                             return { name: String(w ?? '').trim(), state: '' };
                         }).filter(w => w.name).slice(0, 2) : [],
-                        prompt: normalizeCountTags(softSanitize(String(p?.prompt ?? p ?? ''), style)),
+                        prompt: normalizeCountTags(softSanitize(typeof p === 'string' ? p : String(p?.prompt ?? ''), style)),
                         bubbles: wantBubbles ? sanitizeBubbles(p?.bubbles, sceneText) : [],
                     }))
                     .filter(p => p.prompt)
@@ -391,9 +413,12 @@ function parsePanels(raw, style, maxPanels, opts = {}) {
 function normalizeCountTags(prompt) {
     const toks = String(prompt || '').split(',').map(t => t.trim());
     const isCount = t => /^(?:\d+|multiple)\s*(?:boys?|girls?|others?|men|man|women|woman)$/i.test(t);
-    const canon = t => t.toLowerCase().replace(/\s+/g, '')
-        .replace(/women$/, 'girls').replace(/woman$/, 'girl')
-        .replace(/men$/, 'boys').replace(/man$/, 'boy');
+    const canon = t => {
+        const s = t.toLowerCase().replace(/\s+/g, '')
+            .replace(/women$/, 'girls').replace(/woman$/, 'girl')
+            .replace(/men$/, 'boys').replace(/man$/, 'boy');
+        return s.startsWith('multiple') ? 'multiple ' + s.slice(8) : s;
+    };
     const classOf = t => /boys?$/.test(canon(t)) ? 'b' : /girls?$/.test(canon(t)) ? 'g' : 'o';
     let i = 0; const seen = new Set(); const head = [];
     while (i < toks.length && isCount(toks[i])) {
@@ -441,6 +466,16 @@ function scrubState(state, blockTags) {
     return out.join(', ');
 }
 
+// Tag-safe truncation: an overlong tag list is cut at the last complete tag,
+// never mid-word — mid-word fragments ('towering mus') poison prompts.
+function capTagSafe(text, n) {
+    const s = String(text || '');
+    if (s.length <= n) return s;
+    const cut = s.slice(0, n);
+    const at = cut.lastIndexOf(',');
+    return (at > 0 ? cut.slice(0, at) : cut).trim();
+}
+
 // "(appearance unknown — fill in)" lines are empty slots, not entries: they must
 // never block re-seeding and never leak junk tags into a prompt.
 function isPlaceholderTags(tags) {
@@ -468,8 +503,8 @@ function assembleIdentity(who, sheetText) {
     let boys = 0, girls = 0, others = 0;
     for (const b of blocks) {
         const first = String(b).split(',')[0].trim().toLowerCase();
-        if (/^(man|boy|male)$/.test(first)) boys++;
-        else if (/^(woman|girl|female)$/.test(first)) girls++;
+        if (/\b(?:woman|girl|female)\b/.test(first)) girls++;
+        else if (/\b(?:man|boy|male)\b/.test(first)) boys++;
         else others++;
     }
     const counts = [
@@ -480,6 +515,11 @@ function assembleIdentity(who, sheetText) {
     return { counts, blocks: placed, missing };
 }
 
+// Escape a name for RegExp embedding. Top-level on purpose: this class once
+// shipped with stray letters spliced in (any name containing 't' compiled to a
+// tab and silently never matched). Canonical, behavior-tested, never inlined.
+const escRe = s => String(s).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+
 // Names are semantic zeros to tag-native image models. Sentences must speak in role
 // words; any cast name that leaks in is substituted by the character's gender word.
 function replaceNamesInSentence(sentence, sheetText) {
@@ -487,11 +527,12 @@ function replaceNamesInSentence(sentence, sheetText) {
     if (!out) return out;
     for (const c of parseCastSheet(sheetText)) {
         const first = String(c.tags).split(',')[0].trim().toLowerCase();
-        const role = /^(man|boy|male)$/.test(first) ? 'the man' : /^(woman|girl|female)$/.test(first) ? 'the woman' : 'the figure';
+        const gm = first.match(/\b(woman|girl|female|man|boy|male)\b/);
+        const role = gm ? (gm[1] === 'female' ? 'the woman' : gm[1] === 'male' ? 'the man' : `the ${gm[1]}`) : 'the figure';
         const parts = c.name.split(/\s+/).filter(Boolean);
         for (const token of [c.name, ...parts]) {
             if (token.length < 3) continue;
-            out = out.replace(new RegExp(`\\b${token.replace(/[.*+?^$item{}()|[\\]\\\\]/g, '\\$&')}\\b`, 'g'), role);
+            out = out.replace(new RegExp(`\\b${escRe(token)}\\b`, 'g'), role);
         }
     }
     return out.replace(/\b(the (?:man|woman|boy|girl|figure))( and \1)+\b/g, '$1').replace(/\s{2,}/g, ' ');
@@ -764,6 +805,12 @@ async function buildScenePrompt(mesId) {
     ].filter(Boolean).join('\n\n');
 
     const maxPanels = Math.min(6, Math.max(1, Number(settings.maxPanels) || 1));
+    const castEntryCount = parseCastSheet(getActiveCastSheet()).length;
+    // Identity is code in EVERY mode: a single frame gets the same structured who
+    // contract when a cast exists (tags style — the binding language). Before this,
+    // single-frame identity was builder-written and the who-retry fired against a
+    // schema that was never sent — one wasted, contradictory builder call per image.
+    const structuredSingle = maxPanels === 1 && style === 'tags' && castEntryCount > 0;
     let fullSystem = system;
     if (settings.backend === 'novelai' && style === 'tags') {
         fullSystem += '\n\nTARGET MODEL: NovelAI Diffusion V4.5 — blend Danbooru tags with a few short natural phrases used as tags (e.g. "moonlit stone alley at night", "crowded arena under harsh sun"); count tags and sheet-verbatim appearance rules still apply.';
@@ -773,30 +820,21 @@ async function buildScenePrompt(mesId) {
     const bubbleSchema = bubblesOn ? ',"bubbles":[{"speaker":"<name>","text":"<verbatim quote>"}]' : '';
     if (maxPanels > 1) {
         fullSystem += `\n\nSEQUENCE MODE (active):\nBuild a vertical comic strip: decide how many panels (2 to ${maxPanels}) the scene's climax needs — one panel per DISTINCT visual beat, chronological order, ending on the final beat. Never fewer than 2 panels: the reader asked for a strip. Every character repeats their FULL appearance tag set verbatim in every panel they appear in — never change outfits, hair, or colors between panels. Each panel prompt describes exactly ONE moment in ONE frame — never write layout words (comic, panel, panels, page, grid, multiple views).
-PANEL DISCIPLINE (binding rules for every panel):
+${FRAME_LAWS}
+STRIP RULES (sequence mode only):
 - Panels are the SCENE's beats in strict chronological order, first key moment to last — and the climax action itself (the strike, the explosion, the reveal) MUST be one of the panels; a strip that skips its own climax is a failed strip.
 - CONTINUITY: consecutive panels are one continuous moment in one place — carry the previous panel's consequences forward (smoke from a blast lingers in the next panel; wounds, debris, and damage persist; light and weather never change mid-scene). No panel may contradict a state an earlier panel established.
-- When someone acts ON another person (healing, striking, carrying, restraining), the panel shows BOTH — the object of the action is never cropped out. A medic kneels beside a VISIBLE patient.
-- WHO writes identity AND owns state, and WHO is not you: list each panel's characters in "who" as {"name": exact cast-sheet name, "state": THAT character's pose, expression, wounds, and action tags} — primary first, AT MOST TWO. Two is model physics, not preference: single-prompt tag binding cannot reliably assign a garment or a wound across three people, so a beat with three or more principals is SPLIT into consecutive panels (panels are unlimited; frames are not), and everyone else is crowd. The extension enforces the cap.
-- USE both slots when the beat has two people: a spoken line addressed to a present character is a TWO-shot (speaker AND addressee in "who") or a shot/reverse-shot pair across two panels — solo frames are for reactions and for beats where a character is genuinely alone. Defaulting everything to solo is a failed strip.
-- A panel that carries a dialogue bubble must SHOW ITS SPEAKER'S FACE: dialogue never rides a from-behind, neck-down, or faceless framing of its own speaker. The extension inserts each character's appearance block VERBATIM from the cast sheet, welds their state onto it, and computes the counts — one contiguous run per character, so the image model cannot give one character's laugh or wound to another. The panel "prompt" therefore contains ONLY what is shared: camera, lighting, atmosphere, environment, and scene-wide effects. A per-character detail in the shared prompt, or any appearance trait anywhere, is a failed panel.
-- The character an effect happens TO carries it in their OWN "state": the exploding sword detonates in its holder's state, the wound bleeds in the wounded one's state — a climax panel whose victim is missing from "who" is a failed panel. Healing, striking, carrying, restraining: BOTH parties in "who", each with their own state; "hand on patient" with no patient listed is a failed panel.
-- Characters not in physical contact get explicit spatial-relation tags in the prompt (distance between them, one far in the background, facing from across the field). With three or more in "who", the extension appends a placement tag to each block automatically in "who" order.
-- SHOT GRAMMAR (every panel's "prompt", mandatory): exactly ONE framing tag (close-up / upper body / cowboy shot / full body / wide shot) + exactly ONE angle tag (from below / from behind / from side / eye level / dutch angle) + lighting and atmosphere tags (dramatic lighting, sunlight, lens flare, backlighting, wind, dust motes, motion blur where there is motion). Consecutive panels NEVER repeat the same framing+angle pair — vary the camera like a filmed scene.
-- ACTING DENSITY: each character's "state" is 4-8 concrete tags — pose AND expression AND gaze AND one physical emotive detail (tears streaming, clenched fist at chest, open mouth shouting, trembling hands). A two-tag state is a failed panel.
-- "sentence" is where natural language earns its keep: ONE short plain-English sentence per panel stating the spatial arrangement and interaction ("She kneels beside him at the crater's center, pressing both hands to his chest while the crowd watches from the stands."). Relations only — any appearance word there is a failed panel.
-- Never blend two people into one, and never render anyone as a child unless their cast tags say so.
-- Clothing comes ONLY from cast tags and explicit scene wording. NEVER derive clothing or armor from rank/role words: 'officer', 'captain', 'soldier', 'guard', 'division' are jobs, not outfits — writing 'military uniform' because the scene says 'officers' is a failed panel.
-- A background crowd is scenery: give it ONE collective emotion and describe its dress by copying the scene's world (what these people canonically wear), never by role words.
-- The panel's speaker (if it has a bubble) is drawn mid-speech, body and face oriented toward whoever they address — a speaker addressing a crowd faces the crowd, not the camera.
-- Actions are single concrete danbooru tags (clapping, arms crossed, pointing, hand on own chest) — never compound phrases like 'hands clapping together', which image models misread.
-- A line spoken to a group is drawn as the speaker prominent with the addressed group visible and attending — never a private two-shot for a public address.
-WORLD (derive once, as data): from the SCENE text and CAST tags, infer this world's shared clothing style and this scene's physical setting. "dress" is ONLY the universal base outfit every ordinary person wears — never rank- or status-specific garments (captain's coats/haori, armbands, crowns, insignia): those belong exclusively to the cast tags of whoever holds the rank. Never modernize: no modern uniforms, coats, neckties, or architecture unless cast tags or scene text explicitly describe them. "setting" also names the scene's standing population AND that population's dress ("packed stands of shinigami in black shihakushō", "crowd of villagers in gray work clothes") — an unnamed crowd dress is how background people modernize: an arena full of watchers shows watchers in every panel that shows the surroundings, and established spectators never vanish (that is a continuity violation). Output both as flat tag lists in the top-level "dress" and "setting" fields — the extension stamps them onto every panel itself, so do NOT restate them inside panel prompts.${bubblesOn ? '\n\n' + BUBBLE_RULES : ''}\nOUTPUT (replaces the single-line requirement above): strict JSON only — no reasoning, no commentary, no markdown: {"setting":"<location/environment/population tags for this scene>","dress":"<what people of this world wear, as tags>","panels":[{"who":[{"name":"Exact Cast Name","state":"<THIS character's pose, expression, wounds, and action tags>"},{"name":"...","state":"..."}],"prompt":"<camera, lighting, atmosphere, shared effects, environment ONLY>","sentence":"<ONE plain-English sentence describing only how the characters are arranged toward each other and the space — spatial relations and interaction, no appearance words>"${bubbleSchema}}]}`;
+- A beat with three or more principals is SPLIT into consecutive panels (panels are unlimited; frames are not).
+- In a strip, a two-person exchange may also play as a shot/reverse-shot pair across two panels. Defaulting everything to solo is a failed strip.
+- Consecutive panels NEVER repeat the same framing+angle pair — vary the camera like a filmed scene.${bubblesOn ? '\n\n' + BUBBLE_RULES : ''}\nOUTPUT (replaces the single-line requirement above): strict JSON only — no reasoning, no commentary, no markdown: {"setting":"<location/environment/population tags for this scene>","dress":"<what people of this world wear, as tags>","panels":[{"who":[{"name":"Exact Cast Name","state":"<THIS character's pose, expression, wounds, and action tags>"},{"name":"...","state":"..."}],"prompt":"<camera, lighting, atmosphere, shared effects, environment ONLY>","sentence":"<ONE plain-English sentence describing only how the characters are arranged toward each other and the space — spatial relations and interaction, no appearance words>"${bubbleSchema}}]}`;
+    } else if (structuredSingle) {
+        fullSystem += `\n\nSINGLE FRAME (active):\nDepict exactly ONE frozen frame: the scene's FINAL visual beat — the last thing a camera would see. Choose that beat's principals for "who" and fold everyone else into the crowd; never montage, never split the moment.
+${FRAME_LAWS}${bubblesOn ? '\n\n' + BUBBLE_RULES : ''}\nOUTPUT (replaces the single-line requirement above): strict JSON only — no reasoning, no commentary, no markdown, exactly one panel: {"setting":"<location/environment/population tags for this scene>","dress":"<what people of this world wear, as tags>","panels":[{"who":[{"name":"Exact Cast Name","state":"<THIS character's pose, expression, wounds, and action tags>"},{"name":"...","state":"..."}],"prompt":"<camera, lighting, atmosphere, shared effects, environment ONLY>","sentence":"<ONE plain-English sentence describing only how the characters are arranged toward each other and the space — spatial relations and interaction, no appearance words>"${bubbleSchema}}]}`;
     } else if (bubblesOn) {
         fullSystem += `\n\n${BUBBLE_RULES}\nOUTPUT (replaces the single-line requirement above): strict JSON only — no reasoning, no commentary, no markdown, exactly one panel: {"panels":[{"prompt":"<one prompt following all rules above>"${bubbleSchema}}]}`;
     }
 
-    const maxTokens = maxPanels > 1 ? Math.min(3600, 500 + 650 * maxPanels) : (bubblesOn ? 1100 : 800);
+    const maxTokens = maxPanels > 1 ? Math.min(3600, 500 + 650 * maxPanels) : structuredSingle ? 1300 : (bubblesOn ? 1100 : 800);
     let raw;
     try {
         raw = await callLLM(fullSystem, user, maxTokens);
@@ -805,16 +843,17 @@ WORLD (derive once, as data): from the SCENE text and CAST tags, infer this worl
         raw = await callLLM(fullSystem, user, maxTokens);
     }
     console.log('[SceneSnap] raw builder output:', String(raw).slice(0, 600));
-    let panels = parsePanels(raw, style, maxPanels, { bubbles: bubblesOn, sceneText: scene });
+    let panels = parsePanels(raw, style, maxPanels, { bubbles: bubblesOn, sceneText: scene, expectJson: structuredSingle });
     // Enforcement, not hope: a builder that ignores the who schema gets exactly one
     // corrective re-call. Whichever output covers more panels with who wins; the image
     // is never blocked on compliance.
     const whoCoverage = ps => ps.reduce((n, p) => n + (p.who && p.who.length ? 1 : 0), 0);
-    if (panels.length && whoCoverage(panels) < panels.length && parseCastSheet(getActiveCastSheet()).length) {
+    const schemaSent = maxPanels > 1 || structuredSingle;
+    if (panels.length && schemaSent && whoCoverage(panels) < panels.length && castEntryCount) {
         console.warn('[SceneSnap] builder ignored the who schema on', panels.length - whoCoverage(panels), 'panel(s) — issuing one corrective retry');
         try {
             const raw2 = await callLLM(fullSystem + `\n\nPREVIOUS OUTPUT REJECTED: every panel MUST include the "who" array of EXACT cast-sheet names, and the "prompt" must contain ZERO appearance traits of named characters. Re-output the complete corrected JSON now.`, user, maxTokens);
-            const panels2 = parsePanels(raw2, style, maxPanels, { bubbles: bubblesOn, sceneText: scene });
+            const panels2 = parsePanels(raw2, style, maxPanels, { bubbles: bubblesOn, sceneText: scene, expectJson: structuredSingle });
             if (panels2.length && whoCoverage(panels2) > whoCoverage(panels)) { panels = panels2; raw = raw2; }
         } catch (e) { console.warn('[SceneSnap] corrective retry failed, keeping first output:', e); }
     }
@@ -846,7 +885,7 @@ WORLD (derive once, as data): from the SCENE text and CAST tags, infer this worl
         p.prompt = [id.counts, ...id.blocks, p.prompt].filter(Boolean).join(', ');
         p.sentence = replaceNamesInSentence(p.sentence, activeSheet);
     }
-    return { panels, style, raw: String(raw), setting: panels.setting || '', dress };
+    return { panels, style, raw: String(raw), setting: panels.setting || '', dress, schemaSent };
 }
 
 // ------------------------------------------------------------------ backends
@@ -1152,7 +1191,7 @@ async function illustrateMessage(mesId, { force = false } = {}) {
         let debugPrompts = [];
 
 
-            const { panels, style, raw, setting, dress } = await buildScenePrompt(mesId);
+            const { panels, style, raw, setting, dress, schemaSent } = await buildScenePrompt(mesId);
             const anchor = [setting, dress].filter(Boolean).join(', ');
             const negFull = antiModernNegative(dress) ? `${negative}, ${antiModernNegative(dress)}` : negative;
             // Hybrid prompting: tags own identity/state (binding); NAI 4.5-class models also
@@ -1171,7 +1210,7 @@ async function illustrateMessage(mesId, { force = false } = {}) {
                     `CAST — "${getActiveCastName()}": ${castEntries.length} entr${castEntries.length === 1 ? 'y' : 'ies'}${castEntries[0] ? ` (first: ${castEntries[0].name}: ${castEntries[0].tags.slice(0, 60)})` : ''}`,
                 );
             }
-            panels.forEach((p, i) => debugPrompts.push(`PANEL ${i + 1} WHO — ${p.who && p.who.length ? p.who.map(w => w.state ? `${w.name} [${w.state}]` : w.name).join(' | ') : '(builder ignored the who schema)'}`));
+            panels.forEach((p, i) => debugPrompts.push(`PANEL ${i + 1} WHO — ${p.who && p.who.length ? p.who.map(w => w.state ? `${w.name} [${w.state}]` : w.name).join(' | ') : (schemaSent ? '(builder ignored the who schema)' : '(single frame — builder-written identity)')}`));
             panels.forEach((p, i) => p.bubbles.forEach(b => debugPrompts.push(`PANEL ${i + 1} BUBBLE — ${b.speaker || '?'}: "${b.text}"`)));
             console.log(`[SceneSnap] ${finals.length} panel(s) (${style}):`, finals);
             // One seed for the whole strip: same character rendering in every panel.

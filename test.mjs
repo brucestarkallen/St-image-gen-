@@ -27,7 +27,7 @@ const FUNCS = [
     'normalizeForMatch', 'sanitizeBubbles', 'sanitizeBuilderOutput', 'softSanitize',
     'parsePanels', 'parseCastSheet', 'mergeCastLines', 'effectiveForcedTags',
     'composePositive', 'scanPresenceIn', 'markerDetails', 'ledgerStateLines',
-    'stripScene', 'explainError', 'isStaleSession', 'stripLayoutMeta', 'appendAnchor', 'mineDressTags', 'normalizeCountTags', 'filterRankGarments', 'assembleIdentity', 'scrubState', 'seedForPanel', 'replaceNamesInSentence', 'antiModernNegative', 'isPlaceholderTags', 'stripPlaceholderLines', 'getSize',
+    'stripScene', 'explainError', 'isStaleSession', 'stripLayoutMeta', 'appendAnchor', 'mineDressTags', 'normalizeCountTags', 'filterRankGarments', 'assembleIdentity', 'scrubState', 'seedForPanel', 'replaceNamesInSentence', 'capTagSafe', 'antiModernNegative', 'isPlaceholderTags', 'stripPlaceholderLines', 'getSize',
 ];
 
 const prelude = `
@@ -47,9 +47,17 @@ let settings = {
 export function _setSettings(patch) { Object.assign(settings, patch); }
 `;
 
+// Top-level const helpers used by extracted functions (single-line, by name).
+function extractConst(name) {
+    const line = lines.find(l => l.startsWith(`const ${name} = `));
+    if (!line) throw new Error(`extractConst: ${name} not found`);
+    return line;
+}
+const CONSTS = ['escRe'];
+
 const sandboxPath = '/tmp/ss_sandbox_' + process.pid + '.mjs';
-writeFileSync(sandboxPath, prelude + '\n' + FUNCS.map(extract).join('\n\n')
-    + `\nexport { ${FUNCS.join(', ')} };\n`);
+writeFileSync(sandboxPath, prelude + '\n' + CONSTS.map(extractConst).join('\n') + '\n' + FUNCS.map(extract).join('\n\n')
+    + `\nexport { ${FUNCS.join(', ')}, ${CONSTS.join(', ')} };\n`);
 const S = await import(pathToFileURL(sandboxPath).href);
 
 let pass = 0, fail = 0;
@@ -408,6 +416,62 @@ function defaultPatterns() { return '<details>[\\s\\S]*?</details>\n\\{[A-Z_]+\\
     check('stale: empty tolerated', !S.isStaleSession(403, ''));
 }
 
+
+// ---------------------------------------------------------------- name scrub — escape-class regression (v0.12.x $item bug)
+{
+    const sheet = 'Rangiku Matsumoto: woman, long orange hair, blue eyes\nToshiro Hitsugaya: boy, white hair, teal eyes';
+    check('names: names containing "t" are scrubbed (the $item/tab escape-class regression)',
+        S.replaceNamesInSentence('Matsumoto shields Hitsugaya from the blast.', sheet)
+            === 'the woman shields the boy from the blast.');
+    check('names: a bracketed name never throws (unescaped [ was a generation-killer)',
+        (() => { try { return S.replaceNamesInSentence('Ray strikes.', 'Ra[y: man, tall') === 'Ray strikes.'; } catch { return false; } })());
+    check('names: regex metacharacters in a cast name never throw and still scrub',
+        S.replaceNamesInSentence('Vex strikes first.', 'Vex (Prime): man, goggles') === 'the man strikes first.');
+    check('names: multi-word gender lead yields the right role word',
+        S.replaceNamesInSentence('Bruno waves at the crowd.', 'Bruno: young man, scar') === 'the man waves at the crowd.');
+}
+
+// ---------------------------------------------------------------- gender words by boundary, not exact match
+{
+    const r = S.assembleIdentity(['A', 'B'], 'A: young man, facial scar\nB: old woman, wooden cane');
+    check('identity: multi-word gender leads still count (young man / old woman)', r.counts === '1boy, 1girl');
+    check('identity: "woman" never miscounts as man (boundary, not substring)',
+        S.assembleIdentity(['C'], 'C: woman, tall').counts === '1girl');
+}
+
+// ---------------------------------------------------------------- count canon keeps 'multiple' readable
+{
+    check('counts: "multiple boys" keeps its space — never the broken multipleboys tag',
+        S.normalizeCountTags('multiple boys, crowd, courtyard') === 'multiple boys, crowd, courtyard');
+    check('counts: "multiple men" canonicalizes to "multiple boys"',
+        S.normalizeCountTags('multiple men, crowd') === 'multiple boys, crowd');
+}
+
+// ---------------------------------------------------------------- tag-safe caps + panel object guard
+{
+    check('cap: overlong lists cut at a tag boundary, never mid-word',
+        (() => { const s = Array.from({ length: 80 }, (_, i) => `statetag${i}`).join(', '); const c = S.capTagSafe(s, 500); return c.length <= 500 && c.split(', ').every(x => /^statetag\d+$/.test(x)); })());
+    check('cap: short strings untouched', S.capTagSafe('a, b', 500) === 'a, b');
+    const long = Array.from({ length: 80 }, (_, i) => `statetag${i}`).join(', ');
+    const capped = S.parsePanels(JSON.stringify({ panels: [{ who: [{ name: 'A', state: long }], prompt: 'wide shot, dust cloud' }] }), 'tags', 4, {});
+    check('parse: who-state is capped tag-safe — no trailing fragment can reach the weld',
+        capped[0].who[0].state.split(', ').every(x => /^statetag\d+$/.test(x)));
+    const objless = S.parsePanels(JSON.stringify({ panels: [{ who: [{ name: 'A', state: 'x' }] }, { prompt: '1boy, smile' }] }), 'tags', 4, {});
+    check('parse: a panel object without a prompt is dropped — never "[object Object]"',
+        objless.length === 1 && objless[0].prompt.includes('1boy') && !JSON.stringify(objless).includes('object Object'));
+}
+
+// ---------------------------------------------------------------- structured single frame (identity is code in EVERY mode)
+{
+    const raw = JSON.stringify({ setting: 'courtyard, snow, packed stands', dress: 'black kosode', panels: [{ who: [{ name: 'A', state: 'kneeling, trembling hands' }], prompt: 'wide shot, from below, dramatic lighting', sentence: 'He kneels alone at the center of the snowy courtyard.' }] });
+    const out = S.parsePanels(raw, 'tags', 1, { expectJson: true });
+    check('parse: expectJson opens the JSON path for a single frame (bubbles off)',
+        out.length === 1 && out[0].who?.[0]?.name === 'A' && out[0].sentence.startsWith('He kneels') && out.setting === 'courtyard, snow, packed stands' && out.dress === 'black kosode');
+    const legacy = S.parsePanels('1boy, white hair, courtyard, snow', 'tags', 1, {});
+    check('parse: single frame without expectJson keeps the legacy plain-line path',
+        legacy.length === 1 && legacy[0].prompt === '1boy, white hair, courtyard, snow' && !legacy[0].who);
+}
+
 // ---------------------------------------------------------------- source-level invariants
 {
     check('src: single-panel bubble mode requests strict JSON', src.includes('exactly one panel'));
@@ -530,6 +594,21 @@ function defaultPatterns() { return '<details>[\\s\\S]*?</details>\n\\{[A-Z_]+\\
         src.indexOf('ctx.generateRaw') !== -1 && src.indexOf('ctx.generateRaw') < src.indexOf('ctx.generateQuietPrompt'));
     check('src: multi-char fully removed — no NAI direct/proxy transport, no token setting, no latch',
         !/naiMultiChar|naiToken|MULTICHAR|NAI_IMAGE_ENDPOINT|extractFirstPngFromZip|classifyFetchDeath|probeServerUp/.test(src));
+    check('src: name escaping is the canonical top-level escRe — no $item, no tab corruption',
+        src.includes('const escRe = s => String(s).replace(') && src.includes('${escRe(token)}')
+        && !src.includes('$item')
+        && S.escRe('(') === '\\(' && S.escRe('t') === 't' && S.escRe('Matsumoto') === 'Matsumoto'
+        && S.escRe('a\\b') === 'a\\\\b' && S.escRe(']') === '\\]');
+    check('src: structured single frame — identity is code in EVERY mode',
+        src.includes('SINGLE FRAME (active):') && src.includes('const structuredSingle = maxPanels === 1')
+        && src.includes('expectJson: structuredSingle') && src.includes("style === 'tags' && castEntryCount > 0"));
+    check('src: who-retry fires only when the who schema was actually sent',
+        src.includes('const schemaSent = maxPanels > 1 || structuredSingle;')
+        && src.includes('panels.length && schemaSent && whoCoverage(panels)'));
+    check('src: FRAME_LAWS is canonical — defined once, cited by exactly the two builder modes',
+        src.includes('const FRAME_LAWS = `') && src.split('${FRAME_LAWS}').length - 1 === 2);
+    check('src: debug WHO line is honest when the schema was not sent',
+        src.includes('(single frame — builder-written identity)'));
     check('src: version stamp matches manifest', (() => {
         const manifest = JSON.parse(readFileSync(new URL('./manifest.json', import.meta.url), 'utf-8'));
         const m = src.match(/const VERSION = '([^']+)'/);
