@@ -114,6 +114,11 @@ Stella: girl, long crimson hair, red eyes, large breasts, hair ribbon, school un
 
 ## Changelog
 
+### 0.12.4 — the gold run, decoded and mandated
+- The user's best-ever strip was reverse-engineered: it was beautiful because frames were solo/duo (binding held — now law via the two-cap) and every panel was drenched in cinematic grammar. That grammar is now **contract**: every panel carries exactly one framing tag + one angle tag + lighting/atmosphere, consecutive panels never repeat the same framing+angle pair, and every character's state must be 4–8 acting tags (pose + expression + gaze + one physical emotive detail). Terse states are failed panels.
+- **One world, one cast.** The active cast is now a plain global setting; per-chat cast memory — the mechanism that silently pointed chats at degraded auto-built slots — is removed. Every chat and branch reads the same sheet, always.
+- Atmosphere caps loosened (setting 16 tags, state 200 chars) — correctness had been starving mood.
+
 ### 0.12.3 — two per frame is model physics
 - The user's field observation was the truth: two-character panels were beautiful; three and four are where the pink kimono migrated. Single-prompt tag binding cannot reliably assign garments or wounds across 3+ people — the only hard binding mechanisms are per-character API conditioning (unavailable here) or **at most two subjects**. The cap is back to TWO, enforced in code at parse; a beat with three principals is split into consecutive panels (panels are unlimited; frames are not), everyone else is crowd. Raising the cap to four earlier was following a request against model physics — reverted with reasons on record.
 

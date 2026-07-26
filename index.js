@@ -12,7 +12,7 @@ import { getBase64Async, saveBase64AsFile } from '../../../utils.js';
 import { callGenericPopup, POPUP_TYPE } from '../../../popup.js';
 
 const MODULE = 'sceneSnap';
-const VERSION = '0.12.3';
+const VERSION = '0.12.4';
 
 const defaultSettings = Object.freeze({
     enabled: true,
@@ -20,7 +20,8 @@ const defaultSettings = Object.freeze({
     autoCast: true,
     backend: 'pollinations', // pollinations | runware | novelai
     promptStyle: 'auto',     // auto | tags | natural
-    sizePreset: 'portrait',  // portrait | landscape | square
+    sizePreset: 'portrait',
+    activeCast: 'Default',  // portrait | landscape | square
     builderProfile: '',      // Connection Manager profile id ('' = main API)
     maxSceneChars: 6000,
     maxPanels: 1,
@@ -189,18 +190,18 @@ function findLastAiMessageId() {
 
 // ------------------------------------------------------------------ casts
 
+// One world, one cast: the active cast is a plain GLOBAL setting. Per-chat cast
+// memory was the seed-bug engine — chats silently diverged onto degraded auto-built
+// slots (field-proven). Chats and branches now always read the same sheet.
 function getActiveCastName() {
-    const ctx = getContext();
-    const name = ctx.chatMetadata?.sceneSnapCast;
+    const name = settings.activeCast;
     if (name && Object.prototype.hasOwnProperty.call(settings.casts, name)) return name;
     return 'Default';
 }
 
 function setActiveCastName(name) {
-    const ctx = getContext();
-    if (!ctx.chatMetadata) return;
-    ctx.chatMetadata.sceneSnapCast = name;
-    (ctx.saveMetadataDebounced ?? ctx.saveMetadata)?.call(ctx);
+    settings.activeCast = name;
+    saveSettingsDebounced();
 }
 
 function getActiveCastSheet() {
@@ -363,7 +364,7 @@ function parsePanels(raw, style, maxPanels, opts = {}) {
                     .slice(0, maxPanels);
                 if (panels.length) {
                     const capTags = (v, n) => stripLayoutMeta(String(v ?? '')).split(',').map(t => t.trim()).filter(Boolean).slice(0, n).join(', ');
-                    panels.setting = capTags(obj?.setting, 12);
+                    panels.setting = capTags(obj?.setting, 16);
                     panels.dress = capTags(obj?.dress, 8);
                     return panels;
                 }
@@ -432,7 +433,7 @@ function scrubState(state, blockTags) {
         if (blockSet.has(low)) continue;
         if (low.length >= 4 && blockToks.some(b => b.toLowerCase() !== low && b.toLowerCase().startsWith(low))) continue;
         if (low.length < 3) continue;
-        if (used + t.length + 2 > 160) break;
+        if (used + t.length + 2 > 200) break;
         out.push(t);
         used += t.length + 2;
     }
@@ -725,6 +726,8 @@ PANEL DISCIPLINE (binding rules for every panel):
 - WHO writes identity AND owns state, and WHO is not you: list each panel's characters in "who" as {"name": exact cast-sheet name, "state": THAT character's pose, expression, wounds, and action tags} — primary first, AT MOST TWO. Two is model physics, not preference: single-prompt tag binding cannot reliably assign a garment or a wound across three people, so a beat with three or more principals is SPLIT into consecutive panels (panels are unlimited; frames are not), and everyone else is crowd. The extension enforces the cap. The extension inserts each character's appearance block VERBATIM from the cast sheet, welds their state onto it, and computes the counts — one contiguous run per character, so the image model cannot give one character's laugh or wound to another. The panel "prompt" therefore contains ONLY what is shared: camera, lighting, atmosphere, environment, and scene-wide effects. A per-character detail in the shared prompt, or any appearance trait anywhere, is a failed panel.
 - The character an effect happens TO carries it in their OWN "state": the exploding sword detonates in its holder's state, the wound bleeds in the wounded one's state — a climax panel whose victim is missing from "who" is a failed panel. Healing, striking, carrying, restraining: BOTH parties in "who", each with their own state; "hand on patient" with no patient listed is a failed panel.
 - Characters not in physical contact get explicit spatial-relation tags in the prompt (distance between them, one far in the background, facing from across the field). With three or more in "who", the extension appends a placement tag to each block automatically in "who" order.
+- SHOT GRAMMAR (every panel's "prompt", mandatory): exactly ONE framing tag (close-up / upper body / cowboy shot / full body / wide shot) + exactly ONE angle tag (from below / from behind / from side / eye level / dutch angle) + lighting and atmosphere tags (dramatic lighting, sunlight, lens flare, backlighting, wind, dust motes, motion blur where there is motion). Consecutive panels NEVER repeat the same framing+angle pair — vary the camera like a filmed scene.
+- ACTING DENSITY: each character's "state" is 4-8 concrete tags — pose AND expression AND gaze AND one physical emotive detail (tears streaming, clenched fist at chest, open mouth shouting, trembling hands). A two-tag state is a failed panel.
 - "sentence" is where natural language earns its keep: ONE short plain-English sentence per panel stating the spatial arrangement and interaction ("She kneels beside him at the crater's center, pressing both hands to his chest while the crowd watches from the stands."). Relations only — any appearance word there is a failed panel.
 - Never blend two people into one, and never render anyone as a child unless their cast tags say so.
 - Clothing comes ONLY from cast tags and explicit scene wording. NEVER derive clothing or armor from rank/role words: 'officer', 'captain', 'soldier', 'guard', 'division' are jobs, not outfits — writing 'military uniform' because the scene says 'officers' is a failed panel.

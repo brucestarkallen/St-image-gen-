@@ -403,6 +403,11 @@ function defaultPatterns() { return '<details>[\\s\\S]*?</details>\n\\{[A-Z_]+\\
         src.includes('.filter(w => w.name).slice(0, 2) : [],'));
     check('src: explicit scenes are tagged explicitly, anatomy locked to cast sheet',
         src.includes('EXPLICIT SCENES:') && src.includes('never euphemize') && src.includes('fullSystem += NSFW_RULE;'));
+    check('src: gold-run cinematography mandated — shot grammar, variety, acting density',
+        src.includes('SHOT GRAMMAR') && src.includes('NEVER repeat the same framing+angle pair')
+        && src.includes('ACTING DENSITY') && src.includes('A two-tag state is a failed panel'));
+    check('src: active cast is global — per-chat divergence removed',
+        src.includes('settings.activeCast') && !src.includes('chatMetadata?.sceneSnapCast'));
     check('src: hybrid natural-language sentence — schema, contract, and tags-mode append',
         src.includes('"sentence":"<ONE plain-English sentence')
         && src.includes('where natural language earns its keep')
@@ -414,7 +419,7 @@ function defaultPatterns() { return '<details>[\\s\\S]*?</details>\n\\{[A-Z_]+\\
         && src.includes("carries it in their OWN \"state\"")
         && src.includes('scrubState(state, hit.tags) ? `${hit.tags}, ${scrubState(state, hit.tags)}`'));
     check('src: setting and dress are tag-capped in code',
-        src.includes('capTags(obj?.setting, 12)') && src.includes('capTags(obj?.dress, 8)'));
+        src.includes('capTags(obj?.setting, 16)') && src.includes('capTags(obj?.dress, 8)'));
     check('src: the cast author copies canon verbatim — no synonyms, adults are man/woman',
         src.includes('COPY, never compose') && src.includes("never 'badge'")
         && src.includes("ONLY for characters the story marks as children"));
