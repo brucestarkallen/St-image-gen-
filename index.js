@@ -12,7 +12,7 @@ import { getBase64Async, saveBase64AsFile } from '../../../utils.js';
 import { callGenericPopup, POPUP_TYPE } from '../../../popup.js';
 
 const MODULE = 'sceneSnap';
-const VERSION = '0.14.0';
+const VERSION = '0.15.0';
 
 const defaultSettings = Object.freeze({
     enabled: true,
@@ -128,8 +128,8 @@ GROUND TRUTH: when a CURRENT WORLD STATE block is provided, it is authoritative 
 // live here once.
 const FRAME_LAWS = `PANEL DISCIPLINE (binding rules for every panel):
 - When someone acts ON another person (healing, striking, carrying, restraining), the panel shows BOTH — the object of the action is never cropped out. A medic kneels beside a VISIBLE patient.
-- WHO writes identity AND owns state, and WHO is not you: list each panel's characters in "who" as {"name": exact cast-sheet name, "state": THAT character's pose, expression, wounds, and action tags} — primary first, AT MOST TWO. Two is model physics, not preference: single-prompt tag binding cannot reliably assign a garment or a wound across three people, so a frame never holds more than two principals — everyone else is crowd. The extension enforces the cap.
-- USE both slots when the beat has two people: a spoken line addressed to a present character is a TWO-shot (speaker AND addressee in "who") — solo frames are for reactions and for beats where a character is genuinely alone.
+- WHO writes identity AND owns state, and WHO is not you: list each panel's characters in "who" as {"name": exact cast-sheet name, "state": THAT character's pose, expression, wounds, and action tags — pose and feeling ONLY. Never a count tag (1boy, 1girl, 2boys, solo) and never a garment: the extension computes every count itself and dresses every character itself, and a count tag inside a character's block reads to the image model as a second person starting there, which fuses the frame's two characters into one} — primary first, AT MOST TWO. Two is model physics, not preference: single-prompt tag binding cannot reliably assign a garment or a wound across three people, so a frame never holds more than two principals — everyone else is crowd. The extension enforces the cap.
+- USE both slots when the beat GENUINELY has two people in one exchange: a spoken line addressed to a present character is a TWO-shot (speaker AND addressee in "who"). But a beat that belongs to ONE person — a reaction, a salute, a private realization, a face in the crowd — is a SOLO frame, and padding it with a second principal who is doing something else somewhere else is a failed panel. Fill the second slot because the beat has two people in it, never to avoid a solo frame.
 - A panel that carries a dialogue bubble must SHOW ITS SPEAKER'S FACE: dialogue never rides a from-behind, neck-down, or faceless framing of its own speaker. Only a character in THIS panel's "who" may speak in this panel — a line belonging to anyone else moves to the panel that draws them, or is dropped. The extension enforces this. The extension inserts each character's appearance block VERBATIM from the cast sheet, welds their state onto it, and computes the counts — one contiguous run per character, so the image model cannot give one character's laugh or wound to another. The panel "prompt" therefore contains ONLY what is shared: camera, lighting, atmosphere, environment, and scene-wide effects. A per-character detail in the shared prompt, or any appearance trait anywhere, is a failed panel.
 - The character an effect happens TO carries it in their OWN "state": the exploding sword detonates in its holder's state, the wound bleeds in the wounded one's state — a climax panel whose victim is missing from "who" is a failed panel. Healing, striking, carrying, restraining: BOTH parties in "who", each with their own state; "hand on patient" with no patient listed is a failed panel.
 - Characters not in physical contact get explicit spatial-relation tags in the prompt (distance between them, one far in the background, facing from across the field).
@@ -467,9 +467,19 @@ function filterRankGarments(tagList) {
 // Enforcement in code: drop every state token already in the owner's block, drop
 // mid-word fragments (a token that is a >=4-char prefix of a block token), and cap
 // the result tag-safely — never inside a tag.
+// Tags the extension computes itself. If one arrives from the builder inside a state,
+// it is not description — it is a competing instruction to the image model.
+const CODE_OWNED_TAG = /^(?:\d+\s*(?:boys?|girls?|others?|men|man|women|woman)|multiple\s+(?:boys|girls|others)|crowd|solo)$/i;
+
 function scrubState(state, blockTags) {
     const blockToks = String(blockTags || '').split(',').map(t => t.trim()).filter(Boolean);
     const blockSet = new Set(blockToks.map(t => t.toLowerCase()));
+    // Count tags are computed by code and belong at the head of the prompt. A "1boy"
+    // sitting inside a character's block is a SECOND subject declaration mid-prompt: it
+    // breaks the contiguous run the weld depends on, and the model cross-binds the two
+    // blocks around it. Field: "2boys, <Jovan block>, 1boy, ..., <old man block>, 1boy"
+    // rendered one old man with white hair holding the sword. Counts never come from
+    // the builder, in any field.
     // A builder that re-states appearance without commas ("tall lean sharp-featured")
     // produces ONE token that matches no single block tag, so exact-token comparison
     // let the whole appearance block through twice. Compare on words, not tokens.
@@ -481,6 +491,7 @@ function scrubState(state, blockTags) {
         if (!t) continue;
         const low = t.toLowerCase();
         if (blockSet.has(low)) continue;
+        if (CODE_OWNED_TAG.test(low)) continue;
         if (low.length >= 4 && blockToks.some(b => b.toLowerCase() !== low && b.toLowerCase().startsWith(low))) continue;
         const words = low.split(/[\s-]+/).filter(Boolean);
         if (words.length >= 2 && words.every(w => blockWords.has(w))) continue;
@@ -537,7 +548,14 @@ function assembleIdentity(who, sheetText, opts = {}) {
         const name = typeof entry === 'object' && entry ? String(entry.name ?? '') : String(entry ?? '');
         const state = typeof entry === 'object' && entry ? String(entry.state ?? '').trim() : '';
         const hit = byName.get(name.trim().toLowerCase());
-        if (hit && !isPlaceholderTags(hit.tags)) blocks.push(scrubState(state, hit.tags) ? `${hit.tags}, ${scrubState(state, hit.tags)}` : hit.tags);
+        if (hit && !isPlaceholderTags(hit.tags)) {
+            const scrubbed = scrubState(state, hit.tags);
+            // Clothing is identity too: if neither the sheet nor the state dresses this
+            // character, the world's base outfit is welded in rather than left to priors.
+            const worldDress = String(opts.dress || '').trim();
+            const clothing = (!hasGarment(hit.tags) && !hasGarment(scrubbed) && worldDress) ? `, ${worldDress}` : '';
+            blocks.push(scrubbed ? `${hit.tags}, ${scrubbed}${clothing}` : `${hit.tags}${clothing}`);
+        }
         else missing.push(name.trim() || '(unnamed)');
     }
     let boys = 0, girls = 0, others = 0;
@@ -599,12 +617,23 @@ function antiModernNegative(dress) {
     const traditional = ['kimono', 'kosode', 'hakama', 'haori', 'shihakush', 'yukata', 'robe', 'obi', 'sash'];
     const modern = ['necktie', 'suit', 'blazer', 'hoodie', 't-shirt', 'jeans', 'jacket', 'trench'];
     if (traditional.some(t => d.includes(t)) && !modern.some(m => d.includes(m))) {
-        return 'modern military uniform, epaulettes, necktie, medals, dress shirt, buttons coat, peaked cap';
+        return 'modern military uniform, epaulettes, necktie, medals, dress shirt, buttons coat, peaked cap, '
+            + 'school uniform, gakuran, blazer, pleated skirt, sailor collar, serafuku, business suit, hoodie, '
+            + 'glass building, concrete building, skyscraper, modern architecture, power lines, streetlight, asphalt road';
     }
     return '';
 }
 
-function seedForPanel(runSeed, whoNames) {
+function seedForPanel(runSeed, whoNames, identityWelded) {
+    // Subject-derived seeds (0.12.5) stopped palette priors bleeding between panels with
+    // different subjects — from when the BUILDER wrote appearance. Identity is now welded
+    // verbatim from the cast sheet into every panel (0.13.0), which pins subject appearance
+    // far harder than seed decorrelation ever did. Meanwhile nothing pins the location: a
+    // fresh seed per panel re-rolls the architecture of a strip that is supposed to be one
+    // continuous place, and the field run produced three different buildings for one
+    // courtyard. Welded panels share the run seed; the who-hash remains the backstop for
+    // panels whose identity the code does NOT own.
+    if (identityWelded) return (runSeed >>> 0) % 2147483647;
     let h = 0;
     for (const n of (whoNames || []).map(x => String(x).toLowerCase()).sort()) {
         for (let i = 0; i < n.length; i++) h = ((h * 31) + n.charCodeAt(i)) >>> 0;
@@ -619,6 +648,26 @@ function framesCrowd(text) {
     return /\b(?:crowds?|crowded|audience|spectators?|onlookers?|bystanders?|throngs?|thronged|mob|multitude|packed|rows of|ranks of|lined with|standing officers|three hundred)\b/i.test(String(text || ''));
 }
 
+// The law mandates exactly ONE framing tag and ONE angle tag per panel. A law the code
+// cannot enforce is not a law: the field run shipped "low angle, full body, wide shot"
+// and the model split the difference into a wide shot with unreadable figures. First
+// of each kind wins; the rest are dropped.
+const FRAMING_TAG = /^(?:close-?up|extreme close-?up|face close-?up|portrait|bust shot|upper body|cowboy shot|medium shot|full body|wide shot|extreme wide shot|establishing shot)$/i;
+const ANGLE_TAG = /^(?:from below|from above|from behind|from side|from front|eye level|low angle|high angle|dutch angle|bird's-eye view|worm's-eye view|overhead shot)$/i;
+
+function enforceShotGrammar(prompt) {
+    let framing = false, angle = false;
+    const out = [];
+    for (const raw of String(prompt || '').split(',')) {
+        const t = raw.trim();
+        if (!t) continue;
+        if (FRAMING_TAG.test(t)) { if (framing) continue; framing = true; }
+        else if (ANGLE_TAG.test(t)) { if (angle) continue; angle = true; }
+        out.push(t);
+    }
+    return out.join(', ');
+}
+
 function appendAnchor(prompt, anchor) {
     const base = String(prompt || '');
     const have = new Set(base.split(',').map(t => t.trim().toLowerCase()).filter(Boolean));
@@ -628,8 +677,26 @@ function appendAnchor(prompt, anchor) {
 
 // Backstop when the builder returns no dress field: the cast sheet IS the world's
 // wardrobe. Mine garment-bearing tags (generic garment lexicon, not world-specific).
+const GARMENT_WORDS = ['kimono', 'kosode', 'hakama', 'haori', 'shihakusho', 'shihakush\u014d', 'sash', 'obi', 'uniform', 'armband', 'robe', 'cloak', 'cape', 'coat', 'dress', 'skirt', 'scarf', 'hat', 'gloves', 'boots', 'suit', 'tunic', 'armor', 'vest', 'shirt', 'trousers', 'pants'];
+
+// A cast entry with no garment tag is an undressed principal, and the image model
+// dresses them from its own priors — which is how a shinigami lieutenant came back
+// wearing a school blazer. The world's dress is known; use it.
+function hasGarment(tags) {
+    const low = String(tags || '').toLowerCase();
+    return GARMENT_WORDS.some(g => low.includes(g));
+}
+
+// The first wearable tag of the world's dress, for binding to the crowd.
+function firstGarmentTag(dress) {
+    for (const t of String(dress || '').split(',').map(x => x.trim()).filter(Boolean)) {
+        if (hasGarment(t)) return t;
+    }
+    return '';
+}
+
 function mineDressTags(castText) {
-    const garments = ['kimono', 'kosode', 'hakama', 'haori', 'shihakusho', 'shihakush\u014d', 'sash', 'obi', 'uniform', 'armband', 'robe', 'cloak', 'cape', 'coat', 'dress', 'skirt', 'scarf', 'hat', 'gloves', 'boots', 'suit'];
+    const garments = GARMENT_WORDS;
     const seen = new Set();
     const out = [];
     for (const line of String(castText || '').split('\n')) {
@@ -938,11 +1005,14 @@ ${FRAME_LAWS}${bubblesOn ? '\n\n' + BUBBLE_RULES : ''}\nOUTPUT (replaces the sin
         const { principals, background } = splitPrincipals(p.who);
         if (background.length) console.warn('[SceneSnap] background figure(s) demoted out of who:', background.map(w => w.name));
         const crowd = framesCrowd(anchorText) || framesCrowd(p.prompt);
-        const id = assembleIdentity(principals, activeSheet, { crowd });
+        const id = assembleIdentity(principals, activeSheet, { crowd, dress: firstGarmentTag(dress) });
         if (id.missing.length) console.warn('[SceneSnap] panel "who" names still not in cast sheet:', id.missing);
         const bgTag = background.length ? 'distant figure in the background' : '';
-        p.prompt = [id.counts, ...id.blocks, bgTag, p.prompt].filter(Boolean).join(', ');
+        p.prompt = enforceShotGrammar([id.counts, ...id.blocks, bgTag, p.prompt].filter(Boolean).join(', '));
         p.who = principals;
+        p.crowd = crowd;
+        // Identity welded by code — the seed no longer has to protect subject appearance.
+        p.welded = id.blocks.length > 0;
         p.sentence = replaceNamesInSentence(p.sentence, activeSheet);
     }
     return { panels, style, raw: String(raw), setting: panels.setting || '', dress, schemaSent };
@@ -1252,13 +1322,23 @@ async function illustrateMessage(mesId, { force = false } = {}) {
 
 
             const { panels, style, raw, setting, dress, schemaSent } = await buildScenePrompt(mesId);
-            const anchor = [setting, dress].filter(Boolean).join(', ');
+            // The dress anchor used to be stamped as bare garment tags, so appendAnchor's
+            // dedup deleted it from exactly the panels where a principal already wore that
+            // garment — taking the CROWD's only clothing instruction with it. The field run
+            // lost it on panel 1 and three hundred shinigami came back in school uniforms.
+            // Bind it to the population instead: a distinct phrase no character block holds.
+            const crowdDress = firstGarmentTag(dress);
+            const anchorFor = p => [
+                setting,
+                p.crowd && crowdDress ? `crowd in ${crowdDress}` : '',
+                dress,
+            ].filter(Boolean).join(', ');
             const negFull = antiModernNegative(dress) ? `${negative}, ${antiModernNegative(dress)}` : negative;
             // Hybrid prompting: tags own identity/state (binding); NAI 4.5-class models also
             // read short natural sentences well, and sentences beat tags at spatial relations —
             // so one composition sentence rides at the end, tags mode only.
             const finals = panels.map(p => composePositive(
-                p.sentence && style === 'tags' ? `${appendAnchor(p.prompt, anchor)}, ${p.sentence}` : appendAnchor(p.prompt, anchor),
+                p.sentence && style === 'tags' ? `${appendAnchor(p.prompt, anchorFor(p))}, ${p.sentence}` : appendAnchor(p.prompt, anchorFor(p)),
                 style,
             ));
             debugRaw = raw;
@@ -1276,7 +1356,7 @@ async function illustrateMessage(mesId, { force = false } = {}) {
             // One seed for the whole strip: same character rendering in every panel.
             const runSeed = Math.floor(Math.random() * 2 ** 31);
             for (let i = 0; i < panels.length; i++) {
-                const result = await generateWithBackend(finals[i], negFull, panels.length > 1, seedForPanel(runSeed, (panels[i].who || []).map(w => w.name)));
+                const result = await generateWithBackend(finals[i], negFull, panels.length > 1, seedForPanel(runSeed, (panels[i].who || []).map(w => w.name), panels[i].welded));
                 panelFormat = result.format || panelFormat;
                 let imageB64 = result.isUrl ? await urlToBase64(result.data) : result.data;
                 if (panels[i].bubbles.length) {

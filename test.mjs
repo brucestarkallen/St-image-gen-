@@ -24,7 +24,7 @@ function extract(name) {
 }
 
 const FUNCS = [
-    'splitPrincipals', 'framesCrowd',
+    'splitPrincipals', 'framesCrowd', 'enforceShotGrammar', 'hasGarment', 'firstGarmentTag',
     'normalizeForMatch', 'sanitizeBubbles', 'sanitizeBuilderOutput', 'softSanitize',
     'parsePanels', 'parseCastSheet', 'mergeCastLines', 'effectiveForcedTags',
     'composePositive', 'scanPresenceIn', 'markerDetails', 'ledgerStateLines',
@@ -54,7 +54,7 @@ function extractConst(name) {
     if (!line) throw new Error(`extractConst: ${name} not found`);
     return line;
 }
-const CONSTS = ['escRe', 'BACKGROUND_STATE'];
+const CONSTS = ['escRe', 'BACKGROUND_STATE', 'CODE_OWNED_TAG', 'FRAMING_TAG', 'ANGLE_TAG', 'GARMENT_WORDS'];
 
 const sandboxPath = '/tmp/ss_sandbox_' + process.pid + '.mjs';
 writeFileSync(sandboxPath, prelude + '\n' + CONSTS.map(extractConst).join('\n') + '\n' + FUNCS.map(extract).join('\n\n')
@@ -413,6 +413,41 @@ function defaultPatterns() { return '<details>[\\s\\S]*?</details>\n\\{[A-Z_]+\\
     check('scrub: a space-joined restatement of appearance is still a duplicate',
         S.scrubState('tall lean sharp-featured, arm raised overhead holding sky-blue katana', 'man, white hair, tall, lean, sharp-featured, black kosode')
             === 'arm raised overhead holding sky-blue katana');
+    // Field regression, snap_31 v0.14.0: the builder wrote count tags into `state`, so
+    // "2boys, <Jovan block>, 1boy, ..., <old man block>, 1boy" reached the model and the
+    // two men fused into one old white-haired man holding the sword.
+    check('scrub: count tags never survive inside a character block',
+        S.scrubState('1boy, sky-blue blade raised overhead, both hands gripping hilt', 'man, white hair, tall')
+            === 'sky-blue blade raised overhead, both hands gripping hilt'
+        && S.scrubState('1girl, solo, crowd, tears at corners of eyes', 'woman, petite') === 'tears at corners of eyes'
+        && S.scrubState('2boys, multiple girls, standing', 'man, tall') === 'standing');
+
+    // Field regression: "low angle, full body, wide shot" — the model split the
+    // difference and the figures came out unreadable.
+    check('shot grammar: exactly one framing tag and one angle tag survive, first of each',
+        S.enforceShotGrammar('1boy, standing, low angle, full body, wide shot, dust motes')
+            === '1boy, standing, low angle, full body, dust motes'
+        && S.enforceShotGrammar('close-up, from below, dutch angle, extreme close-up, rain')
+            === 'close-up, from below, rain');
+    check('shot grammar: a compliant panel is left alone',
+        S.enforceShotGrammar('1girl, crying, cowboy shot, from side, backlighting')
+            === '1girl, crying, cowboy shot, from side, backlighting');
+
+    // Field regression: Rukia's cast entry carries no garment, so the model dressed her
+    // from its own priors — a shinigami lieutenant in a school blazer.
+    check('dress: an undressed principal is dressed by code from the world dress',
+        S.assembleIdentity([{ name: 'Rukia Kuchiki', state: 'shouting' }],
+            'Rukia Kuchiki: woman, petite, short black hair, violet eyes',
+            { dress: 'black shihakusho' }).blocks[0].includes('black shihakusho'));
+    check('dress: a principal the sheet already dresses is not re-dressed',
+        S.assembleIdentity([{ name: 'Jovan Oda', state: 'standing' }],
+            'Jovan Oda: man, white hair, black kosode',
+            { dress: 'black shihakusho' }).blocks[0].includes('black shihakusho') === false);
+    check('dress: garment detection and world-dress pick',
+        S.hasGarment('man, white hair, black kosode') && !S.hasGarment('woman, petite, violet eyes')
+        && S.firstGarmentTag('black kosode, no insignia, black shihakusho') === 'black kosode'
+        && S.firstGarmentTag('pale winter sun, stone courtyard') === '');
+
     check('scrub: real action tags that reuse one appearance word survive',
         S.scrubState('white hair blowing in wind, teeth clenched', 'man, white hair, tall').includes('blowing'));
 }
@@ -523,14 +558,14 @@ function defaultPatterns() { return '<details>[\\s\\S]*?</details>\n\\{[A-Z_]+\\
     check('src: dialogue spreads one-per-panel by default', src.includes('Prefer ONE line per panel'));
     check('src: run seed feeds who-derived per-panel seeds through all three backends',
         src.includes('const runSeed = Math.floor(Math.random() * 2 ** 31);')
-        && src.includes('seedForPanel(runSeed, (panels[i].who || []).map(w => w.name))')
+        && src.includes('seedForPanel(runSeed, (panels[i].who || []).map(w => w.name), panels[i].welded)')
         && src.includes('seed: Number.isInteger(seed) ? seed : -1,')
         && src.includes('seed: Number.isInteger(seed) ? seed : undefined,')
         && src.includes('Number.isInteger(seed) ? seed : Math.floor'));
     check('src: stitch is a rigid cover-filled grid with framed cells',
         src.includes('cx.drawImage(img2, sx, sy, sw, sh, gutter, y, cellW, cellH)') && src.includes('cx.strokeRect(gutter + 2'));
     check('src: world derived once as data and stamped onto every panel by code',
-        src.includes('"setting":"<location/environment/population tags') && src.includes('appendAnchor(p.prompt, anchor)')
+        src.includes('"setting":"<location/environment/population tags') && src.includes('appendAnchor(p.prompt, anchorFor(p))')
         && src.includes('mineDressTags(getActiveCastSheet())'));
     check('src: public address is speaker + attending group, never a private two-shot',
         src.includes('never a private two-shot for a public address'));
@@ -544,6 +579,16 @@ function defaultPatterns() { return '<details>[\\s\\S]*?</details>\n\\{[A-Z_]+\\
     check('src: the two-cap is enforced in code at parse',
         src.includes('.filter(w => w.name).slice(0, 2) : [];')
         && src.includes('for (const entry of (who || []).slice(0, 2))'));
+    check('src: the world dress is bound to the population, immune to anchor dedup',
+        src.includes('p.crowd && crowdDress ? `crowd in ${crowdDress}` : \'\'')
+        && src.includes('const crowdDress = firstGarmentTag(dress);'));
+    check('src: shot grammar is enforced in code, not merely mandated in prose',
+        src.includes('p.prompt = enforceShotGrammar(') && src.includes('function enforceShotGrammar(prompt)'));
+    check('src: the anti-modern negative covers the school-uniform prior and architecture',
+        src.includes('school uniform, gakuran, blazer, pleated skirt') && src.includes('glass building, concrete building'));
+    check('src: state is pose and feeling only — counts and garments are code-owned',
+        src.includes('Never a count tag (1boy, 1girl, 2boys, solo) and never a garment')
+        && src.includes('if (CODE_OWNED_TAG.test(low)) continue;'));
     check('src: bubbles can only be spoken by someone drawn in the frame',
         src.includes('function sanitizeBubbles(list, sceneText, who)')
         && src.includes('if (!speakerPresent(speaker)) continue;')
@@ -579,9 +624,12 @@ function defaultPatterns() { return '<details>[\\s\\S]*?</details>\n\\{[A-Z_]+\\
     check('src: dialogue beats are two-shots and bubbles show the speaker\'s face',
         src.includes('a spoken line addressed to a present character is a TWO-shot')
         && src.includes("SHOW ITS SPEAKER'S FACE")
-        && src.includes('Defaulting everything to solo is a failed strip'));
-    check('src: panel seeds derive from who — wired into the strip loop',
-        src.includes('seedForPanel(runSeed, (panels[i].who || []).map(w => w.name))'));
+        && src.includes('Defaulting everything to solo is a failed strip')
+        && src.includes('padding it with a second principal who is doing something else somewhere else is a failed panel'));
+    check('src: welded panels share the run seed (one place); the who-hash backstops unwelded ones',
+        src.includes('seedForPanel(runSeed, (panels[i].who || []).map(w => w.name), panels[i].welded)')
+        && src.includes('if (identityWelded) return (runSeed >>> 0) % 2147483647;')
+        && src.includes('p.welded = id.blocks.length > 0;'));
     check('src: crowd dress is named in setting by contract',
         src.includes("that population's dress"));
     check('src: gold-run cinematography mandated — shot grammar, variety, acting density',
@@ -598,7 +646,8 @@ function defaultPatterns() { return '<details>[\\s\\S]*?</details>\n\\{[A-Z_]+\\
     check('src: state is bound to its owner by schema and weld',
         src.includes('"state":"<THIS character') && src.includes('welds their state onto it')
         && src.includes("carries it in their OWN \"state\"")
-        && src.includes('scrubState(state, hit.tags) ? `${hit.tags}, ${scrubState(state, hit.tags)}`'));
+        && src.includes('const scrubbed = scrubState(state, hit.tags);')
+        && src.includes('blocks.push(scrubbed ? `${hit.tags}, ${scrubbed}${clothing}` : `${hit.tags}${clothing}`);'));
     check('src: setting and dress are tag-capped in code',
         src.includes('capTags(obj?.setting, 16)') && src.includes('capTags(obj?.dress, 8)'));
     check('src: the cast author copies canon verbatim — no synonyms, adults are man/woman',
@@ -619,7 +668,7 @@ function defaultPatterns() { return '<details>[\\s\\S]*?</details>\n\\{[A-Z_]+\\
         src.includes('WHO writes identity AND owns state, and WHO is not you')
         && src.includes('one contiguous run per character')
         && src.includes('a climax panel whose victim is missing from "who" is a failed panel')
-        && src.includes('assembleIdentity(principals, activeSheet, { crowd })')
+        && src.includes('assembleIdentity(principals, activeSheet, { crowd, dress: firstGarmentTag(dress) })')
         && src.includes('Never blend two people into one')
         && src.includes('never render anyone as a child unless their cast tags say so'));
     check('src: scene population is setting-state with continuity',
