@@ -12,7 +12,7 @@ import { getBase64Async, saveBase64AsFile } from '../../../utils.js';
 import { callGenericPopup, POPUP_TYPE } from '../../../popup.js';
 
 const MODULE = 'sceneSnap';
-const VERSION = '0.19.1';
+const VERSION = '0.20.0';
 
 const defaultSettings = Object.freeze({
     enabled: true,
@@ -170,10 +170,12 @@ WHO is the people the beat's action passes BETWEEN, and nobody else:
 - A beat belonging to the place or the crowd (the courtyard erupting, three hundred voices at once) lists NOBODY: "who": []. A scene whose crowd reacts needs one such frame; a strip of nothing but single faces has thrown the scene away.
 - Never more than two names: a single image prompt cannot bind a garment or a wound across three people. A third principal means the beat splits across two panels.
 - Never pad a frame to two, and never cut a frame to one. Use EXACT cast-sheet names.
+- A panel with TWO names must fill "between" with what passes between them — who is looking at, speaking to, touching, or answering whom. Two people who merely happen to be in the same courtyard doing separate things are not a two-shot; that is two panels, or one.
+- Never give the same lone character two panels in a row. One continuous action (the blade leaving the sheath, then the blade held overhead) is ONE panel — spend the other on a beat or a character the strip is otherwise dropping.
 
 WORLD, derived once: "setting" is the standing description of the place stamped on every panel — location, architecture, weather, light, AND the scene's population with what that population wears ("packed stands of shinigami in black shihakusho"). Never what the population is momentarily doing. "dress" is ONLY the universal base outfit an ordinary person of this world wears — never rank- or status-specific garments.
 
-The plan entry for each panel is: {"beat":"<one plain sentence: what this frame shows>","follows":"<how this moment follows the previous panel — omit on panel 1>","who":["Exact Cast Name"]}`;
+The plan entry for each panel is: {"beat":"<one plain sentence: what this frame shows>","follows":"<how this moment follows the previous panel — omit on panel 1>","between":"<what passes between the two people — required when "who" has two names>","who":["Exact Cast Name"]}`;
 
 // Same default presence-marker patterns as Summaryception's ledger: a preset's
 // [IST: name|state] in-scene tracker and [ACW: name|...] off-screen watchlist.
@@ -652,13 +654,22 @@ function assembleIdentity(who, sheetText, opts = {}) {
         }
         else missing.push(name.trim() || '(unnamed)');
     }
-    let boys = 0, girls = 0, others = 0;
-    for (const b of blocks) {
+    // The count run is read in order against the blocks that follow it. Emitting a fixed
+    // boy-then-girl order while the blocks run woman-then-man tells the model the first
+    // described figure is the boy — the field run returned a red-haired woman with a
+    // man's tattoos and chest. Counts follow block order, always.
+    const kinds = blocks.map(b => {
         const first = String(b).split(',')[0].trim().toLowerCase();
-        if (/\b(?:woman|girl|female)\b/.test(first)) girls++;
-        else if (/\b(?:man|boy|male)\b/.test(first)) boys++;
-        else others++;
-    }
+        if (/\b(?:woman|girl|female)\b/.test(first)) return 'g';
+        if (/\b(?:man|boy|male)\b/.test(first)) return 'b';
+        return 'o';
+    });
+    const seen = [];
+    for (const k of kinds) if (!seen.includes(k)) seen.push(k);
+    const nOf = k => kinds.filter(x => x === k).length;
+    const label = (k, n) => k === 'g' ? (n === 1 ? '1girl' : n + 'girls')
+        : k === 'b' ? (n === 1 ? '1boy' : n + 'boys')
+            : (n === 1 ? '1other' : n + 'others');
     // Count tags are an exhaustive claim about the frame's population: "1boy, 1girl"
     // asserts a two-person world. Stamping that onto a frame whose own anchor names a
     // packed courtyard is a contradiction, and the model resolves it the only way it
@@ -666,13 +677,11 @@ function assembleIdentity(who, sheetText, opts = {}) {
     // a principal outright. `crowd` is the danbooru term for uncounted background
     // people; with it the counts stop lying and the crowd becomes a subject the model
     // is actually asked to draw.
-    const counts = [
-        boys ? `${boys === 1 ? '1boy' : boys + 'boys'}` : '',
-        girls ? `${girls === 1 ? '1girl' : girls + 'girls'}` : '',
-        others ? `${others === 1 ? '1other' : others + 'others'}` : '',
-        opts.crowd ? 'crowd' : '',
-    ].filter(Boolean).join(', ');
-    return { counts, blocks, missing };
+    const counts = seen.map(k => label(k, nOf(k))).join(', ');
+    // `crowd` is environment, not a principal. Between the count run and the first
+    // character block it breaks their association and can pull that character's traits
+    // onto the crowd — it is returned separately and stamped AFTER the blocks.
+    return { counts, blocks, missing, crowdTag: opts.crowd ? 'crowd' : '' };
 }
 
 // Escape a name for RegExp embedding. Top-level on purpose: this class once
@@ -785,6 +794,7 @@ function parsePlan(raw, maxPanels) {
     const arr = Array.isArray(obj?.plan) ? obj.plan : [];
     const panels = arr.map(p => ({
         beat: stripLayoutMeta(String(p?.beat ?? '').replace(/["`\n]+/g, ' ')).replace(/\s{2,}/g, ' ').trim().slice(0, 200),
+        between: String(p?.between ?? '').replace(/["`\n]+/g, ' ').replace(/\s{2,}/g, ' ').trim().slice(0, 200),
         follows: String(p?.follows ?? '').replace(/["`\n]+/g, ' ').replace(/\s{2,}/g, ' ').trim().slice(0, 200),
         who: Array.isArray(p?.who) ? p.who.map(w => String(typeof w === 'object' && w ? w.name ?? '' : w ?? '').trim()).filter(Boolean).slice(0, 2) : null,
     })).filter(p => p.beat).slice(0, maxPanels);
@@ -819,8 +829,13 @@ function validatePlan(plan, castNames, maxPanels, opts = {}) {
         for (const n of (p.who || [])) {
             if (known.size && !known.has(n.toLowerCase())) problems.push(`Panel ${i + 1} names "${n}", who is not in the cast sheet. Use an exact cast-sheet name or drop them.`);
         }
+        if ((p.who || []).length === 2 && !p.between) problems.push(`Panel ${i + 1} puts ${p.who.join(' and ')} in one frame without saying what passes between them. Two people share a frame only when the beat is an action between them — if you cannot name it, this is two panels or one.`);
         if (i > 0 && !p.follows) problems.push(`Panel ${i + 1} does not say how it follows panel ${i}. Every panel after the first must state what makes it the next moment — a panel that does not follow the one before it is an independent picture, not a strip.`);
         if (i > 0 && p.follows && beatsAreTheSame(p.follows, p.beat)) problems.push(`Panel ${i + 1}'s "follows" just restates its own beat. Say what changed since panel ${i}.`);
+        if (i > 0 && (p.who || []).length === 1 && (plan.panels[i - 1].who || []).length === 1
+            && p.who[0].toLowerCase() === plan.panels[i - 1].who[0].toLowerCase()) {
+            problems.push(`Panels ${i} and ${i + 1} are both ${p.who[0]} alone. One continuous action does not get two frames — merge them into the stronger image and give the freed panel to a beat, or a character, the strip is not covering.`);
+        }
         for (let j = i + 1; j < plan.panels.length; j++) {
             if (beatsAreTheSame(p.beat, plan.panels[j].beat)) problems.push(`Panels ${i + 1} and ${j + 1} are the same beat. Replace one with a beat the strip does not already cover.`);
         }
@@ -1117,7 +1132,7 @@ STRIP RULES (sequence mode only):
 - A beat with three or more principals is SPLIT into consecutive panels (panels are unlimited; frames are not).
 - ONE BEAT PER PANEL, and every panel a DIFFERENT beat. More beats than panels: drop the weakest, never merge two into one frame. One action stretched over two panels (a sword leaving its sheath, then that same sword held overhead) is one beat rendered twice — pick the stronger image and spend the freed panel on a beat nothing else covers.
 - A two-person exchange may play as a shot/reverse-shot pair across two panels.
-- Consecutive panels NEVER repeat the same framing+angle pair — vary the camera like a filmed scene.${bubblesOn ? '\n\n' + BUBBLE_RULES : ''}\nOUTPUT (replaces the single-line requirement above): strict JSON only — no reasoning, no commentary, no markdown. The "plan" array comes FIRST and the "panels" array renders it one for one: {"plan":[{"beat":"<one plain sentence>","follows":"<how this follows the previous panel; omit on panel 1>","who":["Exact Cast Name"]}],"setting":"<location/environment/population tags for this scene>","dress":"<what people of this world wear, as tags>","panels":[{"who":[{"name":"Exact Cast Name","state":"<THIS character's pose, expression, wounds, and action tags>"},{"name":"...","state":"..."}],"prompt":"<camera, lighting, atmosphere, shared effects, environment ONLY>","sentence":"<ONE plain-English sentence describing only how the characters are arranged toward each other and the space — spatial relations and interaction, no appearance words>"${bubbleSchema}}]}`;
+- Consecutive panels NEVER repeat the same framing+angle pair — vary the camera like a filmed scene.${bubblesOn ? '\n\n' + BUBBLE_RULES : ''}\nOUTPUT (replaces the single-line requirement above): strict JSON only — no reasoning, no commentary, no markdown. The "plan" array comes FIRST and the "panels" array renders it one for one: {"plan":[{"beat":"<one plain sentence>","follows":"<how this follows the previous panel; omit on panel 1>","between":"<what passes between them; required when who has two names>","who":["Exact Cast Name"]}],"setting":"<location/environment/population tags for this scene>","dress":"<what people of this world wear, as tags>","panels":[{"who":[{"name":"Exact Cast Name","state":"<THIS character's pose, expression, wounds, and action tags>"},{"name":"...","state":"..."}],"prompt":"<camera, lighting, atmosphere, shared effects, environment ONLY>","sentence":"<ONE plain-English sentence describing only how the characters are arranged toward each other and the space — spatial relations and interaction, no appearance words>"${bubbleSchema}}]}`;
     } else if (structuredSingle) {
         fullSystem += `\n\nSINGLE FRAME (active):\nDepict exactly ONE frozen frame: the scene's FINAL visual beat — the last thing a camera would see. Choose that beat's principals for "who" and fold everyone else into the crowd; never montage, never split the moment.
 ${FRAME_LAWS}${bubblesOn ? '\n\n' + BUBBLE_RULES : ''}\nOUTPUT (replaces the single-line requirement above): strict JSON only — no reasoning, no commentary, no markdown, exactly one panel: {"setting":"<location/environment/population tags for this scene>","dress":"<what people of this world wear, as tags>","panels":[{"who":[{"name":"Exact Cast Name","state":"<THIS character's pose, expression, wounds, and action tags>"},{"name":"...","state":"..."}],"prompt":"<camera, lighting, atmosphere, shared effects, environment ONLY>","sentence":"<ONE plain-English sentence describing only how the characters are arranged toward each other and the space — spatial relations and interaction, no appearance words>"${bubbleSchema}}]}`;
@@ -1218,7 +1233,7 @@ ${FRAME_LAWS}${bubblesOn ? '\n\n' + BUBBLE_RULES : ''}\nOUTPUT (replaces the sin
         const id = assembleIdentity(principals, activeSheet, { crowd: crowdHere, dress: firstGarmentTag(dress) });
         if (id.missing.length) console.warn('[SceneSnap] panel "who" names still not in cast sheet:', id.missing);
         const bgTag = background.length ? 'distant figure in the background' : '';
-        p.prompt = enforceShotGrammar([id.counts, ...id.blocks, bgTag, p.prompt].filter(Boolean).join(', '));
+        p.prompt = enforceShotGrammar([id.counts, ...id.blocks, id.crowdTag, bgTag, p.prompt].filter(Boolean).join(', '));
         p.who = principals;
         // Identity welded by code — the seed no longer has to protect subject appearance.
         p.welded = id.blocks.length > 0;
@@ -1537,7 +1552,11 @@ async function illustrateMessage(mesId, { force = false } = {}) {
             // garment — taking the CROWD's only clothing instruction with it. The field run
             // lost it on panel 1 and three hundred shinigami came back in school uniforms.
             // Bind it to the population instead: a distinct phrase no character block holds.
-            const crowdDress = firstGarmentTag(dress);
+            // "crowd of shinigami in black shihakusho" names the population's dress
+            // explicitly; prefer it over the first tag of the world dress, which in the
+            // field run was a principal's own kosode.
+            const populationDress = (String(setting || '').match(/(?:crowd|ranks|rows|stands|throng|courtyard|hall|street)[^,]*?\bin ([^,]+)/i) || [])[1];
+            const crowdDress = (populationDress && hasGarment(populationDress) ? populationDress.trim() : '') || firstGarmentTag(dress);
             const anchorFor = (p) => {
                 const bound = p.crowd && crowdDress ? `crowd in ${crowdDress}` : '';
                 const rest = String(dress || '').split(',').map(t => t.trim())

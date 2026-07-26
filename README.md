@@ -114,6 +114,14 @@ Stella: girl, long crimson hair, red eyes, large breasts, hair ribbon, school un
 
 ## Changelog
 
+### 0.20.0 — the count run is read in order, and it was mislabelling the first figure
+- **Fixed: a character rendering as the wrong sex.** Count tags were always emitted boy-then-girl regardless of which character was described first. A frame whose blocks ran woman-then-man was therefore prefixed `1boy, 1girl, woman, petite, ... , man, muscular, tattoos` — the model reads the count run in order against the blocks that follow, so the first count landed on the second character's description. The field run returned a red-haired woman carrying a man's tattoos and build. Counts now follow block order exactly.
+- **Fixed: `crowd` sitting between the counts and the first character.** It was appended to the count run, which put an environment tag directly in front of a character block and let that character's traits bleed onto the crowd. It is stamped after the blocks now, where it belongs.
+- **Fixed: one action spending two panels.** The blade leaving the sheath and the blade held overhead came back as panels 1 and 2 — the same beat, worded differently enough to slip past the duplicate detector, and it cost the panel another character needed. The same lone character may no longer hold two consecutive panels.
+- **A two-person frame must now say what passes between the pair.** The plan carries a `between` field, required whenever `who` has two names, and a plan that cannot fill it is rejected. Two people who merely happen to be in the same courtyard doing separate things are two panels, or one — the field run put a chanting lieutenant and a laughing friend in one frame with nothing joining them.
+- **Fixed: the crowd wearing a principal's clothes.** The crowd's dress was taken from the first garment in the world dress list, which was one character's own kosode. When the setting names the population's dress ("crowd of shinigami in black shihakusho"), that is used instead.
+- Gate: 208 → 215 checks; all eight new guards negative-tested.
+
 ### 0.19.0 — the plan costs nothing, the beats are a chain, and no name reaches the tags
 - **The plan no longer costs a second call.** 0.18.0 planned the strip in its own round trip, which added real latency on every image. The plan now rides in the *same* answer as the panels — the model writes the beat list first and renders it below, in one response. Validation is unchanged and still runs before any image: only a plan that actually fails costs an extra call.
 - **Fixed: a strip whose panels were five unrelated pictures.** The field run opened on the crowd already roaring and cut back to the sword raise that caused it, three panels later. Beats are now a chain: every panel after the first must state in `follows` what makes it the next moment, and the strip runs strictly forward in time. Code rejects a plan with a missing `follows`, and rejects one whose `follows` merely restates its own beat.

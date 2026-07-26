@@ -364,7 +364,7 @@ function defaultPatterns() { return '<details>[\\s\\S]*?</details>\n\\{[A-Z_]+\\
         { name: 'Kenpachi Zaraki', state: 'kneeling in crater, shredded forearms, laughing' },
     ], sheet);
     check('identity: state welds into its owner\'s contiguous run — the laugh cannot migrate',
-        duo.counts === '1boy, 1girl'
+        duo.counts === '1girl, 1boy'
         && duo.blocks[0] === 'woman, short silver hair, grey eyes, tall, captain haori, kneeling beside him, glowing green hands on his chest, fierce expression'
         && duo.blocks[1] === 'man, long black spiked hair, bells in hair, eyepatch, towering muscular build, kneeling in crater, shredded forearms, laughing'
         && duo.missing.length === 0);
@@ -384,8 +384,12 @@ function defaultPatterns() { return '<details>[\\s\\S]*?</details>\n\\{[A-Z_]+\\
 
     // Field regression, snap_31: a courtyard of 300 rendered as gray mass and a
     // principal vanished, because the counts claimed a two-person world.
-    check('counts: a frame with a crowd admits the crowd (counts stop asserting a two-person world)',
-        S.assembleIdentity([{ name: 'Jovan Oda', state: 'standing' }, { name: 'Rukia Kuchiki', state: 'shouting' }], sheet, { crowd: true }).counts === '1boy, 1girl, crowd');
+    check('counts: run in BLOCK order — a fixed order mislabels the first figure',
+        S.assembleIdentity([{ name: 'Rukia Kuchiki', state: 'shouting' }, { name: 'Jovan Oda', state: 'standing' }], sheet, {}).counts === '1girl, 1boy'
+        && S.assembleIdentity([{ name: 'Jovan Oda', state: 'standing' }, { name: 'Rukia Kuchiki', state: 'shouting' }], sheet, {}).counts === '1boy, 1girl');
+    check('counts: the crowd is returned separately, never inside the count run',
+        (() => { const id = S.assembleIdentity([{ name: 'Jovan Oda', state: 'standing' }, { name: 'Rukia Kuchiki', state: 'shouting' }], sheet, { crowd: true });
+            return id.counts === '1boy, 1girl' && id.crowdTag === 'crowd'; })());
     check('counts: no crowd claimed when the frame has none',
         S.assembleIdentity([{ name: 'Jovan Oda', state: 'standing' }], sheet, { crowd: false }).counts === '1boy'
         && S.assembleIdentity([{ name: 'Jovan Oda', state: 'standing' }], sheet).counts === '1boy');
@@ -489,7 +493,7 @@ function defaultPatterns() { return '<details>[\\s\\S]*?</details>\n\\{[A-Z_]+\\
     // The plan pass: the strip is laid out and checked as a LIST before any tag exists.
     {
         const goodPlan = S.parsePlan(JSON.stringify({ setting: 'courtyard, crowd of shinigami in black shihakusho', dress: 'black shihakusho', plan: [
-            { beat: 'He raises the blade over the courtyard.', who: ['Jovan Oda', 'Rukia Kuchiki'] },
+            { beat: 'He raises the blade over the courtyard.', between: 'she is at his shoulder, chanting up at the blade he raised', who: ['Jovan Oda', 'Rukia Kuchiki'] },
             { beat: 'The old soldier salutes the memorial stone.', follows: 'the blade is up now, and the veteran answers it', who: ['Ashida Tetsuzan'] },
             { beat: 'The whole courtyard erupts into the chant.', follows: 'the salute breaks the silence and three hundred voices follow', who: [] },
         ] }), 4);
@@ -511,6 +515,30 @@ function defaultPatterns() { return '<details>[\\s\\S]*?</details>\n\\{[A-Z_]+\\
             { beat: 'The old soldier salutes.', follows: 'her voice carries to the ranks', who: ['Ashida Tetsuzan'] },
         ] }, ['Jovan Oda', 'Rukia Kuchiki', 'Ashida Tetsuzan'], 4, {})
             .some(p => p.includes('Every panel is a single person')));
+    // Field regression, snap_31 v0.19.1: panels 1 and 2 were one sword-draw split in
+    // two, which spent the panel Rukia needed.
+    check('plan: the same lone character twice in a row is caught',
+        S.validatePlan({ panels: [
+            { beat: 'The blade leaps from its sheath.', who: ['Jovan Oda'] },
+            { beat: 'He catches it and raises it overhead.', follows: 'the blade is free and falls into his hand', who: ['Jovan Oda'] },
+        ] }, ['Jovan Oda'], 4, {})
+            .some(p => p.includes('are both Jovan Oda alone')));
+    check('plan: the same character in consecutive panels WITH someone else is allowed',
+        !S.validatePlan({ panels: [
+            { beat: 'He raises the blade.', who: ['Jovan Oda'] },
+            { beat: 'She answers at his shoulder.', follows: 'the blade is up', between: 'she chants up at the blade he raised', who: ['Jovan Oda', 'Rukia Kuchiki'] },
+        ] }, ['Jovan Oda', 'Rukia Kuchiki'], 4, {})
+            .some(p => p.includes('alone')));
+    // Field regression: Rukia and Renji shared a frame doing unrelated things.
+    check('plan: a two-person frame with nothing passing between them is caught',
+        S.validatePlan({ panels: [
+            { beat: 'She chants while he laughs to himself.', who: ['Rukia Kuchiki', 'Renji Abarai'] },
+        ] }, ['Rukia Kuchiki', 'Renji Abarai'], 4, {})
+            .some(p => p.includes('without saying what passes between them')));
+    check('plan: "between" is carried through the parse',
+        S.parsePlan(JSON.stringify({ plan: [{ beat: 'They clash.', between: 'his blade meets her block', who: ['A', 'B'] }] }), 4)
+            .panels[0].between === 'his blade meets her block');
+
     // Field regression, snap_31 v0.18.0: five panels in no order — the crowd already
     // roaring in panel 1, the sword raise that caused it in panel 4.
     check('plan: a panel that does not follow the one before it is caught',
@@ -531,7 +559,7 @@ function defaultPatterns() { return '<details>[\\s\\S]*?</details>\n\\{[A-Z_]+\\
     check('plan: a crowd scene with no crowd frame is caught',
         S.validatePlan({ panels: [
             { beat: 'He raises the blade.', who: ['Jovan Oda'] },
-            { beat: 'She chants at his shoulder.', follows: 'the blade is up and she answers it', who: ['Jovan Oda', 'Rukia Kuchiki'] },
+            { beat: 'She chants at his shoulder.', follows: 'the blade is up and she answers it', between: 'she answers the blade he raised', who: ['Jovan Oda', 'Rukia Kuchiki'] },
             { beat: 'The old soldier salutes.', follows: 'her voice carries into the ranks', who: ['Ashida Tetsuzan'] },
         ] }, ['Jovan Oda', 'Rukia Kuchiki', 'Ashida Tetsuzan'], 4, { crowd: true })
             .some(p => p.includes('gives the crowd the frame')));
@@ -710,7 +738,7 @@ function defaultPatterns() { return '<details>[\\s\\S]*?</details>\n\\{[A-Z_]+\\
         && src.includes('for (const entry of (who || []).slice(0, 2))'));
     check('src: the world dress is bound to the population, immune to anchor dedup',
         src.includes('p.crowd && crowdDress ? `crowd in ${crowdDress}` : \'\'')
-        && src.includes('const crowdDress = firstGarmentTag(dress);'));
+        && src.includes("const crowdDress = (populationDress && hasGarment(populationDress) ? populationDress.trim() : '') || firstGarmentTag(dress);"));
     check('src: shot grammar is enforced in code, not merely mandated in prose',
         src.includes('p.prompt = enforceShotGrammar(') && src.includes('function enforceShotGrammar(prompt)'));
     check('src: the anti-modern negative covers the school-uniform prior and architecture',
@@ -767,6 +795,14 @@ function defaultPatterns() { return '<details>[\\s\\S]*?</details>\n\\{[A-Z_]+\\
     check('src: rank decorations are stripped at the weld and the WWII prior is negated',
         src.includes('function stripRankInsignia(') && src.includes('RANK_WORD.test(t) && DECORATION_WORD.test(t)')
         && src.includes('nazi, swastika, iron cross'));
+    check('src: the count run follows block order and the crowd sits after the blocks',
+        src.includes('const counts = seen.map(k => label(k, nOf(k))).join(\', \');')
+        && src.includes("crowdTag: opts.crowd ? 'crowd' : ''")
+        && src.includes('[id.counts, ...id.blocks, id.crowdTag, bgTag, p.prompt]'));
+    check('src: a two-shot must name what passes between the pair, and no lone repeat',
+        src.includes('without saying what passes between them')
+        && src.includes('Never give the same lone character two panels in a row')
+        && src.includes('"between":"<what passes between them; required when who has two names>"'));
     check('src: bubbles can only be spoken by someone drawn in the frame',
         src.includes('function sanitizeBubbles(list, sceneText, who)')
         && src.includes('if (!speakerPresent(speaker)) continue;')
