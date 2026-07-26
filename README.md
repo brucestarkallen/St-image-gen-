@@ -114,6 +114,14 @@ Stella: girl, long crimson hair, red eyes, large breasts, hair ribbon, school un
 
 ## Changelog
 
+### 0.29.0 — nudity is welded, anatomy is enforced, roles are purged
+- **Fixed: the clothed-'nude' contradiction (THE NSFW bug).** `nude` was floating in the environment tags while `shinigami uniform` and `black kosode` stayed welded into both character blocks — the model drew the clothes ON and zero anatomy. Panel-level nudity is now welded into every principal's state: `applyUndress` strips all garments from their blocks and the explicit tag lands where identity is read.
+- **Enforced: a sex act with no genital tags costs a re-call.** The field panel said 'thrusting motion' with not one anatomy tag. Any panel matching a sex-act pattern with zero genital/anatomy tags anywhere now triggers one corrective builder retry demanding concrete anatomy (breast class + nipples, penis/erection, pussy/vulva, anus), accepted only if the anatomy arrives.
+- **Fixed: green modern army uniforms.** `soldiers`/`officers` in positives beat the anti-modern negative every time. When the gate fires, role tokens are purged from setting, prompts, and states — the anchor's own population words name these people.
+- **Crowds get their ACTIONS forward.** Crowd tokens carrying actions ('dispersing crowd laughing and retreating') are extracted from the panel prompt and ride directly after the identity blocks, with the anchor's population words — the laughing, retreating crowd standard, not a static mass.
+- **Deleted: `-1.5::flat color ::` (user A/B).** The NovelAI tail is now exactly `no text, detailed background`.
+- Gate: 270 → 279 checks; purge + nude-weld negative-tested.
+
 ### 0.28.0 — no quality words, no egg-heads, and the Curated trap gets a siren
 - **Reverted: the quality block entirely (user A/B).** No `very aesthetic / best quality / amazing quality` anywhere — the prompt starts with the subject. Only the functional tail rides at the end (`no text, detailed background, -1.5::flat color ::`).
 - **Reverted: the `6+boys, 6+girls, crowd` headcount (user A/B).** It told the model to draw many identical people and returned rows of faceless egg-heads. Establishing frames now lead with the anchor's own crowd words hoisted forward (`packed stands of shinigami in black shihakusho`) — real population words in a strong position, no synthetic headcount.

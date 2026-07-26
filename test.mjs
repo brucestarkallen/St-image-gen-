@@ -30,7 +30,7 @@ const FUNCS = [
     'parsePanels', 'parseCastSheet', 'mergeCastLines', 'effectiveForcedTags',
     'composePositive', 'scanPresenceIn', 'markerDetails', 'ledgerStateLines',
     'stripScene', 'explainError', 'isStaleSession', 'stripLayoutMeta', 'appendAnchor', 'mineDressTags', 'normalizeCountTags', 'filterRankGarments', 'assembleIdentity', 'scrubState', 'seedForPanel', 'replaceNamesInSentence', 'capTagSafe', 'antiModernNegative', 'isPlaceholderTags', 'stripPlaceholderLines', 'getSize',
-    'backgroundFigureTag', 'dedupeAgainstAnchor', 'neutralizeRoleUniforms', 'unifyStripLighting', 'applyUndress', 'hoistCrowdTokens',
+    'backgroundFigureTag', 'dedupeAgainstAnchor', 'neutralizeRoleUniforms', 'unifyStripLighting', 'applyUndress', 'hoistCrowdTokens', 'extractCrowdTokens', 'purgeModernRoles',
 ];
 
 const prelude = `
@@ -39,7 +39,7 @@ const defaultSettings = Object.freeze({
     negativePrompt: 'lowres',
     stripPatterns: '<details>[\\\\s\\\\S]*?</details>\\n\\\\{[A-Z_]+\\\\}[\\\\s\\\\S]*?\\\\{/[A-Z_]+\\\\}\\n<!--[\\\\s\\\\S]*?-->',
 });
-const BACKEND_QUALITY = { novelai: 'no text, detailed background, -1.5::flat color ::' };
+const BACKEND_QUALITY = { novelai: 'no text, detailed background' };
 const SIZE_PRESETS = { portrait: { width: 832, height: 1216 }, landscape: { width: 1216, height: 832 }, square: { width: 1024, height: 1024 } };
 let settingsSizeRef;
 let settings = {
@@ -56,7 +56,7 @@ function extractConst(name) {
     if (!line) throw new Error(`extractConst: ${name} not found`);
     return line;
 }
-const CONSTS = ['escRe', 'BACKGROUND_STATE', 'CODE_OWNED_TAG', 'GARMENT_CONDITION', 'TRANSIENT_ACTIVITY', 'FRAMING_TAG', 'ANGLE_TAG', 'SIZE_WORD', 'SIZE_NOUN', 'GARMENT_WORDS', 'RANK_WORD', 'DECORATION_WORD', 'BEAT_STOPWORD', 'LIGHT_TOKEN', 'EXPLICIT_STATE', 'CROWD_ANCHOR_TOKEN'];
+const CONSTS = ['escRe', 'BACKGROUND_STATE', 'CODE_OWNED_TAG', 'GARMENT_CONDITION', 'TRANSIENT_ACTIVITY', 'FRAMING_TAG', 'ANGLE_TAG', 'SIZE_WORD', 'SIZE_NOUN', 'GARMENT_WORDS', 'RANK_WORD', 'DECORATION_WORD', 'BEAT_STOPWORD', 'LIGHT_TOKEN', 'EXPLICIT_STATE', 'CROWD_ANCHOR_TOKEN', 'MODERN_ROLE'];
 
 const sandboxPath = '/tmp/ss_sandbox_' + process.pid + '.mjs';
 writeFileSync(sandboxPath, prelude + '\n' + CONSTS.map(extractConst).join('\n') + '\n' + FUNCS.map(extract).join('\n\n')
@@ -259,8 +259,8 @@ function defaultPatterns() { return '<details>[\\s\\S]*?</details>\n\\{[A-Z_]+\\
         const out = S.composePositive('1boy, shouting, courtyard', 'tags');
         check('nai: NO quality block at all (0.28.0 user A/B — the prompt starts with the subject)',
             out.startsWith('1boy, shouting, courtyard') && !/very aesthetic|best quality|amazing quality/.test(out));
-        check('nai: tail carries no-text + the docs-backed flat-color rescue',
-            /no text, detailed background, -1\.5::flat color ::$/.test(out));
+        check('nai: tail is functional only (0.29.0 — flat-color emphasis deleted by user A/B)',
+            /no text, detailed background$/.test(out) && !/flat color|::/.test(out));
         check('nai: natural style keeps the classic append path',
             !S.composePositive('An anime illustration of a courtyard', 'natural').startsWith('{'));
         S._setSettings({ forcedTags: 'my custom tags' });
@@ -905,6 +905,36 @@ function defaultPatterns() { return '<details>[\\s\\S]*?</details>\n\\{[A-Z_]+\\
         src.includes('w.state = unifyStripLighting(String(w.state || \'\'), anchorText);'));
 }
 
+// ---------------------------------------------------------------- panel nudity + crowd actions + role purge (0.29.0)
+{
+    // Crowd tokens split from the rest so actions ride forward.
+    const cx = S.extractCrowdTokens('wide shot, dispersing crowd laughing and retreating, dust motes, cheering shinigami with raised fists');
+    check('crowd: action-bearing crowd tokens extracted, scenery kept',
+        cx.crowd === 'dispersing crowd laughing and retreating'
+        && cx.rest === 'wide shot, dust motes, cheering shinigami with raised fists');
+    check('crowd: empty tolerated', S.extractCrowdTokens('').rest === '' && S.extractCrowdTokens('').crowd === '');
+    // Role words purge in traditional worlds.
+    check('roles: soldiers/officers purged, population words kept',
+        S.purgeModernRoles('retreating soldiers, roof tiles with officers, crowd of shinigami in black shihakusho')
+            === 'crowd of shinigami in black shihakusho');
+    check('roles: empty tolerated', S.purgeModernRoles('') === '');
+    // Panel-nude logic end to end: applyUndress with an appended 'nude' strips both blocks.
+    const nid3 = S.assembleIdentity([
+        { name: 'J', state: 'kneeling between her thighs, thrusting, nude' },
+        { name: 'R', state: 'on back, arms above head, small breasts bouncing, nude' },
+    ], 'J: man, white hair, black kosode\nR: woman, short black hair, violet eyes, shinigami uniform',
+        { dress: 'black shihakusho', worldDress: 'black shihakusho' });
+    check('nude: BOTH principals stripped of welded garments, anatomy kept',
+        nid3.blocks.every(b => !/kosode|uniform/.test(b)) && /small breasts bouncing/.test(nid3.blocks[1]));
+    // The anatomy enforcement and panel-nude weld are wired in source.
+    check('src: sex act with zero genital tags costs one corrective retry',
+        src.includes('anatomyMissing') && src.includes('GENITAL_TAG') && src.includes('names no anatomy'));
+    check('src: panel-level nudity is welded into every principal state',
+        src.includes("if (!/\\b(?:nude|naked)\\b/i.test(String(w.state || ''))) w.state = [String(w.state || '').trim(), 'nude'].filter(Boolean).join(', ');"));
+    check('src: modern role words purged when the anti-modern gate fires',
+        src.includes('const antiModernOn = !!antiModernNegative(dress);') && src.includes('purgeModernRoles(p.prompt)'));
+}
+
 // ---------------------------------------------------------------- source-level invariants
 {
     check('src: single-panel bubble mode requests strict JSON', src.includes('exactly one panel'));
@@ -945,12 +975,11 @@ function defaultPatterns() { return '<details>[\\s\\S]*?</details>\n\\{[A-Z_]+\\
         !src.includes('`crowd in ${crowdDress}`')
         && src.includes("const anchorFor = () => [setting, dress].filter(Boolean).join(', ');")
         && src.includes("that population's dress"));
-    check('src: crowd hoist repositions the SETTING\'s own words only (0.26.0)',
-        src.includes('const crowdTag = hoistCrowdTokens(anchorText, p.crowd);')
-        && src.includes('CROWD_ANCHOR_TOKEN.test(t)'));
-    check('src: an establishing frame leads with the anchor\'s own crowd words (0.28.0 — egg-head headcount reverted)',
+    check('src: crowd hoist is token-driven by CROWD_ANCHOR_TOKEN (0.26.0/0.29.0)',
+        src.includes('CROWD_ANCHOR_TOKEN.test(t)'));
+    check('src: an establishing frame leads with crowd words, never a headcount (0.28.0 — egg-heads reverted)',
         !src.includes("6+boys, 6+girls, crowd")
-        && src.includes("const crowdTag = crowdHere ? hoistCrowdTokens(anchorText, true) : '';"));
+        && src.includes("crowdHere ? hoistCrowdTokens(anchorText, true) : ''"));
     check('src: V4.5 Curated + explicit panel warns once (the silent NSFW kill)',
         src.includes("/curated/i.test(String(settings.naiModel || ''))")
         && src.includes('EXPLICIT_STATE.test(String(w?.state'));
@@ -997,7 +1026,7 @@ function defaultPatterns() { return '<details>[\\s\\S]*?</details>\n\\{[A-Z_]+\\
         && src.includes('YOUR PLAN WAS REJECTED:')
         && !src.includes('const planRaw = await callLLM'));
     check('src: only a plan that fails validation costs an extra call',
-        src.split('await callLLM(').length - 1 === 6);
+        src.split('await callLLM(').length - 1 === 7);
     check('src: beats must chain — a panel states how it follows the one before it',
         src.includes('THE BEATS ARE A CHAIN, NOT A LIST')
         && src.includes('STRICT CHRONOLOGY') && src.includes('does not say how it follows panel'));
@@ -1013,10 +1042,13 @@ function defaultPatterns() { return '<details>[\\s\\S]*?</details>\n\\{[A-Z_]+\\
         && src.includes('nazi, swastika, iron cross'));
     check('src: the count run follows block order',
         src.includes('const counts = seen.map(k => label(k, nOf(k))).join(\', \');')
-        && src.includes('[id.counts, ...id.blocks, bgTag, crowdTag, unifyStripLighting(dedupeAgainstAnchor(p.prompt, anchorText), anchorText)]'));
+        && src.includes('[id.counts, ...id.blocks, bgTag, crowdTag, restPrompt]'));
     check('src: anchor owns the environment — dedupe wired into BOTH panel paths',
-        src.includes("crowdTag, unifyStripLighting(dedupeAgainstAnchor(p.prompt, anchorText), anchorText)")
+        (src.match(/dedupeAgainstAnchor\(/g) || []).length >= 3
         && src.includes('const bgTag = background.length ? backgroundFigureTag(background, activeSheet) : \'\';'));
+    check('src: crowd hoist repositions the anchor\'s words AND the prompt\'s crowd actions (0.29.0)',
+        src.includes('const cx = extractCrowdTokens(deduped);')
+        && src.includes("[hoistCrowdTokens(anchorText, true), cx.crowd].filter(Boolean).join(', ')"));
     check('src: a crowd-restoring repair is accepted on an equal score',
         src.includes('const crowdRestored = wantsCrowd')
         && src.includes('fixProblems.length < problems.length || (crowdRestored && fixProblems.length <= problems.length)'));

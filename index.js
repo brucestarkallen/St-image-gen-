@@ -12,7 +12,7 @@ import { getBase64Async, saveBase64AsFile } from '../../../utils.js';
 import { callGenericPopup, POPUP_TYPE } from '../../../popup.js';
 
 const MODULE = 'sceneSnap';
-const VERSION = '0.28.0';
+const VERSION = '0.29.0';
 
 const defaultSettings = Object.freeze({
     enabled: true,
@@ -57,7 +57,7 @@ const SIZE_PRESETS = {
 // best quality / amazing quality' made outputs visibly worse — the prompt starts
 // with the subject, and only the functional tail rides at the end.
 const BACKEND_QUALITY = {
-    novelai: 'no text, detailed background, -1.5::flat color ::',
+    novelai: 'no text, detailed background',
     pollinations: 'highly detailed, cinematic lighting, rich detailed background',
 };
 const BACKEND_NEGATIVE = {
@@ -650,7 +650,7 @@ const BACKGROUND_STATE = /\b(?:in the (?:far )?(?:background|distance)|at a dist
 // scenery — the 0.25.0 demotion broke NSFW positioning by turning partners into
 // 'distant figure' (field regression). One anatomy/position tag anywhere in the
 // frame's states marks it explicit.
-const EXPLICIT_STATE = /\b(?:nude|naked|nipples?|areolae?|breasts?|penis|erection|testicles?|pussy|vulva|vagina|anus|anal|sex|orgasm|clitoris|labia|pubic|cum|semen|creampie|fellatio|paizuri|cunnilingus|doggystyle|cowgirl|missionary)\b/i;
+const EXPLICIT_STATE = /\b(?:nude|naked|nipples?|areolae?|breasts?|penis|erection|testicles?|pussy|vulva|vagina|anus|anal|sex|orgasm|clitoris|labia|pubic|cum|semen|creampie|fellatio|paizuri|cunnilingus|doggystyle|cowgirl|missionary|thrusting|fucking|grinding|cock|dick)\b/i;
 
 function splitPrincipals(who) {
     const list = (who || []).filter(w => w && String(w.name || '').trim());
@@ -883,6 +883,33 @@ function hoistCrowdTokens(anchor, crowdHere) {
     if (!crowdHere) return '';
     return String(anchor || '').split(',').map(t => t.trim())
         .filter(t => t && CROWD_ANCHOR_TOKEN.test(t)).join(', ');
+}
+
+// Crowd tokens carrying ACTIONS ('dispersing crowd laughing', 'retreating shinigami')
+// are the ones that give a crowd life — the user-facing standard is the laughing,
+// retreating crowd, not a static packed mass. They are split out of the panel prompt
+// so they can ride directly after the identity blocks, position-forward.
+function extractCrowdTokens(prompt) {
+    const crowd = [];
+    const rest = [];
+    for (const raw of String(prompt || '').split(',')) {
+        const t = raw.trim();
+        if (!t) continue;
+        (CROWD_ANCHOR_TOKEN.test(t) ? crowd : rest).push(t);
+    }
+    return { crowd: crowd.join(', '), rest: rest.join(', ') };
+}
+
+// Role words summon modern armies. 'soldiers'/'officers' in a positive prompt beat
+// the anti-modern negative every time (field: green modern military uniforms behind
+// a shihakusho crowd). When the anti-modern gate fires, role tokens are purged from
+// prompts, states, and the setting — the anchor's own population words ('shinigami
+// in black shihakusho') name these people instead.
+const MODERN_ROLE = /\b(?:soldiers?|troop|troops|army|military|marines?|sailors?|police|officers?|security)\b/i;
+
+function purgeModernRoles(text) {
+    return String(text || '').split(',').map(t => t.trim())
+        .filter(t => t && !MODERN_ROLE.test(t)).join(', ');
 }
 
 // The law mandates exactly ONE framing tag and ONE angle tag per panel. A law the code
@@ -1352,6 +1379,22 @@ ${FRAME_LAWS}${bubblesOn ? '\n\n' + BUBBLE_RULES : ''}\nOUTPUT (replaces the sin
             if (panels2.length && whoOmitted(panels2) < whoOmitted(panels)) { panels = panels2; raw = raw2; }
         } catch (e) { console.warn('[SceneSnap] corrective retry failed, keeping first output:', e); }
     }
+    // Explicit panels must NAME the anatomy — a sex act with zero genital tags is a
+    // builder failure, and it is exactly how 'thrusting motion' rendered clothed
+    // people with the word 'nude' floating in the scenery (field). One corrective
+    // re-call, accepted only if the anatomy actually arrives.
+    const SEX_ACT = /\b(?:thrusting|missionary|doggystyle|cowgirl|vaginal|anal sex|fucking|intercourse|penetrating|penetration|orgasm)\b/i;
+    const GENITAL_TAG = /\b(?:penis|erection|testicles?|cock|dick|pussy|vulva|vagina|clitoris|labia|anus)\b/i;
+    const panelTextOf = p => [p.prompt, p.sentence, ...(p.who || []).map(w => String(w?.state ?? w ?? ''))].join(' ');
+    const anatomyMissing = p => SEX_ACT.test(panelTextOf(p)) && !GENITAL_TAG.test(panelTextOf(p));
+    if (panels.length && schemaSent && panels.some(anatomyMissing)) {
+        console.warn('[SceneSnap] explicit panel names no anatomy — issuing one corrective retry');
+        try {
+            const raw3 = await callLLM(fullSystem + `\n\nPREVIOUS OUTPUT REJECTED: a panel depicts a sex act but names no anatomy. In explicit scenes every character's "state" MUST carry concrete danbooru anatomy tags (breast class + nipples, penis/erection, pussy/vulva, anus when visible, fluids) and the state of undress per character — a sex act with no genital tag is a failed panel. Re-output the complete corrected JSON now.`, user, maxTokens);
+            const panels3 = parsePanels(raw3, style, maxPanels, { bubbles: bubblesOn, sceneText: scene, expectJson: structuredSingle });
+            if (panels3.length && !panels3.some(anatomyMissing)) { panels = panels3; raw = raw3; }
+        } catch (e) { console.warn('[SceneSnap] anatomy corrective retry failed, keeping first output:', e); }
+    }
     // World anchor: builder-derived, cast-mined as backstop. Stamped onto every panel by
     // the extension (appendAnchor) — per-panel drift to modern dress/architecture becomes
     // structurally impossible instead of being a memory test for the builder.
@@ -1360,6 +1403,12 @@ ${FRAME_LAWS}${bubblesOn ? '\n\n' + BUBBLE_RULES : ''}\nOUTPUT (replaces the sin
         if (plan.dress) panels.dress = plan.dress;
     }
     const dress = filterRankGarments(panels.dress) || mineDressTags(getActiveCastSheet());
+    // Role words ('soldiers', 'officers') summon modern armies in a traditional world,
+    // and the anti-modern NEGATIVE cannot beat a repeated POSITIVE (field: green
+    // modern uniforms behind a shihakusho crowd). Purged from setting/prompts/states;
+    // the anchor's own population words name these people.
+    const antiModernOn = !!antiModernNegative(dress);
+    if (antiModernOn && panels.setting) panels.setting = purgeModernRoles(panels.setting);
     let activeSheet = getActiveCastSheet();
     // A who-name missing from the cast means a panel with NO subject tags at all —
     // an empty courtyard where a character should be (field bug). Seed the missing
@@ -1383,18 +1432,29 @@ ${FRAME_LAWS}${bubblesOn ? '\n\n' + BUBBLE_RULES : ''}\nOUTPUT (replaces the sin
         p.crowd = crowdHere;
         p.sentence = replaceNamesInSentence(p.sentence, activeSheet);
         if (!p.who || !p.who.length) {
-            // An establishing frame: the crowd or the place IS the subject. The
-            // '6+boys, 6+girls' headcount is DEAD (0.28.0, user A/B): it told the
-            // model to draw many identical people and returned rows of egg-heads.
-            // The frame leads with the anchor's OWN crowd words hoisted forward —
-            // real population words in a strong position, no synthetic headcount.
-            const crowdTag = crowdHere ? hoistCrowdTokens(anchorText, true) : '';
-            p.prompt = enforceShotGrammar([crowdTag, unifyStripLighting(dedupeAgainstAnchor(p.prompt, anchorText), anchorText)].filter(Boolean).join(', '));
+            // An establishing frame: the crowd or the place IS the subject. It leads
+            // with the crowd's own words — anchor population plus the prompt's
+            // ACTION-bearing crowd tokens, forward — no synthetic headcount.
+            const deduped = unifyStripLighting(dedupeAgainstAnchor(antiModernOn ? purgeModernRoles(p.prompt) : p.prompt, anchorText), anchorText);
+            const cx = crowdHere ? extractCrowdTokens(deduped) : { crowd: '', rest: deduped };
+            const crowdTag = [crowdHere ? hoistCrowdTokens(anchorText, true) : '', cx.crowd].filter(Boolean).join(', ');
+            p.prompt = enforceShotGrammar([crowdTag, cx.rest].filter(Boolean).join(', '));
             p.welded = false;
             continue;
         }
         const { principals, background } = splitPrincipals(p.who);
         if (background.length) console.warn('[SceneSnap] background figure(s) demoted out of who:', background.map(w => w.name));
+        // Panel-level nudity: 'nude' floating in the environment tags while garments
+        // stayed welded rendered CLOTHED people and zero anatomy (the NSFW field bug).
+        // It is welded into every principal's state — applyUndress strips the
+        // garments, and the explicit tag lands where the model reads identity.
+        const panelAll = [p.prompt, p.sentence, ...p.who.map(w => String(w?.state || ''))].join(' ');
+        if (/\b(?:nude|naked)\b/i.test(panelAll)) {
+            for (const w of principals) {
+                if (!/\b(?:nude|naked)\b/i.test(String(w.state || ''))) w.state = [String(w.state || '').trim(), 'nude'].filter(Boolean).join(', ');
+            }
+        }
+        if (antiModernOn) for (const w of principals) w.state = purgeModernRoles(String(w.state || ''));
         // Lighting smuggled in via STATE bypasses the sky-unifier, which only scrubs
         // the shared prompt (field: 'dramatic backlighting from pale sun' welded into
         // a block gave one panel its own sky).
@@ -1402,8 +1462,16 @@ ${FRAME_LAWS}${bubblesOn ? '\n\n' + BUBBLE_RULES : ''}\nOUTPUT (replaces the sin
         const id = assembleIdentity(principals, activeSheet, { dress: firstGarmentTag(dress), worldDress: dress });
         if (id.missing.length) console.warn('[SceneSnap] panel "who" names still not in cast sheet:', id.missing);
         const bgTag = background.length ? backgroundFigureTag(background, activeSheet) : '';
-        const crowdTag = hoistCrowdTokens(anchorText, p.crowd);
-        p.prompt = enforceShotGrammar([id.counts, ...id.blocks, bgTag, crowdTag, unifyStripLighting(dedupeAgainstAnchor(p.prompt, anchorText), anchorText)].filter(Boolean).join(', '));
+        // Crowd tokens carrying ACTIONS hoist forward with the anchor's population.
+        const deduped = unifyStripLighting(dedupeAgainstAnchor(antiModernOn ? purgeModernRoles(p.prompt) : p.prompt, anchorText), anchorText);
+        let crowdTag = '';
+        let restPrompt = deduped;
+        if (p.crowd) {
+            const cx = extractCrowdTokens(deduped);
+            crowdTag = [hoistCrowdTokens(anchorText, true), cx.crowd].filter(Boolean).join(', ');
+            restPrompt = cx.rest;
+        }
+        p.prompt = enforceShotGrammar([id.counts, ...id.blocks, bgTag, crowdTag, restPrompt].filter(Boolean).join(', '));
         p.who = principals;
         // Identity welded by code — the seed no longer has to protect subject appearance.
         p.welded = id.blocks.length > 0;
