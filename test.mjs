@@ -30,7 +30,7 @@ const FUNCS = [
     'parsePanels', 'parseCastSheet', 'mergeCastLines', 'effectiveForcedTags',
     'composePositive', 'scanPresenceIn', 'markerDetails', 'ledgerStateLines',
     'stripScene', 'explainError', 'isStaleSession', 'stripLayoutMeta', 'appendAnchor', 'mineDressTags', 'normalizeCountTags', 'filterRankGarments', 'assembleIdentity', 'scrubState', 'seedForPanel', 'replaceNamesInSentence', 'capTagSafe', 'antiModernNegative', 'isPlaceholderTags', 'stripPlaceholderLines', 'getSize',
-    'backgroundFigureTag', 'dedupeAgainstAnchor', 'neutralizeRoleUniforms', 'unifyStripLighting', 'applyUndress', 'hoistCrowdTokens', 'extractCrowdTokens', 'purgeModernRoles', 'panelLacksAnatomy', 'stripPersonalGarments', 'cleanWorldDress', 'countSceneBeats', 'dressForPanel', 'anatomyContinuity', 'scrubEchoedCounts', 'inferLyingFromPosition', 'mapLimit', 'explicitFramingGuard',
+    'backgroundFigureTag', 'dedupeAgainstAnchor', 'neutralizeRoleUniforms', 'unifyStripLighting', 'applyUndress', 'hoistCrowdTokens', 'extractCrowdTokens', 'purgeModernRoles', 'panelLacksAnatomy', 'stripPersonalGarments', 'cleanWorldDress', 'countSceneBeats', 'dressForPanel', 'anatomyContinuity', 'scrubEchoedCounts', 'inferLyingFromPosition', 'mapLimit', 'explicitFramingGuard', 'extractSceneQuotes', 'attributeSpeaker', 'capBubbleText',
 ];
 
 const prelude = `
@@ -1181,6 +1181,29 @@ Rukia lay under him with her chest heaving, flushed pink from her face to her br
         && /frozen mid-bite/.test(S.extractCrowdTokens('students in formal uniforms frozen mid-bite, dust motes').crowd));
     check('src: prompt styles read as model choices',
         src.includes('>NovelAI (danbooru tags)<') && src.includes('>Natural language (Qwen, FLUX)<'));
+}
+
+// ---------------------------------------------------------------- code bubbles + per-chat cast + clear button (0.42.0)
+{
+    const scene = 'Jovan raised the blade. "LONG LIVE THE THIRTEENTH DIVISION!" The courtyard answered.\n\nRukia stared. "...the division can never know I make that sound," she whispered.';
+    const quotes = S.extractSceneQuotes(scene);
+    check('quotes: extracted verbatim from the scene, in order',
+        quotes.length === 2 && quotes[0].text === 'LONG LIVE THE THIRTEENTH DIVISION!'
+        && quotes[1].text === '...the division can never know I make that sound,');
+    check('quotes: speaker attributed by nearest preceding cast name',
+        S.attributeSpeaker(scene, quotes[0].index, ['Jovan Oda', 'Rukia Kuchiki']) === 'Jovan Oda'
+        && S.attributeSpeaker(scene, quotes[1].index, ['Jovan Oda', 'Rukia Kuchiki']) === 'Rukia Kuchiki');
+    check('quotes: junk and empties skipped',
+        S.extractSceneQuotes('no dialogue here').length === 0);
+    check('cap: long quotes cut at sentence end with verbatim prefix',
+        S.capBubbleText('word '.repeat(40).trim()).length <= 112);
+    check('src: silent panels get scene quotes as backstop after the builder path',
+        src.includes('const quotes = extractSceneQuotes(scene);')
+        && src.includes('panels[i].bubbles.push({ speaker: attributeSpeaker('));
+    check('src: cast selection is per-chat via chatMetadata, sheets stay global',
+        src.includes('chatMetadata?.scenesnap_cast') && src.includes('md.scenesnap_cast = name'));
+    check('src: clear cast button exists and clears the active sheet',
+        src.includes('id="snapshot_cast_clear"') && src.includes("settings.casts[name] = '';"));
 }
 
 // ---------------------------------------------------------------- source-level invariants

@@ -12,7 +12,7 @@ import { getBase64Async, saveBase64AsFile } from '../../../utils.js';
 import { callGenericPopup, POPUP_TYPE } from '../../../popup.js';
 
 const MODULE = 'sceneSnap';
-const VERSION = '0.41.0';
+const VERSION = '0.42.0';
 
 const defaultSettings = Object.freeze({
     enabled: true,
@@ -274,10 +274,15 @@ function findLastAiMessageId() {
 
 // ------------------------------------------------------------------ casts
 
-// One world, one cast: the active cast is a plain GLOBAL setting. Per-chat cast
-// memory was the seed-bug engine — chats silently diverged onto degraded auto-built
-// slots (field-proven). Chats and branches now always read the same sheet.
+// Casts are global; the SELECTION is per-chat (0.42.0, user requirement): each chat
+// remembers which cast it uses, restored on chat switch — no more re-picking per
+// chat, no more Story B rendered with Story A's faces. The sheet data stays global,
+// so two chats CAN share a world deliberately by picking the same cast.
 function getActiveCastName() {
+    try {
+        const n = getContext().chatMetadata?.scenesnap_cast;
+        if (n && Object.prototype.hasOwnProperty.call(settings.casts, n)) return n;
+    } catch { /* noop */ }
     const name = settings.activeCast;
     if (name && Object.prototype.hasOwnProperty.call(settings.casts, name)) return name;
     return 'Default';
@@ -285,6 +290,10 @@ function getActiveCastName() {
 
 function setActiveCastName(name) {
     settings.activeCast = name;
+    try {
+        const md = getContext().chatMetadata;
+        if (md) md.scenesnap_cast = name;
+    } catch { /* noop */ }
     saveSettingsDebounced();
 }
 
@@ -1500,7 +1509,50 @@ ${FRAME_LAWS}${bubblesOn ? '\n\n' + BUBBLE_RULES : ''}\nOUTPUT (replaces the sin
         fullSystem += `\n\nCODE BEAT COUNT: the scene's prose contains exactly ${beatCount} distinct visual beats, counted from the text by code — this number is not negotiable, not a suggestion. Output EXACTLY ${beatCount} panels, one per beat, in scene order. Fewer is a failed strip.`;
     }
 
-    // The plan arrives in the SAME answer as the panels — no second round trip. It is
+    // ---------------------------------------------------------------- code bubbles
+//
+// The builder treats bubbles as optional homework and skips it (field: silent
+// strips from dialogue-drenched scenes, three versions of retries). So code reads
+// the scene's quotes DIRECTLY — verbatim by construction — and fills every panel
+// the builder left silent, in scene order. Builder bubbles stay first choice.
+
+function extractSceneQuotes(scene) {
+    const out = [];
+    const rx = /"([^"\n]{2,140})"/g;
+    let m;
+    while ((m = rx.exec(String(scene || ''))) !== null) {
+        const text = m[1].replace(/\s+/g, ' ').trim();
+        if (text.length >= 2 && /[a-zA-Z]/.test(text)) out.push({ text, index: m.index });
+    }
+    return out;
+}
+
+function attributeSpeaker(scene, quoteIndex, castNames) {
+    const before = String(scene || '').slice(Math.max(0, quoteIndex - 400), quoteIndex).toLowerCase();
+    let best = '', bestIdx = -1;
+    for (const name of (castNames || [])) {
+        const parts = String(name).split(/\s+/).filter(p => p.length >= 3);
+        for (const part of [name, ...parts]) {
+            const idx = before.lastIndexOf(part.toLowerCase());
+            if (idx > bestIdx) { bestIdx = idx; best = name; }
+        }
+    }
+    return best;
+}
+
+// A prefix of a verified quote is still verbatim; a trimmed string checked against
+// the scene is not the same guarantee. Same rule as sanitizeBubbles.
+function capBubbleText(text) {
+    let t = String(text || '').trim();
+    if (t.length <= 110) return t;
+    const win = t.slice(0, 110);
+    const sentenceEnd = Math.max(win.lastIndexOf('. '), win.lastIndexOf('! '), win.lastIndexOf('? '));
+    if (sentenceEnd > 40) return win.slice(0, sentenceEnd + 1).trim();
+    const at = win.slice(0, 104).lastIndexOf(' ');
+    return (at > 40 ? win.slice(0, at) : win.slice(0, 104)).trim() + '…';
+}
+
+// The plan arrives in the SAME answer as the panels — no second round trip. It is
     // validated after parsing, and only a plan that fails validation costs an extra call.
     let plan = null;
     let planNotes = [];
@@ -1597,6 +1649,28 @@ ${FRAME_LAWS}${bubblesOn ? '\n\n' + BUBBLE_RULES : ''}\nOUTPUT (replaces the sin
             const panels4 = parsePanels(raw4, style, maxPanels, { bubbles: bubblesOn, sceneText: scene, expectJson: structuredSingle });
             if (panels4.length && bubbleTotal(panels4) > bubbleTotal(panels)) { panels = panels4; raw = raw4; }
         } catch (e) { console.warn('[SceneSnap] bubble corrective retry failed, keeping first output:', e); }
+    }
+    // Code backstop: quotes are extracted from the scene itself (verbatim by
+    // construction) and distributed across the panels the builder left silent, in
+    // scene order — no silent talkative strips, ever.
+    if (bubblesOn) {
+        const quotes = extractSceneQuotes(scene);
+        if (quotes.length) {
+            const used = new Set();
+            for (const p of panels) for (const b of (p.bubbles || [])) used.add(normalizeForMatch(b.text));
+            const fresh = quotes.filter(q => !used.has(normalizeForMatch(q.text)));
+            const castNames = parseCastSheet(getActiveCastSheet()).map(c => c.name);
+            let qi = 0;
+            for (let i = 0; i < panels.length && qi < fresh.length; i++) {
+                if ((panels[i].bubbles || []).length) continue;
+                if (!panels[i].bubbles) panels[i].bubbles = [];
+                const remainingPanels = panels.length - i;
+                const take = Math.min(2, Math.max(1, Math.ceil((fresh.length - qi) / remainingPanels)));
+                for (let k = 0; k < take && qi < fresh.length; k++, qi++) {
+                    panels[i].bubbles.push({ speaker: attributeSpeaker(scene, fresh[qi].index, castNames), text: capBubbleText(fresh[qi].text) });
+                }
+            }
+        }
     }
     // World anchor: builder-derived, cast-mined as backstop. Stamped onto every panel by
     // the extension (appendAnchor) — per-panel drift to modern dress/architecture becomes
@@ -2528,6 +2602,7 @@ function settingsHtml() {
                 <textarea id="snapshot_cast_sheet" class="text_pole textarea_compact" rows="6" placeholder="Jovan: boy, short black hair, red eyes, tall, lean build, academy uniform"></textarea>
                 <div class="flex-container">
                     <div id="snapshot_cast_build" class="menu_button">Auto-build cast from chat</div>
+                    <div id="snapshot_cast_clear" class="menu_button">Clear cast</div>
                     <div id="snapshot_test" class="menu_button">Test backend</div>
                     <div id="snapshot_test_builder" class="menu_button">Test builder</div>
                     <div id="snapshot_debug" class="menu_button">Show last generation</div>
@@ -2679,6 +2754,14 @@ function bindSettings() {
         refreshCastUI();
     });
     $('#snapshot_cast_build').on('click', () => autoBuildCast({ silent: false }));
+    $('#snapshot_cast_clear').on('click', () => {
+        const name = getActiveCastName();
+        if (!window.confirm(`Clear cast "${name}"? It re-seeds from story memory on the next illustration.`)) return;
+        settings.casts[name] = '';
+        saveSettingsDebounced();
+        refreshCastUI();
+        toastr.success(`Cast "${name}" cleared`, 'SceneSnap');
+    });
 
     $('#snapshot_debug').on('click', () => {
         if (!lastDebug) { toastr.info('No generation yet this session', 'SceneSnap'); return; }

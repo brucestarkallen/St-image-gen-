@@ -114,6 +114,12 @@ Stella: girl, long crimson hair, red eyes, large breasts, hair ribbon, school un
 
 ## Changelog
 
+### 0.42.0 — casts follow chats, bubbles leave the builder's homework to code
+- **Per-chat cast selection.** Each chat remembers which cast it uses (chat metadata), restored on chat switch — no more re-picking, no more Story B wearing Story A's faces. Sheets stay global, so two chats can deliberately share a world.
+- **Clear cast button** in settings (confirms, empties the active sheet; it re-seeds on next illustration).
+- **Code bubbles.** The builder kept skipping its bubble homework, so quotes are now extracted from the scene directly — verbatim by construction, dash/quote-normalized, speaker attributed by nearest preceding cast name, capped at sentence boundaries — and every panel the builder left silent gets filled in scene order. Builder bubbles stay first choice; code is the backstop that ends silent talkative strips.
+- Gate: 338 → 345 checks.
+
 ### 0.41.0 — the crowd vocabulary grows; styles read as model choices
 - **Fixed: the empty refectory.** The crowd-hoist regex knew `crowd`, `packed`, `spectators` — but the field anchor's population was `crowded hall of students` and `hundreds of seated students`. `crowded`, `students`, `hundreds`, `dozens`, `people`, `villagers`, `patrons`, `guests` and friends join the vocabulary, so population words hoist to the front of establishing frames again.
 - **UI: prompt styles are labeled as model choices** — `NovelAI (danbooru tags)` and `Natural language (Qwen, FLUX)`, so the choice reads as what it is.
