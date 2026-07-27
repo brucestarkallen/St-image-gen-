@@ -1286,6 +1286,17 @@ Rukia lay under him with her chest heaving, flushed pink from her face to her br
         ] }, ['Rukia Kuchiki', 'Jovan Oda'], 4, {}).some(p => p.includes('vanish')));
 }
 
+// ---------------------------------------------------------------- seed before validate; repairs never drop people (0.47.1)
+{
+    const seedIdx = src.indexOf('who-names missing from cast — targeted seeding');
+    const valIdx = src.indexOf('const schemaSent = maxPanels > 1 || structuredSingle;');
+    check('src: targeted seeding runs BEFORE plan validation',
+        seedIdx !== -1 && valIdx !== -1 && seedIdx < valIdx);
+    check('src: a plan repair that drops people is rejected by definition',
+        src.includes('whoCount(panelsFix) >= whoCount(panels)')
+        && src.includes('plan repair dropped people — rejected'));
+}
+
 // ---------------------------------------------------------------- source-level invariants
 {
     check('src: single-panel bubble mode requests strict JSON', src.includes('exactly one panel'));

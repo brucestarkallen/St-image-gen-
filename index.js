@@ -12,7 +12,7 @@ import { getBase64Async, saveBase64AsFile } from '../../../utils.js';
 import { callGenericPopup, POPUP_TYPE } from '../../../popup.js';
 
 const MODULE = 'sceneSnap';
-const VERSION = '0.47.0';
+const VERSION = '0.47.1';
 
 const defaultSettings = Object.freeze({
     enabled: true,
@@ -1621,6 +1621,24 @@ function capBubbleText(text) {
     // Enforcement, not hope: a builder that ignores the who schema gets exactly one
     // corrective re-call. Whichever output covers more panels with who wins; the image
     // is never blocked on compliance.
+    // A who-name missing from the cast means a panel with NO subject tags at all —
+    // an empty courtyard where a character should be. Seeding happens BEFORE plan
+    // validation (0.47.1): the validator must never tell the builder to drop a
+    // character the seeder can add — the field's all-solo strip shipped exactly that way.
+    {
+        const missingAll = new Set();
+        for (const p of panels) {
+            for (const w of (p.who || [])) {
+                const entry = parseCastSheet(getActiveCastSheet()).find(c => c.name.toLowerCase() === String(w.name).toLowerCase());
+                if (!entry || isPlaceholderTags(entry.tags)) missingAll.add(w.name);
+            }
+        }
+        if (missingAll.size && settings.autoCast) {
+            console.warn('[SceneSnap] who-names missing from cast — targeted seeding:', [...missingAll]);
+            try { await autoBuildCast({ silent: true, requiredNames: [...missingAll] }); } catch (e) { console.warn('[SceneSnap] targeted seeding failed:', e); }
+        }
+    }
+
     const schemaSent = maxPanels > 1 || structuredSingle;
     if (maxPanels > 1) {
         plan = parsePlan(raw, maxPanels);
@@ -1645,7 +1663,12 @@ function capBubbleText(text) {
                             && !planFix.panels.some(p => (p.who || []).length === 0);
                         if (fixProblems.length < problems.length || (crowdRestored && fixProblems.length <= problems.length)) {
                             const panelsFix = parsePanels(rawFix, style, maxPanels, { bubbles: bubblesOn, sceneText: scene, expectJson: structuredSingle });
-                            if (panelsFix.length) { plan = planFix; panels = panelsFix; raw = rawFix; }
+                            // A repair that DROPS PEOPLE is not a fix: the field's
+                            // all-solo strip was a repair that scored 'fewer problems'
+                            // by erasing the partner from every panel (0.47.1).
+                            const whoCount = ps => ps.reduce((n, p) => n + (p.who || []).length, 0);
+                            if (panelsFix.length && whoCount(panelsFix) >= whoCount(panels)) { plan = planFix; panels = panelsFix; raw = rawFix; }
+                            else console.warn('[SceneSnap] plan repair dropped people — rejected');
                         }
                     }
                 } catch (e) { console.warn('[SceneSnap] plan repair failed, keeping first output:', e); }
@@ -1744,22 +1767,6 @@ function capBubbleText(text) {
     if (antiModernOn && panels.setting) panels.setting = purgeModernRoles(neutralizeRoleUniforms(panels.setting, rawDress));
     const dress = cleanWorldDress(stripPersonalGarments(rawDress, getActiveCastSheet()), antiModernOn);
     let activeSheet = getActiveCastSheet();
-    // A who-name missing from the cast means a panel with NO subject tags at all —
-    // an empty courtyard where a character should be (field bug). Seed the missing
-    // names once, targeted, then assemble.
-    {
-        const missingAll = new Set();
-        for (const p of panels) {
-            for (const w of (p.who || [])) {
-                const entry = parseCastSheet(activeSheet).find(c => c.name.toLowerCase() === String(w.name).toLowerCase());
-                if (!entry || isPlaceholderTags(entry.tags)) missingAll.add(w.name);
-            }
-        }
-        if (missingAll.size && settings.autoCast) {
-            console.warn('[SceneSnap] who-names missing from cast — targeted seeding:', [...missingAll]);
-            try { await autoBuildCast({ silent: true, requiredNames: [...missingAll] }); activeSheet = getActiveCastSheet(); } catch (e) { console.warn('[SceneSnap] targeted seeding failed:', e); }
-        }
-    }
     // The scene's own wardrobe tracker ('| nothing |' in the header) is the highest
     // clothing authority there is — it overrides cast sheets AND builder states.
     const sceneNude = /\|\s*(?:nothing|nude|naked)\s*(?:\||\])/i.test(scene);

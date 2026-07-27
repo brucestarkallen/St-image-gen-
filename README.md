@@ -114,6 +114,11 @@ Stella: girl, long crimson hair, red eyes, large breasts, hair ribbon, school un
 
 ## Changelog
 
+### 0.47.1 — seed before validate; repairs never drop people
+- **Fixed: the all-solo strip (absolute regression).** After a cast rebuild lost Jovan, the validator told the builder to drop him *before* the targeted seeder could re-add him — seeding ran AFTER validation. Now seeding runs first, so "not in the cast sheet" almost never fires.
+- **Repairs can no longer drop people.** The all-solo repair was accepted because it scored 'fewer problems' — by erasing the partner from every panel. A replan that reduces the total `who` count is rejected by definition.
+- Gate: 362 → 364 checks.
+
 ### 0.47.0 — the vanishing partner
 - **Fixed: partners dropped mid-scene for spectacle beats.** The reiatsu-explosion frame rendered solo between two both-partner frames — though the scene has him inside her through the whole climax. New plan check: a solo frame wedged between two dual frames of the same pair is the vanishing partner and costs a replan. Law added to CONTACT POSTURES: a partner never vanishes for an aura/energy spectacle.
 - **Anatomy floor uses danbooru-standard `penis, erection`** — a bare `penis` tag renders flaccid/ghostly.
