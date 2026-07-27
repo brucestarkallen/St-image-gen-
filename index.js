@@ -12,13 +12,13 @@ import { getBase64Async, saveBase64AsFile } from '../../../utils.js';
 import { callGenericPopup, POPUP_TYPE } from '../../../popup.js';
 
 const MODULE = 'sceneSnap';
-const VERSION = '0.36.0';
+const VERSION = '0.37.0';
 
 const defaultSettings = Object.freeze({
     enabled: true,
     auto: true,
     autoCast: true,
-    backend: 'pollinations', // pollinations | runware | novelai
+    backend: 'pollinations', // pollinations | runware | novelai | nanogpt
     promptStyle: 'auto',     // auto | tags | natural
     sizePreset: 'portrait',
     activeCast: 'Default',  // portrait | landscape | square
@@ -43,6 +43,11 @@ const defaultSettings = Object.freeze({
     naiScale: 5,
     // Pollinations
     pollModel: 'flux',
+    // NanoGPT (OpenAI-compatible image API: Qwen-Image, Flux, 200+ models)
+    nanogptKey: '',
+    nanogptModel: 'qwen-image',
+    nanogptSteps: 30,
+    nanogptCfg: 7.5,
 });
 
 const SIZE_PRESETS = {
@@ -59,6 +64,7 @@ const SIZE_PRESETS = {
 const BACKEND_QUALITY = {
     novelai: 'no text, detailed background',
     pollinations: 'highly detailed, cinematic lighting, rich detailed background',
+    nanogpt: 'highly detailed, cinematic lighting, rich detailed background',
 };
 const BACKEND_NEGATIVE = {
     novelai: 'blurry, lowres, error, worst quality, bad quality, jpeg artifacts, very displeasing, chromatic aberration, multiple views, logo, watermark, film grain, scan artifacts',
@@ -228,7 +234,8 @@ function getSize(landscape) {
 
 function resolveStyle() {
     if (settings.promptStyle === 'tags' || settings.promptStyle === 'natural') return settings.promptStyle;
-    return settings.backend === 'pollinations' ? 'natural' : 'tags';
+    // Qwen-Image/Flux-class models read paragraphs, not danbooru.
+    return ['pollinations', 'nanogpt'].includes(settings.backend) ? 'natural' : 'tags';
 }
 
 // Since 0.8.1 every fetch in this extension is same-origin (the gate asserts no
@@ -1445,6 +1452,9 @@ async function buildScenePrompt(mesId) {
     if (settings.backend === 'novelai' && style === 'tags') {
         fullSystem += '\n\nTARGET MODEL: NovelAI Diffusion V4.5 — blend Danbooru tags with a few short natural phrases used as tags (e.g. "moonlit stone alley at night", "crowded arena under harsh sun"); count tags and sheet-verbatim appearance rules still apply.\n\n' + NAI_GUIDANCE;
     }
+    if (settings.backend === 'nanogpt' && style === 'natural') {
+        fullSystem += '\n\nTARGET MODEL: Qwen-Image class — an LLM-grade text encoder reading paragraph-level prose. Rich concrete sentences beat fragments; name positions and spatial relations explicitly in words; no danbooru tag piles, no emphasis braces.';
+    }
     if (grounding.has) fullSystem += GROUNDING_RULE;
     fullSystem += NSFW_RULE;
     const bubbleSchema = bubblesOn ? ',"bubbles":[{"speaker":"<name>","text":"<verbatim quote>"}]' : '';
@@ -1819,10 +1829,52 @@ function isStaleSession(status, bodyText) {
     return status === 403 && /invalid csrf token/i.test(String(bodyText || ''));
 }
 
+// NanoGPT's OpenAI-compatible image route: one key, 200+ models (Qwen-Image, Flux,
+// HiDream...). The route has NO negative-prompt field — Qwen/Flux-class models
+// largely ignore negatives anyway, so nothing is fabricated. Seed is forwarded as a
+// hint (reproducibility is model-dependent per the docs). Discovery of each model's
+// capabilities (including the nsfw flag) lives at GET /api/v1/images/models.
+async function generateNanogpt(positive, negative, landscape, seed) {
+    const key = String(settings.nanogptKey || '').trim();
+    const model = String(settings.nanogptModel || 'qwen-image').trim();
+    if (!key) throw new Error('NanoGPT API key is not set (SceneSnap settings)');
+    if (!model) throw new Error('NanoGPT model is not set — e.g. qwen-image, flux, hidream');
+    const { width, height } = getSize(landscape);
+    let res;
+    try {
+        res = await fetch('https://nano-gpt.com/v1/images/generations', {
+            method: 'POST',
+            headers: { 'Authorization': `Bearer ${key}`, 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                prompt: positive,
+                model,
+                n: 1,
+                size: `${width}x${height}`,
+                response_format: 'b64_json',
+                num_inference_steps: Math.max(1, Number(settings.nanogptSteps) || 30),
+                guidance_scale: Number(settings.nanogptCfg) || 7.5,
+                seed: Number.isInteger(seed) ? seed : undefined,
+            }),
+        });
+    } catch (e) {
+        throw new Error('NanoGPT request failed at browser level — if this repeats, the API host is refusing cross-origin browser calls (CORS), and this backend needs a proxy. ' + (e?.message || e));
+    }
+    if (!res.ok) {
+        const text = await res.text().catch(() => '');
+        throw new Error(`NanoGPT: ${text || res.status} (check your API key and model id)`);
+    }
+    const data = await res.json().catch(() => null);
+    const img = data?.data?.[0];
+    if (img?.b64_json) return { format: 'png', data: img.b64_json };
+    if (img?.url) return { format: 'png', data: img.url, isUrl: true };
+    throw new Error('NanoGPT returned no image');
+}
+
 async function generateWithBackend(positive, negative, landscape, seed) {
     switch (settings.backend) {
         case 'runware': return generateRunware(positive, negative, landscape, seed);
         case 'novelai': return generateNovelAI(positive, negative, landscape, seed);
+        case 'nanogpt': return generateNanogpt(positive, negative, landscape, seed);
         default: return generatePollinations(positive, negative, landscape, seed);
     }
 }
@@ -2310,6 +2362,7 @@ function settingsHtml() {
                     <option value="pollinations">Pollinations (free, natural-language)</option>
                     <option value="runware">Runware (Civitai anime checkpoints, tags)</option>
                     <option value="novelai">NovelAI (uses ST NovelAI key, tags)</option>
+                    <option value="nanogpt">NanoGPT (Qwen-Image, Flux &amp; 200+ models, natural-language)</option>
                 </select>
                 <small class="snapshot_hint">Which service renders the image. Pollinations = free zero-setup test rig. Runware = any Civitai anime checkpoint, fast + near-free (recommended). NovelAI = strongest anime model, needs your NAI key in API Connections.</small>
 
@@ -2343,6 +2396,20 @@ function settingsHtml() {
                         <div class="flex1"><label for="snapshot_nai_scale">Scale</label><input id="snapshot_nai_scale" type="number" min="1" max="10" step="0.5" class="text_pole"></div>
                     </div>
                     <small class="snapshot_hint">Steps capped at 28 — the free-generation limit on Opus. Scale = prompt adherence, ~5 for V4.5.</small>
+                </div>
+
+                <div id="snapshot_nanogpt_block" class="snapshot_backend_block">
+                    <label for="snapshot_nanogpt_key">NanoGPT API key</label>
+                    <input id="snapshot_nanogpt_key" type="password" class="text_pole" placeholder="sk-..." autocomplete="off">
+                    <small class="snapshot_hint">From nano-gpt.com dashboard. One key, 200+ models.</small>
+                    <label for="snapshot_nanogpt_model">Model id</label>
+                    <input id="snapshot_nanogpt_model" type="text" class="text_pole" placeholder="qwen-image">
+                    <small class="snapshot_hint">Qwen-Image reads natural-language paragraphs (set Prompt style: Auto). List models + their nsfw flag: GET nano-gpt.com/api/v1/images/models — explicit scenes need a model with nsfw: true.</small>
+                    <div class="flex-container">
+                        <div class="flex1"><label for="snapshot_nanogpt_steps">Steps</label><input id="snapshot_nanogpt_steps" type="number" min="1" max="100" class="text_pole"></div>
+                        <div class="flex1"><label for="snapshot_nanogpt_cfg">Guidance</label><input id="snapshot_nanogpt_cfg" type="number" min="0" max="20" step="0.5" class="text_pole"></div>
+                    </div>
+                    <small class="snapshot_hint">Steps 20–40 is the sweet spot. Guidance: prompt adherence, ~7.5 default; lower for softer interpretation.</small>
                 </div>
 
                 <div id="snapshot_pollinations_block" class="snapshot_backend_block">
@@ -2440,7 +2507,8 @@ function refreshCastUI() {
 
 function toggleBackendBlocks() {
     $('.snapshot_backend_block').hide();
-    $(`#snapshot_${settings.backend === 'novelai' ? 'novelai' : settings.backend === 'runware' ? 'runware' : 'pollinations'}_block`).show();
+    const known = ['novelai', 'runware', 'nanogpt'];
+    $(`#snapshot_${known.includes(settings.backend) ? settings.backend : 'pollinations'}_block`).show();
 }
 
 function syncUI() {
@@ -2465,13 +2533,17 @@ function syncUI() {
     $('#snapshot_nai_steps').val(settings.naiSteps);
     $('#snapshot_nai_scale').val(settings.naiScale);
     $('#snapshot_poll_model').val(settings.pollModel);
+    $('#snapshot_nanogpt_key').val(settings.nanogptKey);
+    $('#snapshot_nanogpt_model').val(settings.nanogptModel);
+    $('#snapshot_nanogpt_steps').val(settings.nanogptSteps);
+    $('#snapshot_nanogpt_cfg').val(settings.nanogptCfg);
     toggleBackendBlocks();
     refreshProfileOptions();
     refreshCastUI();
 }
 
 // Settings that survive a reset: credentials, model choice, and user-authored content.
-const RESET_KEEP_KEYS = ['runwareKey', 'runwareModel', 'casts', 'extraRules', 'builderProfile', 'backend'];
+const RESET_KEEP_KEYS = ['runwareKey', 'runwareModel', 'casts', 'extraRules', 'builderProfile', 'backend', 'nanogptKey', 'nanogptModel'];
 
 function resetToDefaults() {
     const kept = {};
@@ -2510,6 +2582,11 @@ function bindSettings() {
     $('#snapshot_nai_scale').on('input', function () { settings.naiScale = Number(this.value) || 5; saveSettingsDebounced(); });
 
     $('#snapshot_poll_model').on('input', function () { settings.pollModel = this.value; saveSettingsDebounced(); });
+
+    $('#snapshot_nanogpt_key').on('input', function () { settings.nanogptKey = this.value; saveSettingsDebounced(); });
+    $('#snapshot_nanogpt_model').on('input', function () { settings.nanogptModel = this.value; saveSettingsDebounced(); });
+    $('#snapshot_nanogpt_steps').on('input', function () { settings.nanogptSteps = Number(this.value) || 30; saveSettingsDebounced(); });
+    $('#snapshot_nanogpt_cfg').on('input', function () { settings.nanogptCfg = Number(this.value) || 7.5; saveSettingsDebounced(); });
 
     $('#snapshot_reset').on('click', () => {
         if (!window.confirm('Reset SceneSnap to default settings?\n\nKept: API key, Runware model, cast sheets, extra rules, builder profile, backend choice.')) return;

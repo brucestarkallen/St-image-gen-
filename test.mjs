@@ -1102,6 +1102,23 @@ Rukia lay under him with her chest heaving, flushed pink from her face to her br
         && src.includes("p.prompt.replace(/\\beye level\\b/i, 'from above')"));
 }
 
+// ---------------------------------------------------------------- NanoGPT backend (0.37.0)
+{
+    check('src: nanogpt backend registered in the switch and the UI',
+        src.includes("case 'nanogpt': return generateNanogpt(")
+        && src.includes('value="nanogpt"') && src.includes('snapshot_nanogpt_key'));
+    check('src: nanogpt resolves to natural style (Qwen reads paragraphs, not danbooru)',
+        src.includes("['pollinations', 'nanogpt'].includes(settings.backend) ? 'natural' : 'tags';"));
+    check('src: nanogpt hits the OpenAI-compatible route with no fabricated negative field',
+        src.includes('https://nano-gpt.com/v1/images/generations')
+        && src.includes("response_format: 'b64_json'")
+        && !/generateNanogpt[\s\S]{0,900}negative_prompt/.test(src));
+    check('src: nanogpt key/model survive a defaults reset',
+        src.includes("'nanogptKey', 'nanogptModel'"));
+    check('src: qwen builder note is nanogpt+natural scoped only',
+        src.includes("settings.backend === 'nanogpt' && style === 'natural'"));
+}
+
 // ---------------------------------------------------------------- source-level invariants
 {
     check('src: single-panel bubble mode requests strict JSON', src.includes('exactly one panel'));

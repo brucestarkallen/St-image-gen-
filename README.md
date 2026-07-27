@@ -114,6 +114,13 @@ Stella: girl, long crimson hair, red eyes, large breasts, hair ribbon, school un
 
 ## Changelog
 
+### 0.37.0 — NanoGPT backend (Qwen-Image, Flux, 200+ models)
+- **New backend: NanoGPT** (`nano-gpt.com`, OpenAI-compatible `POST /v1/images/generations`). One API key, 200+ models. Settings: key, free-text model id (default `qwen-image`), steps, guidance. Seed forwarded as a hint; no negative field exists on the route and none is fabricated. Fetch-level failures name CORS honestly. Key/model survive Reset defaults.
+- **Style mapping: NanoGPT resolves to `natural` on Auto** — Qwen-Image's LLM-grade encoder reads paragraph prose, not danbooru. A Qwen-specific builder note is injected (natural mode only): concrete sentences, explicit spatial relations, no tag piles, no emphasis braces.
+- **Fix coverage by backend:** everything structural (beats, cast weld, two-cap, camera/pose rules, undress/nudity, anatomy continuity, genital retry, bubbles, crowd hoist, role purge, count scrub) is backend-agnostic and carries over. Only the `{}` emphasis guidance, positional count-run tricks, and the NAI quality tail are NovelAI-only — they stay scoped to NovelAI.
+- **NSFW on NanoGPT:** per-model. The model list (`GET /api/v1/images/models`) exposes a `capabilities.nsfw` flag — explicit scenes need a model with `nsfw: true`; Qwen-Image itself is weak on explicit content.
+- Gate: 319 → 324 checks.
+
 ### 0.36.0 — 'under him' means lying down
 - **Fixed: she rendered on top.** Her state said `heels locked behind his back, hips working in frantic circles under him` — frantic hip motion with zero lying cue reads as cowgirl to the model. `inferLyingFromPosition`: `under/beneath him|her|them` in a state without a lying tag welds `lying on back` in.
 - **Fixed: the white-blanket ghost.** An explicit panel with one partner lying and the other `above her` at `eye level` shows only the top partner's back and hair from the side — a white-haired man on top reads as a blanket. Such panels get the camera moved overhead (`eye level` → `from above`), where both faces live.
