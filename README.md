@@ -114,6 +114,12 @@ Stella: girl, long crimson hair, red eyes, large breasts, hair ribbon, school un
 
 ## Changelog
 
+### 0.35.0 — lying subjects never get a from-below camera; silent speech beats cost a retry
+- **Fixed: the standing-alone afterglow panel.** The prompt said `lying on back on futon, staring at ceiling` with a `from below` camera — a camera underneath a lying person stands them up. When any principal is lying/supine, `from below` is code-swapped to `from above`.
+- **Fixed: speech beats shipping silent.** The plan declares which beats are speech (screamed, whispered, threatened); a speech-beat panel with an empty bubbles array is a dropped voice. Silent speech beats are now listed by number and cost a corrective retry — alongside the existing <2-bubbles trigger.
+- **Fixed: `1boy 1girl` echoed mid-prompt.** The builder echoed count tags into the shared prompt — a second subject declaration mid-frame and the exact character-fusion vector. `scrubEchoedCounts` strips them at assembly; both count-tag regexes learned multi-count tokens (`1boy 1girl` as ONE token).
+- Gate: 310 → 314 checks.
+
 ### 0.34.0 — hair restatements die; anatomy can't be amputated mid-strip
 - **Fixed: the white-haired Rukia / fused-monster panels.** His state repeated `medium white hair` up to three times per panel (cast + state), and in a two-person frame the model bound it to both figures — she rendered white-haired; tangled poses plus triple hair-identity fused the bodies. `scrubState` now drops 2+ word hair-identity phrases repeated from the owner's own block (`medium white hair falling over her chest` dies; `pale blue eyes intent` and `small breasts bouncing` live — gaze and motion are not the bleed vector).
 - **Fixed: the finale's nipple-less breast.** A strip that establishes nipples/genitals cannot amputate them in a later panel — `anatomyContinuity` welds the strip's own established tokens into states that show the region without naming it (bare breasts inherit `nipples`, fallen-open legs inherit `pussy`). Inheritance from the strip, never invention.

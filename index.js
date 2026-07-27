@@ -12,7 +12,7 @@ import { getBase64Async, saveBase64AsFile } from '../../../utils.js';
 import { callGenericPopup, POPUP_TYPE } from '../../../popup.js';
 
 const MODULE = 'sceneSnap';
-const VERSION = '0.34.0';
+const VERSION = '0.35.0';
 
 const defaultSettings = Object.freeze({
     enabled: true,
@@ -566,7 +566,21 @@ function filterRankGarments(tagList) {
 // the result tag-safely — never inside a tag.
 // Tags the extension computes itself. If one arrives from the builder inside a state,
 // it is not description — it is a competing instruction to the image model.
-const CODE_OWNED_TAG = /^(?:\d+\s*(?:boys?|girls?|others?|men|man|women|woman)|multiple\s+(?:boys|girls|others)|crowd|solo)$/i;
+const CODE_OWNED_TAG = /^(?:(?:\d+\s*(?:boys?|girls?|others?|men|man|women|woman)|multiple\s+(?:boys|girls|others))(?:\s+(?:\d+\s*(?:boys?|girls?|others?|men|man|women|woman)|multiple\s+(?:boys|girls|others)))*|crowd|solo)$/i;
+
+// Count tags echoed into the SHARED prompt ('1boy 1girl' mid-frame, field) are a
+// second subject declaration — the exact character-fusion vector. Scrubbed at
+// assembly, from every panel, welded or establishing.
+const COUNT_TAG_ONLY = /^(?:\d+\s*(?:boys?|girls?|others?|men|man|women|woman)|multiple\s+(?:boys|girls|others))(?:\s+(?:\d+\s*(?:boys?|girls?|others?|men|man|women|woman)|multiple\s+(?:boys|girls|others)))*$/i;
+
+function scrubEchoedCounts(prompt) {
+    return String(prompt || '').split(',').map(t => t.trim())
+        .filter(t => t && !COUNT_TAG_ONLY.test(t)).join(', ');
+}
+
+// A camera UNDERNEATH a lying subject stands them up (field: the afterglow panel
+// rendered her standing alone, 'from below' fighting 'lying on back on futon').
+const LYING_STATE = /\b(?:lying|supine|on (?:her|his|their) back|flat on|collapsed flat|sprawled)\b/i;
 
 // A garment tag in `state` is a SECOND outfit competing with the one the code welds —
 // the field run put "shinigami uniform" beside "black shihakusho" and the model blended
@@ -1521,14 +1535,29 @@ ${FRAME_LAWS}${bubblesOn ? '\n\n' + BUBBLE_RULES : ''}\nOUTPUT (replaces the sin
     // A dialogue-heavy scene with ZERO bubbles is a builder failure — the verbatim
     // lines exist; empty arrays everywhere mean it didn't try (field: a scene of
     // screams shipped silent).
+    const bubbleTotal = ps => ps.reduce((n, p) => n + (p.bubbles || []).length, 0);
+    // A speech beat that ships silent is a dropped voice: the PLAN said the beat was
+    // speech (screamed, whispered, threatened) and the panel has no bubble (field:
+    // three bubbles across a six-panel scene of screams).
+    const SPEECH_BEAT = /(?:shout|scream|cry|cries|whisper|moan|chant|calls?|says?|speak|bark|sob|threaten|gasps?|groan|hiss|beg)/i;
+    const silentSpeechBeats = (ps, pl) => {
+        if (!pl) return [];
+        const out = [];
+        for (let i = 0; i < Math.min(pl.panels.length, ps.length); i++) {
+            if (SPEECH_BEAT.test(pl.panels[i].beat) && !(ps[i].bubbles || []).length) out.push(i + 1);
+        }
+        return out;
+    };
+    const silent = bubblesOn ? silentSpeechBeats(panels, plan) : [];
     if (bubblesOn && schemaSent && panels.length
-        && panels.reduce((n, p) => n + (p.bubbles || []).length, 0) < 2
+        && (bubbleTotal(panels) < 2 || silent.length)
         && (scene.match(/"[^"]{2,}"/g) || []).length >= 2) {
-        console.warn('[SceneSnap] dialogue-heavy scene produced fewer than 2 bubbles — one corrective retry');
+        console.warn('[SceneSnap] speech beats shipped silent:', silent, '— one corrective retry');
         try {
-            const raw4 = await callLLM(fullSystem + `\n\nPREVIOUS OUTPUT REJECTED: the scene is full of spoken lines and the strip carries almost no bubbles. EVERY talkative panel needs 1-2 VERBATIM spoken lines (moans, cries, spilled names count), copied exactly from the scene, spread in speaking order. Re-output the complete corrected JSON now.`, user, maxTokens);
+            const silentNote = silent.length ? ` Panels ${silent.join(', ')} are speech beats with EMPTY bubbles fields — those lines exist in the scene; quote them.` : '';
+            const raw4 = await callLLM(fullSystem + `\n\nPREVIOUS OUTPUT REJECTED: the scene is full of spoken lines and the strip left speech beats silent.${silentNote} EVERY speech-beat panel needs 1-2 VERBATIM spoken lines (moans, cries, spilled names count), copied exactly from the scene, spread in speaking order. Re-output the complete corrected JSON now.`, user, maxTokens);
             const panels4 = parsePanels(raw4, style, maxPanels, { bubbles: bubblesOn, sceneText: scene, expectJson: structuredSingle });
-            if (panels4.length && panels4.reduce((n, p) => n + (p.bubbles || []).length, 0) > 0) { panels = panels4; raw = raw4; }
+            if (panels4.length && bubbleTotal(panels4) > bubbleTotal(panels)) { panels = panels4; raw = raw4; }
         } catch (e) { console.warn('[SceneSnap] bubble corrective retry failed, keeping first output:', e); }
     }
     // World anchor: builder-derived, cast-mined as backstop. Stamped onto every panel by
@@ -1590,7 +1619,7 @@ ${FRAME_LAWS}${bubblesOn ? '\n\n' + BUBBLE_RULES : ''}\nOUTPUT (replaces the sin
             // An establishing frame: the crowd or the place IS the subject. It leads
             // with the crowd's own words — anchor population plus the prompt's
             // ACTION-bearing crowd tokens, forward — no synthetic headcount.
-            const deduped = unifyStripLighting(dedupeAgainstAnchor(antiModernOn ? purgeModernRoles(p.prompt) : p.prompt, anchorText), anchorText);
+            const deduped = unifyStripLighting(dedupeAgainstAnchor(antiModernOn ? purgeModernRoles(scrubEchoedCounts(p.prompt)) : scrubEchoedCounts(p.prompt), anchorText), anchorText);
             const cx = crowdHere ? extractCrowdTokens(deduped) : { crowd: '', rest: deduped };
             const crowdTag = [crowdHere ? hoistCrowdTokens(anchorText, true) : '', cx.crowd].filter(Boolean).join(', ');
             p.prompt = enforceShotGrammar([crowdTag, cx.rest].filter(Boolean).join(', '));
@@ -1622,7 +1651,7 @@ ${FRAME_LAWS}${bubblesOn ? '\n\n' + BUBBLE_RULES : ''}\nOUTPUT (replaces the sin
         if (id.missing.length) console.warn('[SceneSnap] panel "who" names still not in cast sheet:', id.missing);
         const bgTag = background.length ? backgroundFigureTag(background, activeSheet) : '';
         // Crowd tokens carrying ACTIONS hoist forward with the anchor's population.
-        const deduped = unifyStripLighting(dedupeAgainstAnchor(antiModernOn ? purgeModernRoles(p.prompt) : p.prompt, anchorText), anchorText);
+        const deduped = unifyStripLighting(dedupeAgainstAnchor(antiModernOn ? purgeModernRoles(scrubEchoedCounts(p.prompt)) : scrubEchoedCounts(p.prompt), anchorText), anchorText);
         let crowdTag = '';
         let restPrompt = deduped;
         if (p.crowd) {
@@ -1631,6 +1660,10 @@ ${FRAME_LAWS}${bubblesOn ? '\n\n' + BUBBLE_RULES : ''}\nOUTPUT (replaces the sin
             restPrompt = cx.rest;
         }
         p.prompt = enforceShotGrammar([id.counts, ...id.blocks, bgTag, crowdTag, restPrompt].filter(Boolean).join(', '));
+        // A lying subject never gets a from-below camera — the model stands them up.
+        if (principals.some(w => LYING_STATE.test(String(w.state || '')))) {
+            p.prompt = p.prompt.replace(/\bfrom below\b/i, 'from above');
+        }
         p.who = principals;
         // Identity welded by code — the seed no longer has to protect subject appearance.
         p.welded = id.blocks.length > 0;

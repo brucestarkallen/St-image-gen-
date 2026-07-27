@@ -30,7 +30,7 @@ const FUNCS = [
     'parsePanels', 'parseCastSheet', 'mergeCastLines', 'effectiveForcedTags',
     'composePositive', 'scanPresenceIn', 'markerDetails', 'ledgerStateLines',
     'stripScene', 'explainError', 'isStaleSession', 'stripLayoutMeta', 'appendAnchor', 'mineDressTags', 'normalizeCountTags', 'filterRankGarments', 'assembleIdentity', 'scrubState', 'seedForPanel', 'replaceNamesInSentence', 'capTagSafe', 'antiModernNegative', 'isPlaceholderTags', 'stripPlaceholderLines', 'getSize',
-    'backgroundFigureTag', 'dedupeAgainstAnchor', 'neutralizeRoleUniforms', 'unifyStripLighting', 'applyUndress', 'hoistCrowdTokens', 'extractCrowdTokens', 'purgeModernRoles', 'panelLacksAnatomy', 'stripPersonalGarments', 'cleanWorldDress', 'countSceneBeats', 'dressForPanel', 'anatomyContinuity',
+    'backgroundFigureTag', 'dedupeAgainstAnchor', 'neutralizeRoleUniforms', 'unifyStripLighting', 'applyUndress', 'hoistCrowdTokens', 'extractCrowdTokens', 'purgeModernRoles', 'panelLacksAnatomy', 'stripPersonalGarments', 'cleanWorldDress', 'countSceneBeats', 'dressForPanel', 'anatomyContinuity', 'scrubEchoedCounts',
 ];
 
 const prelude = `
@@ -56,7 +56,7 @@ function extractConst(name) {
     if (!line) throw new Error(`extractConst: ${name} not found`);
     return line;
 }
-const CONSTS = ['escRe', 'BACKGROUND_STATE', 'CODE_OWNED_TAG', 'GARMENT_CONDITION', 'TRANSIENT_ACTIVITY', 'FRAMING_TAG', 'ANGLE_TAG', 'SIZE_WORD', 'SIZE_NOUN', 'GARMENT_WORDS', 'RANK_WORD', 'DECORATION_WORD', 'BEAT_STOPWORD', 'LIGHT_TOKEN', 'EXPLICIT_STATE', 'CROWD_ANCHOR_TOKEN', 'MODERN_ROLE', 'SEX_ACT', 'GENITAL_TAG'];
+const CONSTS = ['escRe', 'BACKGROUND_STATE', 'CODE_OWNED_TAG', 'GARMENT_CONDITION', 'TRANSIENT_ACTIVITY', 'FRAMING_TAG', 'ANGLE_TAG', 'SIZE_WORD', 'SIZE_NOUN', 'GARMENT_WORDS', 'RANK_WORD', 'DECORATION_WORD', 'BEAT_STOPWORD', 'LIGHT_TOKEN', 'EXPLICIT_STATE', 'CROWD_ANCHOR_TOKEN', 'MODERN_ROLE', 'SEX_ACT', 'GENITAL_TAG', 'COUNT_TAG_ONLY', 'LYING_STATE'];
 
 const sandboxPath = '/tmp/ss_sandbox_' + process.pid + '.mjs';
 writeFileSync(sandboxPath, prelude + '\n' + CONSTS.map(extractConst).join('\n') + '\n' + FUNCS.map(extract).join('\n\n')
@@ -938,7 +938,7 @@ function defaultPatterns() { return '<details>[\\s\\S]*?</details>\n\\{[A-Z_]+\\
     check('src: panel-level nudity is welded into every principal state',
         src.includes("st = [st.trim(), 'nude'].filter(Boolean).join(', ');") && src.includes('w.state = st;'));
     check('src: modern role words purged when the anti-modern gate fires',
-        src.includes('const antiModernOn = !!antiModernNegative(rawDress);') && src.includes('purgeModernRoles(p.prompt)'));
+        src.includes('const antiModernOn = !!antiModernNegative(rawDress);') && src.includes('purgeModernRoles(scrubEchoedCounts(p.prompt))'));
 }
 
 // ---------------------------------------------------------------- NAI guidance to the builder + panel focus law (0.30.0)
@@ -1044,8 +1044,8 @@ Rukia lay under him with her chest heaving, flushed pink from her face to her br
         && src.includes('opts.beatCount'));
     check('src: the anchor drops dress on explicit panels',
         src.includes('dressForPanel(dress, p?.explicit)'));
-    check('src: a dialogue-heavy scene with nearly no bubbles costs one retry',
-        src.includes('produced fewer than 2 bubbles'));
+    check('src: a dialogue-heavy scene with silent speech beats costs one retry',
+        src.includes('speech beats shipped silent'));
 }
 
 // ---------------------------------------------------------------- phrase-overlap scrub + anatomy continuity (0.34.0)
@@ -1070,8 +1070,19 @@ Rukia lay under him with her chest heaving, flushed pink from her face to her br
         S.anatomyContinuity('nipples flushed dark', anatomy) === 'nipples flushed dark'
         && S.anatomyContinuity('chest heaving', new Set()) === 'chest heaving');
     // Bubbles: fewer than two in a dialogue-rich strip now costs a retry.
-    check('src: bubble retry fires below 2 bubbles, not only at 0',
-        src.includes('< 2') && src.includes('fewer than 2 bubbles'));
+    check('src: bubble retry fires below 2 bubbles OR on silent speech beats',
+        src.includes('bubbleTotal(panels) < 2 || silent.length')
+        && src.includes('SPEECH_BEAT') && src.includes('speech beats with EMPTY bubbles'));
+    // Echoed count tags die at assembly (field: '1boy 1girl' mid-prompt — the fusion vector).
+    check('counts: echoed count tags scrubbed from shared prompts',
+        S.scrubEchoedCounts('cowboy shot, 1boy 1girl, vaginal sex, sweat') === 'cowboy shot, vaginal sex, sweat');
+    check('counts: non-count tokens survive', S.scrubEchoedCounts('1boy 1girl'.length ? 'crowd, wide shot' : '') === 'crowd, wide shot');
+    // A lying subject never gets a from-below camera.
+    check('src: lying subjects get from-below swapped to from-above',
+        src.includes('LYING_STATE.test(String(w.state ||')
+        && src.includes("p.prompt.replace(/\\bfrom below\\b/i, 'from above')"));
+    check('lying: the detector knows lying, not standing',
+        S.LYING_STATE.test('lying on back on futon, spent') && !S.LYING_STATE.test('standing tall, shouting'));
 }
 
 // ---------------------------------------------------------------- source-level invariants
