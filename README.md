@@ -114,6 +114,13 @@ Stella: girl, long crimson hair, red eyes, large breasts, hair ribbon, school un
 
 ## Changelog
 
+### 0.31.0 — explicit panels are nude by default; personal garments leave the world dress
+- **Fixed: the clothed sex scene, third and final mechanism.** 0.29/0.30 required the literal word `nude` — but builders write 'breasts bouncing, nipples wet, buried deep' and never say it. Any EXPLICIT panel now welds `nude` into every principal's state by default (applyUndress strips the welded garments), unless a state explicitly keeps clothes on ('uniform pushed open', 'skirt hiked' — a garment + condition in one token). 'nipples wet' is not a garment and no longer blocks it.
+- **Fixed: the hero's kosode welded onto the heroine.** A garment appearing on exactly ONE cast line is that character's clothing, never world dress — `stripPersonalGarments` drops it from the dress field. Shared outfits (2+ owners) stay. Anti-modern judgement uses the raw dress so an empty filtered dress can't disarm it.
+- **Sex scenes are an ARC by law:** arrival/undress → contact → the act → the peak → afterglow, up to the full panel budget. A 2-panel arrival+afterglow shorthand is a failed strip.
+- **The act detector learned 'buried deep' and 'still joined'.**
+- Gate: 283 → 292 checks; default-nude negative-tested.
+
 ### 0.30.0 — the builder gets the official NAI craft; euphemisms count as acts
 - **The builder now receives the official NovelAI prompt guidance** (from docs.novelai.net/en/image/strengthening-weakening): order = strength, 1-3 `{braced}` critical tags per panel chosen by the builder itself, hybrid natural phrases, concreteness. Code assembles structure; the builder shapes language — the user asked for exactly this split.
 - **NSFW PANEL FOCUS LAW (user's own):** solo body moments (undress/bathing/posing) = ONE person in who; dialogue = BOTH; a sex act = ALWAYS BOTH, the act named by its danbooru term in the shared prompt (vaginal sex, missionary, doggystyle...) and every state carrying visible anatomy. Euphemisms are failed panels: 'drives deep', 'buried inside', 'joins with her' are forbidden. Naked characters must say 'completely nude' — 'pushed open/pulled aside' only when the scene says the clothes stay on (this was the clothes-ON-naked bug).

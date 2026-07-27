@@ -12,7 +12,7 @@ import { getBase64Async, saveBase64AsFile } from '../../../utils.js';
 import { callGenericPopup, POPUP_TYPE } from '../../../popup.js';
 
 const MODULE = 'sceneSnap';
-const VERSION = '0.30.0';
+const VERSION = '0.31.0';
 
 const defaultSettings = Object.freeze({
     enabled: true,
@@ -193,6 +193,8 @@ WHO is the people the beat's action passes BETWEEN, and nobody else:
 - Never give the same lone character two panels in a row. One continuous action (the blade leaving the sheath, then the blade held overhead) is ONE panel — spend the other on a beat or a character the strip is otherwise dropping.
 
 WORLD, derived once: "setting" is the standing description of the place stamped on every panel — location, architecture, weather, light, AND the scene's population with what that population wears ("packed stands of shinigami in black shihakusho"). Never what the population is momentarily doing. "dress" is ONLY the universal base outfit an ordinary person of this world wears — never rank- or status-specific garments.
+
+EXPLICIT SCENES ARE AN ARC, never a 2-panel shorthand: arrival/undress, contact, the act, the peak, the afterglow — use the FULL panel budget up to %MAX%. A sex scene compressed to arrival + afterglow has thrown its own climax away.
 
 The plan entry for each panel is: {"beat":"<one plain sentence: what this frame shows>","follows":"<how this moment follows the previous panel — omit on panel 1>","between":"<what passes between the two people — required when "who" has two names>","who":["Exact Cast Name"]}`;
 
@@ -918,7 +920,7 @@ function extractCrowdTokens(prompt) {
 // prompts, states, and the setting — the anchor's own population words ('shinigami
 // in black shihakusho') name these people instead.
 // Sex acts, including the euphemisms builders hide behind, and genital anatomy.
-const SEX_ACT = /\b(?:thrust(?:ing|s)?|missionary|doggystyle|doggy style|cowgirl|vaginal|anal sex|fucking|intercourse|penetrat\w*|orgasm\w*|climax\w*|driv\w+ deep|buried inside|balls?[- ]deep|mating press|prone bone|riding|straddling|pounding|slamming|ejaculat\w*|creampie)\b/i;
+const SEX_ACT = /\b(?:thrust(?:ing|s)?|missionary|doggystyle|doggy style|cowgirl|vaginal|anal sex|fucking|intercourse|penetrat\w*|orgasm\w*|climax\w*|driv\w+ deep|buried (?:deep|inside|in (?:her|him|them))|still joined|impal\w*|balls?[- ]deep|mating press|prone bone|riding|straddling|pounding|slamming|ejaculat\w*|creampie)\b/i;
 const GENITAL_TAG = /\b(?:penis|erection|testicles?|cock|dick|pussy|vulva|vagina|clitoris|labia|anus)\b/i;
 
 // A panel fails when it depicts a sex act — however euphemized — with zero genital
@@ -926,6 +928,30 @@ const GENITAL_TAG = /\b(?:penis|erection|testicles?|cock|dick|pussy|vulva|vagina
 function panelLacksAnatomy(p) {
     const text = [p?.prompt, p?.sentence, ...(p?.who || []).map(w => String(w?.state ?? w ?? ''))].join(' ');
     return SEX_ACT.test(text) && !GENITAL_TAG.test(text);
+}
+
+// A garment worn by exactly ONE named character is THAT character's clothing, never
+// the world's dress — the hero's black kosode was mined as 'world dress' and welded
+// onto the heroine (field). Garments appearing in 2+ cast lines are the world's
+// shared outfit and stay; single-owner garments are dropped from the dress field.
+function stripPersonalGarments(dressText, castText) {
+    const counts = new Map();
+    for (const line of String(castText || '').split('\n')) {
+        const tags = line.split(':').slice(1).join(':');
+        const seenLine = new Set();
+        for (const t of tags.split(',')) {
+            const low = t.trim().toLowerCase();
+            if (!low || seenLine.has(low)) continue;
+            if (GARMENT_WORDS.some(g => low.includes(g))) { seenLine.add(low); counts.set(low, (counts.get(low) || 0) + 1); }
+        }
+    }
+    return String(dressText || '').split(',').map(t => t.trim())
+        .filter(t => {
+            if (!t) return false;
+            const low = t.toLowerCase();
+            if (!GARMENT_WORDS.some(g => low.includes(g))) return true;
+            return (counts.get(low) || 0) !== 1;
+        }).join(', ');
 }
 
 const MODERN_ROLE = /\b(?:soldiers?|troop|troops|army|military|marines?|sailors?|police|officers?|security)\b/i;
@@ -1420,13 +1446,15 @@ ${FRAME_LAWS}${bubblesOn ? '\n\n' + BUBBLE_RULES : ''}\nOUTPUT (replaces the sin
         if (plan.setting) panels.setting = stripTransientFromSetting(plan.setting);
         if (plan.dress) panels.dress = plan.dress;
     }
-    const dress = filterRankGarments(panels.dress) || mineDressTags(getActiveCastSheet());
+    const rawDress = filterRankGarments(panels.dress) || mineDressTags(getActiveCastSheet());
     // Role words ('soldiers', 'officers') summon modern armies in a traditional world,
     // and the anti-modern NEGATIVE cannot beat a repeated POSITIVE (field: green
     // modern uniforms behind a shihakusho crowd). Purged from setting/prompts/states;
-    // the anchor's own population words name these people.
-    const antiModernOn = !!antiModernNegative(dress);
-    if (antiModernOn && panels.setting) panels.setting = purgeModernRoles(panels.setting);
+    // the anchor's own population words name these people. antiModern judges the RAW
+    // dress — the filtered one may legitimately be empty.
+    const antiModernOn = !!antiModernNegative(rawDress);
+    if (antiModernOn && panels.setting) panels.setting = purgeModernRoles(neutralizeRoleUniforms(panels.setting, rawDress));
+    const dress = stripPersonalGarments(rawDress, getActiveCastSheet());
     let activeSheet = getActiveCastSheet();
     // A who-name missing from the cast means a panel with NO subject tags at all —
     // an empty courtyard where a character should be (field bug). Seed the missing
@@ -1462,14 +1490,19 @@ ${FRAME_LAWS}${bubblesOn ? '\n\n' + BUBBLE_RULES : ''}\nOUTPUT (replaces the sin
         }
         const { principals, background } = splitPrincipals(p.who);
         if (background.length) console.warn('[SceneSnap] background figure(s) demoted out of who:', background.map(w => w.name));
-        // Panel-level nudity: 'nude' floating in the environment tags while garments
-        // stayed welded rendered CLOTHED people and zero anatomy (the NSFW field bug).
-        // It is welded into every principal's state — applyUndress strips the
-        // garments, and the explicit tag lands where the model reads identity.
+        // Explicit panels make their principals NUDE BY DEFAULT (0.31.0): the builder
+        // writes 'breasts bouncing, nipples wet, buried deep' and never the word
+        // 'nude', so garments stayed welded and both rendered clothed (field). The
+        // only exception is a state that explicitly keeps clothes ON ('uniform pushed
+        // open', 'skirt hiked') — a garment and a condition in the same token.
         const panelAll = [p.prompt, p.sentence, ...p.who.map(w => String(w?.state || ''))].join(' ');
-        if (/\b(?:nude|naked)\b/i.test(panelAll)) {
+        const panelExplicit = /\b(?:nude|naked)\b/i.test(panelAll) || EXPLICIT_STATE.test(panelAll);
+        if (panelExplicit) {
+            const clothesStayOn = st => String(st).split(',').some(tok => GARMENT_CONDITION.test(tok) && hasGarment(tok));
             for (const w of principals) {
-                if (!/\b(?:nude|naked)\b/i.test(String(w.state || ''))) w.state = [String(w.state || '').trim(), 'nude'].filter(Boolean).join(', ');
+                const st = String(w.state || '');
+                if (/\b(?:nude|naked)\b/i.test(st) || clothesStayOn(st)) continue;
+                w.state = [st.trim(), 'nude'].filter(Boolean).join(', ');
             }
         }
         if (antiModernOn) for (const w of principals) w.state = purgeModernRoles(String(w.state || ''));

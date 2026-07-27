@@ -30,7 +30,7 @@ const FUNCS = [
     'parsePanels', 'parseCastSheet', 'mergeCastLines', 'effectiveForcedTags',
     'composePositive', 'scanPresenceIn', 'markerDetails', 'ledgerStateLines',
     'stripScene', 'explainError', 'isStaleSession', 'stripLayoutMeta', 'appendAnchor', 'mineDressTags', 'normalizeCountTags', 'filterRankGarments', 'assembleIdentity', 'scrubState', 'seedForPanel', 'replaceNamesInSentence', 'capTagSafe', 'antiModernNegative', 'isPlaceholderTags', 'stripPlaceholderLines', 'getSize',
-    'backgroundFigureTag', 'dedupeAgainstAnchor', 'neutralizeRoleUniforms', 'unifyStripLighting', 'applyUndress', 'hoistCrowdTokens', 'extractCrowdTokens', 'purgeModernRoles', 'panelLacksAnatomy',
+    'backgroundFigureTag', 'dedupeAgainstAnchor', 'neutralizeRoleUniforms', 'unifyStripLighting', 'applyUndress', 'hoistCrowdTokens', 'extractCrowdTokens', 'purgeModernRoles', 'panelLacksAnatomy', 'stripPersonalGarments',
 ];
 
 const prelude = `
@@ -935,9 +935,9 @@ function defaultPatterns() { return '<details>[\\s\\S]*?</details>\n\\{[A-Z_]+\\
     check('src: sex act with zero genital tags costs one corrective retry',
         src.includes('panels.some(panelLacksAnatomy)') && src.includes('names no anatomy'));
     check('src: panel-level nudity is welded into every principal state',
-        src.includes("if (!/\\b(?:nude|naked)\\b/i.test(String(w.state || ''))) w.state = [String(w.state || '').trim(), 'nude'].filter(Boolean).join(', ');"));
+        src.includes("w.state = [st.trim(), 'nude'].filter(Boolean).join(', ');"));
     check('src: modern role words purged when the anti-modern gate fires',
-        src.includes('const antiModernOn = !!antiModernNegative(dress);') && src.includes('purgeModernRoles(p.prompt)'));
+        src.includes('const antiModernOn = !!antiModernNegative(rawDress);') && src.includes('purgeModernRoles(p.prompt)'));
 }
 
 // ---------------------------------------------------------------- NAI guidance to the builder + panel focus law (0.30.0)
@@ -950,6 +950,38 @@ function defaultPatterns() { return '<details>[\\s\\S]*?</details>\n\\{[A-Z_]+\\
         && src.includes('EUPHEMISMS ARE FAILED PANELS'));
     check('guidance: complete nudity is demanded per naked character',
         src.includes("'completely nude'") && src.includes('ONLY when the scene text says the clothes stay on'));
+}
+
+// ---------------------------------------------------------------- explicit default-nude + personal garments (0.31.0)
+{
+    // A single-owner garment is that character's, never world dress.
+    const cast = 'Jovan: man, white hair, black kosode\nRukia: woman, black hair, violet eyes\nTetsuzan: man, old, black shihakusho\nKiyone: girl, black shihakusho';
+    check('dress: single-owner garments dropped, shared outfit kept',
+        S.stripPersonalGarments('black kosode, black shihakusho', cast) === 'black shihakusho');
+    check('dress: non-garment tokens pass through', S.stripPersonalGarments('winter morning', cast) === 'winter morning');
+    check('dress: empty tolerated', S.stripPersonalGarments('', cast) === '');
+    // Explicit default-nude end to end: 'breasts bouncing + buried deep' with no
+    // literal 'nude' anywhere must STILL strip the welded garments (the 0.30.0 field).
+    const explicitPanel = 'small breasts bouncing, flushed dark nipples wet, buried deep';
+    const isExplicit = S.EXPLICIT_STATE.test(explicitPanel);
+    check('nude: exposed anatomy marks the panel explicit without the word nude',
+        isExplicit === true);
+    // Clothes-stay-on guard: 'uniform pushed open' survives; 'nipples wet' is not a garment.
+    const stayOn = st => String(st).split(',').some(tok => S.GARMENT_CONDITION.test(tok) && S.hasGarment(tok));
+    check('nude: pushed-open keeps clothes ON, wet-nipples does not block nudity',
+        stayOn('shinigami uniform pushed open, flushed') === true
+        && stayOn('small breasts bouncing, flushed dark nipples wet') === false);
+    // Euphemisms learned in 0.31.0.
+    check('nsfw: buried deep / still joined are acts',
+        S.SEX_ACT.test('hips pressed flush against hers, buried deep')
+        && S.SEX_ACT.test('still joined')
+        && !S.SEX_ACT.test('lying beside her propped on one elbow'));
+    check('src: explicit panels weld nude by default, respecting clothes-stay-on',
+        src.includes('const panelExplicit = /\\b(?:nude|naked)\\b/i.test(panelAll) || EXPLICIT_STATE.test(panelAll);'));
+    check('src: the sex arc law is in the planner',
+        src.includes('EXPLICIT SCENES ARE AN ARC'));
+    check('src: personal garments are stripped from the world dress',
+        src.includes('const dress = stripPersonalGarments(rawDress, getActiveCastSheet());'));
 }
 
 // ---------------------------------------------------------------- source-level invariants
