@@ -30,7 +30,7 @@ const FUNCS = [
     'parsePanels', 'parseCastSheet', 'mergeCastLines', 'effectiveForcedTags',
     'composePositive', 'scanPresenceIn', 'markerDetails', 'ledgerStateLines',
     'stripScene', 'explainError', 'isStaleSession', 'stripLayoutMeta', 'appendAnchor', 'mineDressTags', 'normalizeCountTags', 'filterRankGarments', 'assembleIdentity', 'scrubState', 'seedForPanel', 'replaceNamesInSentence', 'capTagSafe', 'antiModernNegative', 'isPlaceholderTags', 'stripPlaceholderLines', 'getSize',
-    'backgroundFigureTag', 'dedupeAgainstAnchor', 'neutralizeRoleUniforms', 'unifyStripLighting', 'applyUndress', 'hoistCrowdTokens', 'extractCrowdTokens', 'purgeModernRoles', 'panelLacksAnatomy', 'stripPersonalGarments',
+    'backgroundFigureTag', 'dedupeAgainstAnchor', 'neutralizeRoleUniforms', 'unifyStripLighting', 'applyUndress', 'hoistCrowdTokens', 'extractCrowdTokens', 'purgeModernRoles', 'panelLacksAnatomy', 'stripPersonalGarments', 'cleanWorldDress',
 ];
 
 const prelude = `
@@ -935,7 +935,7 @@ function defaultPatterns() { return '<details>[\\s\\S]*?</details>\n\\{[A-Z_]+\\
     check('src: sex act with zero genital tags costs one corrective retry',
         src.includes('panels.some(panelLacksAnatomy)') && src.includes('names no anatomy'));
     check('src: panel-level nudity is welded into every principal state',
-        src.includes("w.state = [st.trim(), 'nude'].filter(Boolean).join(', ');"));
+        src.includes("st = [st.trim(), 'nude'].filter(Boolean).join(', ');") && src.includes('w.state = st;'));
     check('src: modern role words purged when the anti-modern gate fires',
         src.includes('const antiModernOn = !!antiModernNegative(rawDress);') && src.includes('purgeModernRoles(p.prompt)'));
 }
@@ -977,11 +977,36 @@ function defaultPatterns() { return '<details>[\\s\\S]*?</details>\n\\{[A-Z_]+\\
         && S.SEX_ACT.test('still joined')
         && !S.SEX_ACT.test('lying beside her propped on one elbow'));
     check('src: explicit panels weld nude by default, respecting clothes-stay-on',
-        src.includes('const panelExplicit = /\\b(?:nude|naked)\\b/i.test(panelAll) || EXPLICIT_STATE.test(panelAll);'));
+        src.includes('const panelExplicit = sceneNude || /\\b(?:nude|naked)\\b/i.test(panelAll) || EXPLICIT_STATE.test(panelAll);'));
     check('src: the sex arc law is in the planner',
-        src.includes('EXPLICIT SCENES ARE AN ARC'));
+        src.includes('THE BEATS ARE IN THE SCENE, not in a template'));
     check('src: personal garments are stripped from the world dress',
-        src.includes('const dress = stripPersonalGarments(rawDress, getActiveCastSheet());'));
+        src.includes('const dress = cleanWorldDress(stripPersonalGarments(rawDress, getActiveCastSheet()), antiModernOn);'));
+}
+
+// ---------------------------------------------------------------- tracker-nude + dress hygiene + bubbles (0.32.0)
+{
+    // World dress hygiene: uniforms die in traditional worlds, decorations are never world dress.
+    check('dress: uniforms and rank decorations never reach the anchor',
+        S.cleanWorldDress('black kosode, school uniform, 3rd seat armband, black shihakusho', true) === 'black kosode, black shihakusho');
+    check('dress: decorations dropped even in modern worlds',
+        S.cleanWorldDress('school uniform, armband', false) === 'school uniform');
+    // The wardrobe tracker outranks the builder.
+    check('src: the scene tracker (| nothing |) strips garment-condition tokens and welds nude',
+        src.includes("const sceneNude = /\\|\\s*(?:nothing|nude|naked)\\s*(?:\\||\\])/i.test(scene);")
+        && src.includes('if (sceneNude) st = st.split'));
+    // The planner must spend the budget on scene beats, not a template.
+    check('src: beats are scene-driven, 2-of-4+ panels is a plan problem',
+        src.includes('THE BEATS ARE IN THE SCENE, not in a template')
+        && src.includes('maxPanels >= 4 && plan.panels.length <= 2'));
+    // Em-dash walls no longer kill verbatim bubbles.
+    const scene = '"—JOVAN—!" she screamed. "If you tell anyone, I\'ll have you transferred."';
+    const b = S.sanitizeBubbles([{ speaker: 'Rukia', text: 'JOVAN—!' }, { speaker: 'Rukia', text: "If you tell anyone, I'll have you transferred" }], scene);
+    check('bubbles: em-dashed cries verify verbatim', b.length === 2);
+    // Two-voice beats are law now.
+    check('src: bubbles law pushes two voices, moans are dialogue',
+        src.includes('Use TWO lines whenever the beat has two voices')
+        && src.includes('moans, cries, and spilled names ARE dialogue'));
 }
 
 // ---------------------------------------------------------------- source-level invariants
@@ -996,7 +1021,7 @@ function defaultPatterns() { return '<details>[\\s\\S]*?</details>\n\\{[A-Z_]+\\
         && src.includes('generateNovelAI(positive, negative, landscape, seed)')
         && src.includes('generatePollinations(positive, negative, landscape, seed)')
         && src.includes('if (landscape && p.height > p.width)'));
-    check('src: dialogue spreads one-per-panel by default', src.includes('Prefer ONE line per panel'));
+    check('src: dialogue fills both voices by default', src.includes('Use TWO lines whenever the beat has two voices'));
     check('src: run seed feeds who-derived per-panel seeds through all three backends',
         src.includes('const runSeed = Math.floor(Math.random() * 2 ** 31);')
         && src.includes('seedForPanel(runSeed, (panels[i].who || []).map(w => w.name), panels[i].welded)')

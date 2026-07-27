@@ -12,7 +12,7 @@ import { getBase64Async, saveBase64AsFile } from '../../../utils.js';
 import { callGenericPopup, POPUP_TYPE } from '../../../popup.js';
 
 const MODULE = 'sceneSnap';
-const VERSION = '0.31.0';
+const VERSION = '0.32.0';
 
 const defaultSettings = Object.freeze({
     enabled: true,
@@ -118,7 +118,7 @@ COPY, never compose: take each trait's wording from the story/memory VERBATIM wh
 
 // One canonical dialogue-bubble contract, cited by both builder paths — never restated.
 const BUBBLE_RULES = `DIALOGUE BUBBLES (active):
-Alongside each panel prompt, pick 0-2 spoken lines for that panel's beat, copied VERBATIM from the SCENE text — never invent, paraphrase, translate, or merge lines. Prefer ONE line per panel, spreading the dialogue across panels in speaking order; put two lines in one panel only for a tight same-beat exchange, and never repeat a line across panels. Max 12 words per line; prefer the punchiest dialogue of the beat. "speaker" is the exact character name. If the beat has no spoken dialogue, use an empty array. The image prompt itself must still contain no dialogue or quotation marks — spoken lines go ONLY in the bubbles field; SceneSnap draws them onto the image afterward.`;
+Alongside each panel prompt, pick 0-2 spoken lines for that panel's beat, copied VERBATIM from the SCENE text — never invent, paraphrase, translate, or merge lines. Use TWO lines whenever the beat has two voices (a cry and an answer, an order and a moan) — never leave a talkative beat with an empty bubbles field. In explicit scenes, moans, cries, and spilled names ARE dialogue: prefer the scene's rawest verbatim lines. Spread dialogue across panels in speaking order and never repeat a line across panels. Max 12 words per line; prefer the punchiest dialogue of the beat. "speaker" is the exact character name. If the beat has no spoken dialogue, use an empty array. The image prompt itself must still contain no dialogue or quotation marks — spoken lines go ONLY in the bubbles field; SceneSnap draws them onto the image afterward.`;
 
 // Explicit scenes get explicit tags: vagueness is the accuracy killer in NSFW beats.
 // The panel-focus law is the user's own: solo for body moments, duo for dialogue,
@@ -194,7 +194,7 @@ WHO is the people the beat's action passes BETWEEN, and nobody else:
 
 WORLD, derived once: "setting" is the standing description of the place stamped on every panel — location, architecture, weather, light, AND the scene's population with what that population wears ("packed stands of shinigami in black shihakusho"). Never what the population is momentarily doing. "dress" is ONLY the universal base outfit an ordinary person of this world wears — never rank- or status-specific garments.
 
-EXPLICIT SCENES ARE AN ARC, never a 2-panel shorthand: arrival/undress, contact, the act, the peak, the afterglow — use the FULL panel budget up to %MAX%. A sex scene compressed to arrival + afterglow has thrown its own climax away.
+THE BEATS ARE IN THE SCENE, not in a template. Read the scene's own action sequence: every distinct physical beat the TEXT contains is a panel candidate, in scene order, up to %MAX%. A scene that opens mid-act opens mid-act — never import beats the scene does not have (undress when they are already naked), never compress a scene with six beats into two panels. The climax action itself MUST be one of them.
 
 The plan entry for each panel is: {"beat":"<one plain sentence: what this frame shows>","follows":"<how this moment follows the previous panel — omit on panel 1>","between":"<what passes between the two people — required when "who" has two names>","who":["Exact Cast Name"]}`;
 
@@ -383,6 +383,9 @@ function normalizeForMatch(text) {
     return String(text)
         .replace(/[\u2018\u2019]/g, "'")
         .replace(/[\u201C\u201D]/g, '"')
+        // Em/en dashes are punctuation walls between a bubble and its scene line —
+        // 'JOVAN—!' failed verbatim against the scene's own '—JOVAN—!' (field).
+        .replace(/[\u2014\u2013]/g, ' ')
         .replace(/\s+/g, ' ')
         .toLowerCase()
         .trim();
@@ -934,6 +937,16 @@ function panelLacksAnatomy(p) {
 // the world's dress — the hero's black kosode was mined as 'world dress' and welded
 // onto the heroine (field). Garments appearing in 2+ cast lines are the world's
 // shared outfit and stay; single-owner garments are dropped from the dress field.
+// The world's dress field itself needs hygiene: 'uniform' tokens die in a
+// traditional world (the gakuran engine), and decorations ('3rd seat armband',
+// badges, insignia) are per-character rank marks — never something every background
+// person wears.
+function cleanWorldDress(dressText, antiModernOn) {
+    let d = String(dressText || '');
+    if (antiModernOn) d = d.split(',').map(t => t.trim()).filter(t => t && !/\buniforms?\b/i.test(t)).join(', ');
+    return d.split(',').map(t => t.trim()).filter(t => t && !DECORATION_WORD.test(t)).join(', ');
+}
+
 function stripPersonalGarments(dressText, castText) {
     const counts = new Map();
     for (const line of String(castText || '').split('\n')) {
@@ -1047,6 +1060,7 @@ function validatePlan(plan, castNames, maxPanels, opts = {}) {
     const problems = [];
     const known = new Set((castNames || []).map(n => n.toLowerCase()));
     if (maxPanels > 1 && plan.panels.length < 2) problems.push('You returned fewer than 2 panels; a strip needs at least 2.');
+    if (maxPanels >= 4 && plan.panels.length <= 2) problems.push(`You used only ${plan.panels.length} panels of a ${maxPanels}-panel budget. Read the scene again — its text holds more distinct beats than that. Give each its own panel, up to the budget.`);
     for (let i = 0; i < plan.panels.length; i++) {
         const p = plan.panels[i];
         if (p.who === null) problems.push(`Panel ${i + 1} has no "who" field at all. Every panel must have one, even if it is [].`);
@@ -1454,7 +1468,7 @@ ${FRAME_LAWS}${bubblesOn ? '\n\n' + BUBBLE_RULES : ''}\nOUTPUT (replaces the sin
     // dress — the filtered one may legitimately be empty.
     const antiModernOn = !!antiModernNegative(rawDress);
     if (antiModernOn && panels.setting) panels.setting = purgeModernRoles(neutralizeRoleUniforms(panels.setting, rawDress));
-    const dress = stripPersonalGarments(rawDress, getActiveCastSheet());
+    const dress = cleanWorldDress(stripPersonalGarments(rawDress, getActiveCastSheet()), antiModernOn);
     let activeSheet = getActiveCastSheet();
     // A who-name missing from the cast means a panel with NO subject tags at all —
     // an empty courtyard where a character should be (field bug). Seed the missing
@@ -1472,6 +1486,9 @@ ${FRAME_LAWS}${bubblesOn ? '\n\n' + BUBBLE_RULES : ''}\nOUTPUT (replaces the sin
             try { await autoBuildCast({ silent: true, requiredNames: [...missingAll] }); activeSheet = getActiveCastSheet(); } catch (e) { console.warn('[SceneSnap] targeted seeding failed:', e); }
         }
     }
+    // The scene's own wardrobe tracker ('| nothing |' in the header) is the highest
+    // clothing authority there is — it overrides cast sheets AND builder states.
+    const sceneNude = /\|\s*(?:nothing|nude|naked)\s*(?:\||\])/i.test(scene);
     const anchorText = [panels.setting || '', dress].filter(Boolean).join(', ');
     for (const p of panels) {
         const crowdHere = framesCrowd(anchorText) || framesCrowd(p.prompt);
@@ -1490,19 +1507,19 @@ ${FRAME_LAWS}${bubblesOn ? '\n\n' + BUBBLE_RULES : ''}\nOUTPUT (replaces the sin
         }
         const { principals, background } = splitPrincipals(p.who);
         if (background.length) console.warn('[SceneSnap] background figure(s) demoted out of who:', background.map(w => w.name));
-        // Explicit panels make their principals NUDE BY DEFAULT (0.31.0): the builder
-        // writes 'breasts bouncing, nipples wet, buried deep' and never the word
-        // 'nude', so garments stayed welded and both rendered clothed (field). The
-        // only exception is a state that explicitly keeps clothes ON ('uniform pushed
-        // open', 'skirt hiked') — a garment and a condition in the same token.
+        // Explicit panels make their principals NUDE BY DEFAULT (0.31.0). The scene's
+        // OWN TRACKER outranks a builder that keeps clothes on: a header declaring
+        // worn clothing 'nothing' (0.32.0, field) strips garment+condition tokens too
+        // — the scene said naked; 'pushed open' is builder fan-fiction.
         const panelAll = [p.prompt, p.sentence, ...p.who.map(w => String(w?.state || ''))].join(' ');
-        const panelExplicit = /\b(?:nude|naked)\b/i.test(panelAll) || EXPLICIT_STATE.test(panelAll);
+        const panelExplicit = sceneNude || /\b(?:nude|naked)\b/i.test(panelAll) || EXPLICIT_STATE.test(panelAll);
         if (panelExplicit) {
             const clothesStayOn = st => String(st).split(',').some(tok => GARMENT_CONDITION.test(tok) && hasGarment(tok));
             for (const w of principals) {
-                const st = String(w.state || '');
-                if (/\b(?:nude|naked)\b/i.test(st) || clothesStayOn(st)) continue;
-                w.state = [st.trim(), 'nude'].filter(Boolean).join(', ');
+                let st = String(w.state || '');
+                if (sceneNude) st = st.split(',').map(t => t.trim()).filter(t => t && !(GARMENT_CONDITION.test(t) && hasGarment(t))).join(', ');
+                if (!/\b(?:nude|naked)\b/i.test(st) && (sceneNude || !clothesStayOn(st))) st = [st.trim(), 'nude'].filter(Boolean).join(', ');
+                w.state = st;
             }
         }
         if (antiModernOn) for (const w of principals) w.state = purgeModernRoles(String(w.state || ''));

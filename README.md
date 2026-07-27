@@ -114,6 +114,13 @@ Stella: girl, long crimson hair, red eyes, large breasts, hair ribbon, school un
 
 ## Changelog
 
+### 0.32.0 — the tracker outranks the builder; beats belong to the scene
+- **Fixed: the scene said `| nothing |` and the strip still dressed them.** The header's own wardrobe tracker is now the highest clothing authority: a scene declaring worn clothing `nothing`/`nude`/`naked` strips garment+condition tokens from every state AND welds `nude` — the builder's `uniform pushed open` was fan-fiction against the scene's own ledger.
+- **Replaced: the rigid explicit-arc template (user pushback, correct).** Beats are read from the SCENE's own action sequence, never imported from a template — a scene opening mid-act opens mid-act. Using only 2 panels of a 4+ budget is now a plan-validation problem with a corrective retry.
+- **Fixed: one bubble from a scene full of dialogue.** The bubbles law now demands two voices per talkative beat (moans/cries/spilled names are dialogue in explicit scenes), and em-dash folding in the verbatim matcher — `—JOVAN—!` was failing verification against the scene's own text and getting silently dropped.
+- **Fixed: `school uniform, 3rd seat armband` in the world dress.** `cleanWorldDress` kills `uniform` tokens in traditional worlds and rank decorations everywhere — decorations are per-character, never what a crowd wears.
+- Gate: 292 → 298 checks; tracker override negative-tested.
+
 ### 0.31.0 — explicit panels are nude by default; personal garments leave the world dress
 - **Fixed: the clothed sex scene, third and final mechanism.** 0.29/0.30 required the literal word `nude` — but builders write 'breasts bouncing, nipples wet, buried deep' and never say it. Any EXPLICIT panel now welds `nude` into every principal's state by default (applyUndress strips the welded garments), unless a state explicitly keeps clothes on ('uniform pushed open', 'skirt hiked' — a garment + condition in one token). 'nipples wet' is not a garment and no longer blocks it.
 - **Fixed: the hero's kosode welded onto the heroine.** A garment appearing on exactly ONE cast line is that character's clothing, never world dress — `stripPersonalGarments` drops it from the dress field. Shared outfits (2+ owners) stay. Anti-modern judgement uses the raw dress so an empty filtered dress can't disarm it.
