@@ -1219,6 +1219,16 @@ Rukia lay under him with her chest heaving, flushed pink from her face to her br
         src.includes('id="snapshot_cast_clear"') && src.includes("settings.casts[name] = '';"));
 }
 
+// ---------------------------------------------------------------- afterglow composition + steps ceiling (0.44.0)
+{
+    check('src: afterglow panels are side-by-side by law (stacked contact fuses bodies)',
+        src.includes('CONTACT POSTURES') && src.includes('SIDE BY SIDE')
+        && src.includes('fuses two bodies into one mass'));
+    check('src: NAI steps ceiling is 50 (28 was the free-Opus budget, not the API limit)',
+        src.includes('Math.min(Math.max(1, Number(settings.naiSteps) || 28), 50)')
+        && src.includes('max="50"'));
+}
+
 // ---------------------------------------------------------------- source-level invariants
 {
     check('src: single-panel bubble mode requests strict JSON', src.includes('exactly one panel'));

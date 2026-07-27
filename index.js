@@ -12,7 +12,7 @@ import { getBase64Async, saveBase64AsFile } from '../../../utils.js';
 import { callGenericPopup, POPUP_TYPE } from '../../../popup.js';
 
 const MODULE = 'sceneSnap';
-const VERSION = '0.43.0';
+const VERSION = '0.44.0';
 
 const defaultSettings = Object.freeze({
     enabled: true,
@@ -133,7 +133,8 @@ const NSFW_RULE = `
 
 EXPLICIT SCENES: when the scene is sexual or nude, tag it exactly — never euphemize or fade to black.
 PANEL FOCUS LAW: a solo body moment (undressing, bathing, posing, touching herself) is ONE person in "who". A dialogue or an exchange is BOTH. A sex act is ALWAYS BOTH — and the act is named by its danbooru term in the shared prompt (vaginal sex, missionary, cowgirl position, doggystyle, standing sex) with the penetration state, while EACH character's state carries their visible anatomy: breast class + nipples, penis/erection/testicles, pussy/vulva, anus when visible, fluids. EUPHEMISMS ARE FAILED PANELS: 'drives deep', 'buried inside', 'joins with her', 'connected' are forbidden — if the act cannot be named in danbooru terms, it cannot be drawn.
-NUDITY: when the scene has a character naked, that character's state says 'completely nude' — 'uniform pushed open' or 'pulled aside' ONLY when the scene text says the clothes stay on. Otherwise state the garments removed/open, the exposed anatomy, and body proportions CONSISTENT with that character's cast tags in every panel. Anatomy follows the cast sheet: sizes, marks, and SKIN TONE come from cast tags and stay identical in every panel and every image — a character may never change complexion between panels. In natural-language mode, express the same specifics as prose.`;
+NUDITY: when the scene has a character naked, that character's state says 'completely nude' — 'uniform pushed open' or 'pulled aside' ONLY when the scene text says the clothes stay on. Otherwise state the garments removed/open, the exposed anatomy, and body proportions CONSISTENT with that character's cast tags in every panel. Anatomy follows the cast sheet: sizes, marks, and SKIN TONE come from cast tags and stay identical in every panel and every image — a character may never change complexion between panels. In natural-language mode, express the same specifics as prose.
+CONTACT POSTURES: during the act, name the position and keep both bodies. AFTERGLOW and cuddle panels (post-climax, resting, talking) show the partners SIDE BY SIDE or one propped beside the other — never stacked 'still joined above her' contact with both lying, which fuses two bodies into one mass and flips who is on top (field-proven).`;
 
 // NovelAI V4.5 prompt craft from the official docs (strengthening-weakening): the
 // builder shapes the LANGUAGE of each panel; code assembles the structure. The user
@@ -1886,7 +1887,7 @@ async function generateNovelAI(positive, negative, landscape, seed) {
             model: settings.naiModel,
             sampler: 'k_euler_ancestral',
             scheduler: 'karras',
-            steps: Math.min(Math.max(1, Number(settings.naiSteps) || 28), 28),
+            steps: Math.min(Math.max(1, Number(settings.naiSteps) || 28), 50),
             scale: Number(settings.naiScale) || 5,
             width,
             height,
@@ -2535,10 +2536,10 @@ function settingsHtml() {
                     </select>
                     <small class="snapshot_hint">V4.5 Full = strongest, best multi-character. Curated = cleaner training data.</small>
                     <div class="flex-container">
-                        <div class="flex1"><label for="snapshot_nai_steps">Steps (≤28)</label><input id="snapshot_nai_steps" type="number" min="1" max="28" class="text_pole"></div>
+                        <div class="flex1"><label for="snapshot_nai_steps">Steps (≤50)</label><input id="snapshot_nai_steps" type="number" min="1" max="50" class="text_pole"></div>
                         <div class="flex1"><label for="snapshot_nai_scale">Scale</label><input id="snapshot_nai_scale" type="number" min="1" max="10" step="0.5" class="text_pole"></div>
                     </div>
-                    <small class="snapshot_hint">Steps capped at 28 — the free-generation limit on Opus. Scale = prompt adherence, ~5 for V4.5.</small>
+                    <small class="snapshot_hint">Steps: 28 on free Opus (the free-gen limit), 35–40 on paid tiers — more steps = cleaner hands/anatomy. Scale = prompt adherence, 5 default, 6 for stubborn positions.</small>
                 </div>
 
                 <div id="snapshot_nanogpt_block" class="snapshot_backend_block">

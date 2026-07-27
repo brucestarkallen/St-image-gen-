@@ -114,6 +114,11 @@ Stella: girl, long crimson hair, red eyes, large breasts, hair ribbon, school un
 
 ## Changelog
 
+### 0.44.0 — afterglow is side-by-side; steps ceiling raised
+- **Fixed: the fused-futon afterglow.** Stacked contact postures (`above her, still joined` with both lying) fuse two bodies into one mass and flip who's on top — the field panel rendered him lying and her warped into the futon. New CONTACT POSTURES law: during the act, name the position; afterglow/cuddle panels show partners SIDE BY SIDE or one propped beside the other.
+- **Steps ceiling 28 → 50.** 28 was the free-Opus budget, not the API limit — paid tiers can run 35–40 for cleaner hands/anatomy. Settings hint updated; Scale 6 suggested for stubborn positions.
+- Gate: 347 → 350 checks; eslint clean (an unterminated-template slip caught by the gate's own lint step, fixed same-commit).
+
 ### 0.43.0 — the crowd beat gets a foreground witness
 - **Law inversion: pure crowd frames are dead.** Field evidence across five strips: bare `who: []` frames render empty halls, tiny people, or scale insanity — while crowds *behind a principal* render every time. A crowd-reaction beat must now list ONE principal as foreground witness (crowd shown reacting behind them); `who: []` is a plan-validation problem when named characters exist, legal only for cast-less scenes. The repair acceptance flipped with it.
 - **Fixed: 'alone' on the empty hall.** Code bubbles never land on speaker-less establishing frames anymore.
