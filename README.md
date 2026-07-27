@@ -114,6 +114,12 @@ Stella: girl, long crimson hair, red eyes, large breasts, hair ribbon, school un
 
 ## Changelog
 
+### 0.41.0 — the crowd vocabulary grows; styles read as model choices
+- **Fixed: the empty refectory.** The crowd-hoist regex knew `crowd`, `packed`, `spectators` — but the field anchor's population was `crowded hall of students` and `hundreds of seated students`. `crowded`, `students`, `hundreds`, `dozens`, `people`, `villagers`, `patrons`, `guests` and friends join the vocabulary, so population words hoist to the front of establishing frames again.
+- **UI: prompt styles are labeled as model choices** — `NovelAI (danbooru tags)` and `Natural language (Qwen, FLUX)`, so the choice reads as what it is.
+- Gate: 336 → 338 checks.
+- **Multi-story note (user-side):** casts are global. A second story world needs its own cast (settings → + New cast → Auto-build) or the first story's appearances weld onto the second story's people (field: Bleach-Jovan's white hair onto Academy-Jovan).
+
 ### 0.40.0 — braced framings count, close crops are banned, nsfw leads
 - **Fixed: partners vanishing from sex panels (two causes).** (1) The builder braced the framing tag (`{cowboy shot}`) and the shot-grammar enforcer read it literally — zero recognized framing, the dutch angle ran wild over a close crop. The enforcer now sees through emphasis braces. (2) `close-up`/`upper body` crops on explicit two-person panels amputate the partner — banned by `explicitFramingGuard`, swapped to `cowboy shot`. The user's law: both partners visible, genitals need bodies in frame.
 - **Added: the literal `nsfw` tag leads every explicit panel in tags mode** (user mandate).

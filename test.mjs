@@ -1172,6 +1172,17 @@ Rukia lay under him with her chest heaving, flushed pink from her face to her br
         src.includes('explicitFramingGuard(deduped, p.explicit, principals.length)'));
 }
 
+// ---------------------------------------------------------------- crowd vocabulary + style labels (0.41.0)
+{
+    // The field's anchor population was invisible to a crowd-only regex.
+    check('crowd: crowded/students/hundreds hoist',
+        /crowded hall of students in formal uniforms/.test(S.hoistCrowdTokens('crowded hall of students in formal uniforms, stone walls', true))
+        && /hundreds of seated students/.test(S.hoistCrowdTokens('hundreds of seated students, stone walls', true))
+        && /frozen mid-bite/.test(S.extractCrowdTokens('students in formal uniforms frozen mid-bite, dust motes').crowd));
+    check('src: prompt styles read as model choices',
+        src.includes('>NovelAI (danbooru tags)<') && src.includes('>Natural language (Qwen, FLUX)<'));
+}
+
 // ---------------------------------------------------------------- source-level invariants
 {
     check('src: single-panel bubble mode requests strict JSON', src.includes('exactly one panel'));

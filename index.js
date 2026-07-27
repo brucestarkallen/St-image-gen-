@@ -12,7 +12,7 @@ import { getBase64Async, saveBase64AsFile } from '../../../utils.js';
 import { callGenericPopup, POPUP_TYPE } from '../../../popup.js';
 
 const MODULE = 'sceneSnap';
-const VERSION = '0.40.0';
+const VERSION = '0.41.0';
 
 const defaultSettings = Object.freeze({
     enabled: true,
@@ -959,7 +959,10 @@ function framesCrowd(text) {
 // three principals against empty backgrounds while the crowd sat in the tail. When
 // the frame HAS a crowd, the anchor's own crowd words are hoisted to directly after
 // the identity blocks. Same words, front position; appendAnchor dedupes the tail.
-const CROWD_ANCHOR_TOKEN = /\b(?:crowds?|spectators?|audience|onlookers?|bystanders?|throngs?|mob|multitude|packed|ranks)\b/i;
+// 'crowded hall of students', 'hundreds of seated students', 'students frozen
+// mid-bite' — the field's anchor population was invisible to a crowd-only regex,
+// nothing hoisted, and the refectory rendered EMPTY.
+const CROWD_ANCHOR_TOKEN = /\b(?:crowds?|crowded|spectators?|audience|onlookers?|bystanders?|throngs?|mob|multitude|packed|ranks|students?|pupils?|hundreds?|dozens?|people|villagers?|townsfolk|patrons?|customers?|guests?)\b/i;
 
 function hoistCrowdTokens(anchor, crowdHere) {
     if (!crowdHere) return '';
@@ -2497,8 +2500,8 @@ function settingsHtml() {
                 <label for="snapshot_style">Prompt style</label>
                 <select id="snapshot_style" class="text_pole">
                     <option value="auto">Auto (match backend)</option>
-                    <option value="tags">Danbooru tags</option>
-                    <option value="natural">Natural language</option>
+                    <option value="tags">NovelAI (danbooru tags)</option>
+                    <option value="natural">Natural language (Qwen, FLUX)</option>
                 </select>
                 <small class="snapshot_hint">Anime checkpoints (Runware/NovelAI) want Danbooru tags; FLUX (Pollinations) wants sentences. Auto picks correctly — only override if you know why.</small>
                 <label for="snapshot_forced">Always-append quality tags</label>
