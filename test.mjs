@@ -30,7 +30,7 @@ const FUNCS = [
     'parsePanels', 'parseCastSheet', 'mergeCastLines', 'effectiveForcedTags',
     'composePositive', 'scanPresenceIn', 'markerDetails', 'ledgerStateLines',
     'stripScene', 'explainError', 'isStaleSession', 'stripLayoutMeta', 'appendAnchor', 'mineDressTags', 'normalizeCountTags', 'filterRankGarments', 'assembleIdentity', 'scrubState', 'seedForPanel', 'replaceNamesInSentence', 'capTagSafe', 'antiModernNegative', 'isPlaceholderTags', 'stripPlaceholderLines', 'getSize',
-    'backgroundFigureTag', 'dedupeAgainstAnchor', 'neutralizeRoleUniforms', 'unifyStripLighting', 'applyUndress', 'hoistCrowdTokens', 'extractCrowdTokens', 'purgeModernRoles', 'panelLacksAnatomy', 'stripPersonalGarments', 'cleanWorldDress', 'countSceneBeats', 'dressForPanel', 'anatomyContinuity', 'scrubEchoedCounts', 'inferLyingFromPosition', 'mapLimit',
+    'backgroundFigureTag', 'dedupeAgainstAnchor', 'neutralizeRoleUniforms', 'unifyStripLighting', 'applyUndress', 'hoistCrowdTokens', 'extractCrowdTokens', 'purgeModernRoles', 'panelLacksAnatomy', 'stripPersonalGarments', 'cleanWorldDress', 'countSceneBeats', 'dressForPanel', 'anatomyContinuity', 'scrubEchoedCounts', 'inferLyingFromPosition', 'mapLimit', 'explicitFramingGuard',
 ];
 
 const prelude = `
@@ -1120,7 +1120,7 @@ Rukia lay under him with her chest heaving, flushed pink from her face to her br
     check('src: natural mode welds WITHOUT the danbooru count run (0.38.0)',
         src.includes("if (style === 'natural') {")
         && src.includes("enforceShotGrammar([...id.blocks, bgTag, crowdTag, restPrompt]")
-        && src.includes("enforceShotGrammar([id.counts, ...id.blocks, bgTag, crowdTag, restPrompt]"));
+        && src.includes("enforceShotGrammar([nsfwTag, id.counts, ...id.blocks, bgTag, crowdTag, restPrompt]"));
     check('src: tags style on nanogpt warns once per chat',
         src.includes("settings.backend === 'nanogpt' && resolveStyle() === 'tags'")
         && src.includes('nanogpt-tags:'));
@@ -1148,6 +1148,28 @@ Rukia lay under him with her chest heaving, flushed pink from her face to her br
         S.LYING_STATE.test('head thrown back into pillow') && S.LYING_STATE.test('collapsed on the futon'));
     check('src: camera swaps read states AND the sentence',
         src.includes('|| LYING_STATE.test(p.sentence)'));
+}
+
+// ---------------------------------------------------------------- framing braces + close-crop ban + nsfw tag (0.40.0)
+{
+    // Braced framing tags were invisible to shot grammar (field: '{cowboy shot}'
+    // matched nothing, the dutch angle ran wild, he vanished from the panel).
+    const g = S.enforceShotGrammar('{cowboy shot}, wide shot, dutch angle, from below');
+    check('grammar: braced framing counts; second framing and second angle drop',
+        g === '{cowboy shot}, dutch angle');
+    // Close crops are banned on explicit two-person panels.
+    check('framing guard: close-up and upper body become cowboy shot on explicit duos',
+        S.explicitFramingGuard('upper body, from below, dramatic lighting', true, 2) === 'cowboy shot, from below, dramatic lighting'
+        && S.explicitFramingGuard('close-up, eye level', true, 2) === 'cowboy shot, eye level');
+    check('framing guard: SFW and solo frames untouched',
+        S.explicitFramingGuard('close-up, eye level', false, 2) === 'close-up, eye level'
+        && S.explicitFramingGuard('close-up, eye level', true, 1) === 'close-up, eye level');
+    // The literal nsfw tag leads explicit panels in tags mode.
+    check('src: nsfw tag prepended on explicit panels in tags mode',
+        src.includes("const nsfwTag = (p.explicit && style === 'tags') ? 'nsfw' : '';")
+        && src.includes('[nsfwTag, id.counts, ...id.blocks, bgTag, crowdTag, restPrompt]'));
+    check('src: the close-crop guard is wired before assembly',
+        src.includes('explicitFramingGuard(deduped, p.explicit, principals.length)'));
 }
 
 // ---------------------------------------------------------------- source-level invariants
@@ -1257,7 +1279,7 @@ Rukia lay under him with her chest heaving, flushed pink from her face to her br
         && src.includes('nazi, swastika, iron cross'));
     check('src: the count run follows block order',
         src.includes('const counts = seen.map(k => label(k, nOf(k))).join(\', \');')
-        && src.includes('[id.counts, ...id.blocks, bgTag, crowdTag, restPrompt]'));
+        && src.includes('[nsfwTag, id.counts, ...id.blocks, bgTag, crowdTag, restPrompt]'));
     check('src: anchor owns the environment — dedupe wired into BOTH panel paths',
         (src.match(/dedupeAgainstAnchor\(/g) || []).length >= 3
         && src.includes('const bgTag = background.length ? backgroundFigureTag(background, activeSheet) : \'\';'));

@@ -12,7 +12,7 @@ import { getBase64Async, saveBase64AsFile } from '../../../utils.js';
 import { callGenericPopup, POPUP_TYPE } from '../../../popup.js';
 
 const MODULE = 'sceneSnap';
-const VERSION = '0.39.0';
+const VERSION = '0.40.0';
 
 const defaultSettings = Object.freeze({
     enabled: true,
@@ -594,6 +594,16 @@ const LYING_STATE = /\b(?:lying|supine|on (?:her|his|their) back|flat on|collaps
 // lying tag is derived from the state's own spatial claim.
 const UNDER_PARTNER = /\b(?:under|beneath) (?:him|her|them)\b/i;
 
+// Genitals need bodies in frame. A close-up or upper-body crop on an explicit
+// two-person panel amputates the partner (field: he vanished from two of six
+// panels — the user's law is both partners visible).
+function explicitFramingGuard(prompt, explicit, principalCount) {
+    if (!explicit || principalCount !== 2) return String(prompt || '');
+    return String(prompt || '')
+        .replace(/\bclose-?up\b/ig, 'cowboy shot')
+        .replace(/\bupper body\b/ig, 'cowboy shot');
+}
+
 function inferLyingFromPosition(state) {
     const st = String(state || '');
     if (UNDER_PARTNER.test(st) && !LYING_STATE.test(st)) return `${st}, lying on back`;
@@ -1042,8 +1052,12 @@ function enforceShotGrammar(prompt) {
     for (const raw of String(prompt || '').split(',')) {
         const t = raw.trim();
         if (!t) continue;
-        if (FRAMING_TAG.test(t)) { if (framing) continue; framing = true; }
-        else if (ANGLE_TAG.test(t)) { if (angle) continue; angle = true; }
+        // Builder emphasis braces make a framing tag invisible to the regex —
+        // '{cowboy shot}' matched nothing, the panel ran with NO recognized framing,
+        // and a dutch angle over a close crop amputated the partner (field).
+        const bare = t.replace(/[{}]/g, '').trim();
+        if (FRAMING_TAG.test(bare)) { if (framing) continue; framing = true; }
+        else if (ANGLE_TAG.test(bare)) { if (angle) continue; angle = true; }
         out.push(t);
     }
     return out.join(', ');
@@ -1676,7 +1690,7 @@ ${FRAME_LAWS}${bubblesOn ? '\n\n' + BUBBLE_RULES : ''}\nOUTPUT (replaces the sin
         // Crowd tokens carrying ACTIONS hoist forward with the anchor's population.
         const deduped = unifyStripLighting(dedupeAgainstAnchor(antiModernOn ? purgeModernRoles(scrubEchoedCounts(p.prompt)) : scrubEchoedCounts(p.prompt), anchorText), anchorText);
         let crowdTag = '';
-        let restPrompt = deduped;
+        let restPrompt = explicitFramingGuard(deduped, p.explicit, principals.length);
         if (p.crowd) {
             const cx = extractCrowdTokens(deduped);
             crowdTag = [hoistCrowdTokens(anchorText, true), cx.crowd].filter(Boolean).join(', ');
@@ -1686,10 +1700,12 @@ ${FRAME_LAWS}${bubblesOn ? '\n\n' + BUBBLE_RULES : ''}\nOUTPUT (replaces the sin
         // grammar: the '1boy, 1girl' count run is tag-model syntax and reads as
         // noise — the field run rendered a dog-tongued protagonist with the partner
         // teleported behind him. Identity blocks lead as plain description instead.
+        // Explicit panels lead with the literal 'nsfw' tag (tags mode, user mandate).
+        const nsfwTag = (p.explicit && style === 'tags') ? 'nsfw' : '';
         if (style === 'natural') {
             p.prompt = enforceShotGrammar([...id.blocks, bgTag, crowdTag, restPrompt].filter(Boolean).join(', '));
         } else {
-            p.prompt = enforceShotGrammar([id.counts, ...id.blocks, bgTag, crowdTag, restPrompt].filter(Boolean).join(', '));
+            p.prompt = enforceShotGrammar([nsfwTag, id.counts, ...id.blocks, bgTag, crowdTag, restPrompt].filter(Boolean).join(', '));
         }
         // A lying subject never gets a from-below camera — the model stands them up.
         // The sentence carries lying cues states miss ('head thrown back into pillow').

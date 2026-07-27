@@ -114,6 +114,11 @@ Stella: girl, long crimson hair, red eyes, large breasts, hair ribbon, school un
 
 ## Changelog
 
+### 0.40.0 — braced framings count, close crops are banned, nsfw leads
+- **Fixed: partners vanishing from sex panels (two causes).** (1) The builder braced the framing tag (`{cowboy shot}`) and the shot-grammar enforcer read it literally — zero recognized framing, the dutch angle ran wild over a close crop. The enforcer now sees through emphasis braces. (2) `close-up`/`upper body` crops on explicit two-person panels amputate the partner — banned by `explicitFramingGuard`, swapped to `cowboy shot`. The user's law: both partners visible, genitals need bodies in frame.
+- **Added: the literal `nsfw` tag leads every explicit panel in tags mode** (user mandate).
+- Gate: 331 → 336 checks; framing guard negative-tested.
+
 ### 0.39.0 — parallel panels; the camera reads sentences too
 - **Speed: panels render in parallel (concurrency 2).** Six sequential generations tripled the strip's wall-clock time for no reason; renders are independent, so they now run two-at-a-time. The remaining latency is the builder LLM — pick a FAST Connection Manager profile for the prompt builder (each corrective retry is a full builder call).
 - **Fixed: `from below` snuck back via sentence-only lying cues.** `head thrown back into pillow` isn't the word 'lying' — camera swaps now read the sentence too, and pillow/futon/bed count as lying cues.
