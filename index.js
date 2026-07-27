@@ -12,7 +12,7 @@ import { getBase64Async, saveBase64AsFile } from '../../../utils.js';
 import { callGenericPopup, POPUP_TYPE } from '../../../popup.js';
 
 const MODULE = 'sceneSnap';
-const VERSION = '0.32.0';
+const VERSION = '0.33.0';
 
 const defaultSettings = Object.freeze({
     enabled: true,
@@ -1039,6 +1039,27 @@ function parsePlan(raw, maxPanels) {
     return { setting: String(obj?.setting ?? '').trim(), dress: String(obj?.dress ?? '').trim(), panels };
 }
 
+// How many beats does the scene HAVE? The builder's answer to this has been wrong
+// for six versions (a 9-beat scene compressed to 2 panels, repeatedly). Code counts
+// candidate beats from the prose — a paragraph with action or dialogue is a beat —
+// and the builder must render ALL of them, up to the panel budget. Scene-driven,
+// not builder-mood-driven.
+function countSceneBeats(scene) {
+    const paras = String(scene || '').split(/\n+/).map(s => s.trim())
+        .filter(s => s.length > 20 && !s.startsWith('[') && !/^~t~/.test(s));
+    let beats = 0;
+    for (const p of paras) {
+        if (/"[^"]{2,}"/.test(p) || /[.!?…]/.test(p)) beats++;
+    }
+    return beats;
+}
+
+// The world dress never rides the anchor of an explicit panel: 'shihakusho, kosode'
+// stamped after a nude scene's sentence is how clothes creep back onto bare skin.
+function dressForPanel(dress, explicit) {
+    return explicit ? '' : String(dress || '');
+}
+
 // Two beats are the same beat when their content words mostly coincide. This is the
 // check that catches a sword leaving its sheath followed by that same sword overhead.
 const BEAT_STOPWORD = /^(?:the|a|an|and|or|but|as|at|in|on|of|to|his|her|their|its|with|while|over|into|from|for|by|is|are|was|were|he|she|they|it|this|that|up|down|out)$/i;
@@ -1061,6 +1082,7 @@ function validatePlan(plan, castNames, maxPanels, opts = {}) {
     const known = new Set((castNames || []).map(n => n.toLowerCase()));
     if (maxPanels > 1 && plan.panels.length < 2) problems.push('You returned fewer than 2 panels; a strip needs at least 2.');
     if (maxPanels >= 4 && plan.panels.length <= 2) problems.push(`You used only ${plan.panels.length} panels of a ${maxPanels}-panel budget. Read the scene again — its text holds more distinct beats than that. Give each its own panel, up to the budget.`);
+    if ((opts.beatCount || 0) >= 2 && plan.panels.length < opts.beatCount) problems.push(`The scene's prose contains ${opts.beatCount} distinct beats (counted by code) and you returned ${plan.panels.length} panels. Render every beat, in scene order.`);
     for (let i = 0; i < plan.panels.length; i++) {
         const p = plan.panels[i];
         if (p.who === null) problems.push(`Panel ${i + 1} has no "who" field at all. Every panel must have one, even if it is [].`);
@@ -1383,6 +1405,12 @@ ${FRAME_LAWS}${bubblesOn ? '\n\n' + BUBBLE_RULES : ''}\nOUTPUT (replaces the sin
 
     const maxTokens = maxPanels > 1 ? Math.min(3600, 500 + 650 * maxPanels) : structuredSingle ? 1300 : (bubblesOn ? 1100 : 800);
 
+    // Code counts the scene's beats from its prose; the builder renders ALL of them.
+    const beatCount = maxPanels > 1 ? Math.min(maxPanels, Math.max(2, countSceneBeats(scene))) : 0;
+    if (beatCount) {
+        fullSystem += `\n\nCODE BEAT COUNT: the scene's prose contains exactly ${beatCount} distinct visual beats, counted from the text by code — this number is not negotiable, not a suggestion. Output EXACTLY ${beatCount} panels, one per beat, in scene order. Fewer is a failed strip.`;
+    }
+
     // The plan arrives in the SAME answer as the panels — no second round trip. It is
     // validated after parsing, and only a plan that fails validation costs an extra call.
     let plan = null;
@@ -1406,7 +1434,7 @@ ${FRAME_LAWS}${bubblesOn ? '\n\n' + BUBBLE_RULES : ''}\nOUTPUT (replaces the sin
         if (plan) {
             const castNames = parseCastSheet(getActiveCastSheet()).map(c => c.name);
             const wantsCrowd = framesCrowd(plan.setting) || framesCrowd(scene);
-            const problems = validatePlan(plan, castNames, maxPanels, { crowd: wantsCrowd });
+            const problems = validatePlan(plan, castNames, maxPanels, { crowd: wantsCrowd, beatCount });
             if (problems.length) {
                 console.warn('[SceneSnap] plan rejected:', problems);
                 planNotes = problems.slice();
@@ -1414,7 +1442,7 @@ ${FRAME_LAWS}${bubblesOn ? '\n\n' + BUBBLE_RULES : ''}\nOUTPUT (replaces the sin
                     const rawFix = await callLLM(`${fullSystem}\n\nYOUR PLAN WAS REJECTED:\n- ${problems.join('\n- ')}\nRe-output the complete corrected JSON now — plan AND panels.`, user, maxTokens);
                     const planFix = parsePlan(rawFix, maxPanels);
                     if (planFix) {
-                        const fixProblems = validatePlan(planFix, castNames, maxPanels, { crowd: wantsCrowd });
+                        const fixProblems = validatePlan(planFix, castNames, maxPanels, { crowd: wantsCrowd, beatCount });
                         // A repair is accepted on fewer problems — OR on restoring the
                         // crowd frame outright. Strictly-fewer-only let a repair that
                         // fixed the MISSING CROWD PANEL die on an equal score, and the
@@ -1452,6 +1480,19 @@ ${FRAME_LAWS}${bubblesOn ? '\n\n' + BUBBLE_RULES : ''}\nOUTPUT (replaces the sin
             const panels3 = parsePanels(raw3, style, maxPanels, { bubbles: bubblesOn, sceneText: scene, expectJson: structuredSingle });
             if (panels3.length && !panels3.some(panelLacksAnatomy)) { panels = panels3; raw = raw3; }
         } catch (e) { console.warn('[SceneSnap] anatomy corrective retry failed, keeping first output:', e); }
+    }
+    // A dialogue-heavy scene with ZERO bubbles is a builder failure — the verbatim
+    // lines exist; empty arrays everywhere mean it didn't try (field: a scene of
+    // screams shipped silent).
+    if (bubblesOn && schemaSent && panels.length
+        && panels.reduce((n, p) => n + (p.bubbles || []).length, 0) === 0
+        && (scene.match(/"[^"]{2,}"/g) || []).length >= 2) {
+        console.warn('[SceneSnap] dialogue-heavy scene produced zero bubbles — one corrective retry');
+        try {
+            const raw4 = await callLLM(fullSystem + `\n\nPREVIOUS OUTPUT REJECTED: the scene is full of spoken lines and every "bubbles" array came back empty. Pick 1-2 VERBATIM spoken lines per talkative panel (moans, cries, spilled names count), copied exactly from the scene. Re-output the complete corrected JSON now.`, user, maxTokens);
+            const panels4 = parsePanels(raw4, style, maxPanels, { bubbles: bubblesOn, sceneText: scene, expectJson: structuredSingle });
+            if (panels4.length && panels4.reduce((n, p) => n + (p.bubbles || []).length, 0) > 0) { panels = panels4; raw = raw4; }
+        } catch (e) { console.warn('[SceneSnap] bubble corrective retry failed, keeping first output:', e); }
     }
     // World anchor: builder-derived, cast-mined as backstop. Stamped onto every panel by
     // the extension (appendAnchor) — per-panel drift to modern dress/architecture becomes
@@ -1493,6 +1534,7 @@ ${FRAME_LAWS}${bubblesOn ? '\n\n' + BUBBLE_RULES : ''}\nOUTPUT (replaces the sin
     for (const p of panels) {
         const crowdHere = framesCrowd(anchorText) || framesCrowd(p.prompt);
         p.crowd = crowdHere;
+        p.explicit = sceneNude || EXPLICIT_STATE.test([p.prompt, p.sentence, ...(p.who || []).map(w => String(w?.state || ''))].join(' '));
         p.sentence = replaceNamesInSentence(p.sentence, activeSheet);
         if (!p.who || !p.who.length) {
             // An establishing frame: the crowd or the place IS the subject. It leads
@@ -1511,8 +1553,7 @@ ${FRAME_LAWS}${bubblesOn ? '\n\n' + BUBBLE_RULES : ''}\nOUTPUT (replaces the sin
         // OWN TRACKER outranks a builder that keeps clothes on: a header declaring
         // worn clothing 'nothing' (0.32.0, field) strips garment+condition tokens too
         // — the scene said naked; 'pushed open' is builder fan-fiction.
-        const panelAll = [p.prompt, p.sentence, ...p.who.map(w => String(w?.state || ''))].join(' ');
-        const panelExplicit = sceneNude || /\b(?:nude|naked)\b/i.test(panelAll) || EXPLICIT_STATE.test(panelAll);
+        const panelExplicit = p.explicit || /\b(?:nude|naked)\b/i.test([p.prompt, p.sentence, ...p.who.map(w => String(w?.state || ''))].join(' '));
         if (panelExplicit) {
             const clothesStayOn = st => String(st).split(',').some(tok => GARMENT_CONDITION.test(tok) && hasGarment(tok));
             for (const w of principals) {
@@ -1867,13 +1908,13 @@ async function illustrateMessage(mesId, { force = false } = {}) {
             // The setting already names the population and what it wears, by law, in its
             // own words ("packed courtyard of shinigami in black shihakusho"). A second
             // bound phrase repeating that garment only flattened the crowd into one mass.
-            const anchorFor = () => [setting, dress].filter(Boolean).join(', ');
+            const anchorFor = (p) => [setting, dressForPanel(dress, p?.explicit)].filter(Boolean).join(', ');
             const negFull = antiModernNegative(dress) ? `${negative}, ${antiModernNegative(dress)}` : negative;
             // Hybrid prompting: tags own identity/state (binding); NAI 4.5-class models also
             // read short natural sentences well, and sentences beat tags at spatial relations —
             // so one composition sentence rides at the end, tags mode only.
             const finals = panels.map(p => composePositive(
-                p.sentence && style === 'tags' ? `${appendAnchor(p.prompt, anchorFor())}, ${p.sentence}` : appendAnchor(p.prompt, anchorFor()),
+                p.sentence && style === 'tags' ? `${appendAnchor(p.prompt, anchorFor(p))}, ${p.sentence}` : appendAnchor(p.prompt, anchorFor(p)),
                 style,
             ));
             debugRaw = raw;

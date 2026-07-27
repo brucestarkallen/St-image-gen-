@@ -114,6 +114,12 @@ Stella: girl, long crimson hair, red eyes, large breasts, hair ribbon, school un
 
 ## Changelog
 
+### 0.33.0 — code counts the beats; explicit panels never see the dress
+- **Panel count is no longer the builder's choice.** Six versions of "the scene has 9 beats" shipping as 2 panels ends here: `countSceneBeats` reads the prose (paragraphs with action or dialogue = beats, headers/thought-blocks excluded), and the builder is instructed with the exact number — "the scene contains exactly N distinct visual beats, counted by code, output EXACTLY N panels" — with plan validation + corrective retry when it returns fewer.
+- **Fixed: the world dress stamped onto NUDE panels.** `shihakusho, kosode` riding the anchor tail of an explicit panel is how clothes creep back onto bare skin. Explicit panels now drop the dress from the anchor entirely (`dressForPanel`).
+- **Fixed: dialogue-heavy scenes shipping silent.** A scene with 2+ spoken lines and zero bubbles across all panels costs one corrective retry demanding verbatim lines.
+- Gate: 298 → 305 checks; beat counting negative-tested.
+
 ### 0.32.0 — the tracker outranks the builder; beats belong to the scene
 - **Fixed: the scene said `| nothing |` and the strip still dressed them.** The header's own wardrobe tracker is now the highest clothing authority: a scene declaring worn clothing `nothing`/`nude`/`naked` strips garment+condition tokens from every state AND welds `nude` — the builder's `uniform pushed open` was fan-fiction against the scene's own ledger.
 - **Replaced: the rigid explicit-arc template (user pushback, correct).** Beats are read from the SCENE's own action sequence, never imported from a template — a scene opening mid-act opens mid-act. Using only 2 panels of a 4+ budget is now a plan-validation problem with a corrective retry.

@@ -30,7 +30,7 @@ const FUNCS = [
     'parsePanels', 'parseCastSheet', 'mergeCastLines', 'effectiveForcedTags',
     'composePositive', 'scanPresenceIn', 'markerDetails', 'ledgerStateLines',
     'stripScene', 'explainError', 'isStaleSession', 'stripLayoutMeta', 'appendAnchor', 'mineDressTags', 'normalizeCountTags', 'filterRankGarments', 'assembleIdentity', 'scrubState', 'seedForPanel', 'replaceNamesInSentence', 'capTagSafe', 'antiModernNegative', 'isPlaceholderTags', 'stripPlaceholderLines', 'getSize',
-    'backgroundFigureTag', 'dedupeAgainstAnchor', 'neutralizeRoleUniforms', 'unifyStripLighting', 'applyUndress', 'hoistCrowdTokens', 'extractCrowdTokens', 'purgeModernRoles', 'panelLacksAnatomy', 'stripPersonalGarments', 'cleanWorldDress',
+    'backgroundFigureTag', 'dedupeAgainstAnchor', 'neutralizeRoleUniforms', 'unifyStripLighting', 'applyUndress', 'hoistCrowdTokens', 'extractCrowdTokens', 'purgeModernRoles', 'panelLacksAnatomy', 'stripPersonalGarments', 'cleanWorldDress', 'countSceneBeats', 'dressForPanel',
 ];
 
 const prelude = `
@@ -977,7 +977,7 @@ function defaultPatterns() { return '<details>[\\s\\S]*?</details>\n\\{[A-Z_]+\\
         && S.SEX_ACT.test('still joined')
         && !S.SEX_ACT.test('lying beside her propped on one elbow'));
     check('src: explicit panels weld nude by default, respecting clothes-stay-on',
-        src.includes('const panelExplicit = sceneNude || /\\b(?:nude|naked)\\b/i.test(panelAll) || EXPLICIT_STATE.test(panelAll);'));
+        src.includes('const panelExplicit = p.explicit || /\\b(?:nude|naked)\\b/i.test('));
     check('src: the sex arc law is in the planner',
         src.includes('THE BEATS ARE IN THE SCENE, not in a template'));
     check('src: personal garments are stripped from the world dress',
@@ -1009,6 +1009,44 @@ function defaultPatterns() { return '<details>[\\s\\S]*?</details>\n\\{[A-Z_]+\\
         && src.includes('moans, cries, and spilled names ARE dialogue'));
 }
 
+// ---------------------------------------------------------------- code-counted beats + explicit anchor (0.33.0)
+{
+    const sexScene = `[Captain's Quarters | 20:07 | rain | nothing | above her on the futon]
+
+He answered the name with his mouth and closed his lips over her breast, and the unfinished sentence died as a sound instead of words.
+
+~t~*Can't think— say it again.*~/t~
+
+"AH— hh— FUCK—" Her head cracked back into the pillow. He was pounding her now, no rhythm but deep, each thrust punching the breath out of her.
+
+She felt it immediately — fuller, deeper, the stretch ratcheting past where it had been, every stroke driving into somewhere new.
+
+Rain.
+
+Her legs locked around his waist and her heels dug into the small of his back and she pulled him into every thrust, chasing it now, all protocol burned off.
+
+He bit down on the curve of her breast and drove in deep and held there, and she broke apart with his name in her mouth at full volume.
+
+Rukia lay under him with her chest heaving, flushed pink from her face to her breasts, the stubborn strand of hair glued to her cheek, tears drying.`;
+    const beats = S.countSceneBeats(sexScene);
+    check('beats: code counts prose beats — headers, thoughts, and one-liners excluded',
+        beats === 6);
+    check('beats: empty scene yields 0', S.countSceneBeats('') === 0);
+    check('beats: two short paragraphs still count', S.countSceneBeats('He raised the blade high over the courtyard and shouted.\n\nThe crowd answered him.') === 2);
+    // Explicit panels never get the world dress stamped.
+    check('anchor: explicit panels drop the dress entirely',
+        S.dressForPanel('black shihakusho, kosode', true) === ''
+        && S.dressForPanel('black shihakusho, kosode', false) === 'black shihakusho, kosode');
+    // Wiring.
+    check('src: CODE BEAT COUNT is demanded of the builder and validated',
+        src.includes('CODE BEAT COUNT') && src.includes('countSceneBeats(scene)')
+        && src.includes('opts.beatCount'));
+    check('src: the anchor drops dress on explicit panels',
+        src.includes('dressForPanel(dress, p?.explicit)'));
+    check('src: a dialogue-heavy scene with zero bubbles costs one retry',
+        src.includes('produced zero bubbles'));
+}
+
 // ---------------------------------------------------------------- source-level invariants
 {
     check('src: single-panel bubble mode requests strict JSON', src.includes('exactly one panel'));
@@ -1031,7 +1069,7 @@ function defaultPatterns() { return '<details>[\\s\\S]*?</details>\n\\{[A-Z_]+\\
     check('src: stitch is a rigid cover-filled grid with framed cells',
         src.includes('cx.drawImage(img2, sx, sy, sw, sh, gutter, y, cellW, cellH)') && src.includes('cx.strokeRect(gutter + 2'));
     check('src: world derived once as data and stamped onto every panel by code',
-        src.includes('"setting":"<location/environment/population tags') && src.includes('appendAnchor(p.prompt, anchorFor())')
+        src.includes('"setting":"<location/environment/population tags') && src.includes('appendAnchor(p.prompt, anchorFor(p))')
         && src.includes('mineDressTags(getActiveCastSheet())'));
     check('src: public address is speaker + attending group, never a private two-shot',
         src.includes('never a private two-shot for a public address'));
@@ -1047,7 +1085,7 @@ function defaultPatterns() { return '<details>[\\s\\S]*?</details>\n\\{[A-Z_]+\\
         && src.includes('for (const entry of (who || []).slice(0, 2))'));
     check('src: the crowd lives in the setting, not in the tag run (0.21.0 revert)',
         !src.includes('`crowd in ${crowdDress}`')
-        && src.includes("const anchorFor = () => [setting, dress].filter(Boolean).join(', ');")
+        && src.includes("const anchorFor = (p) => [setting, dressForPanel(dress, p?.explicit)].filter(Boolean).join(', ');")
         && src.includes("that population's dress"));
     check('src: crowd hoist is token-driven by CROWD_ANCHOR_TOKEN (0.26.0/0.29.0)',
         src.includes('CROWD_ANCHOR_TOKEN.test(t)'));
@@ -1096,11 +1134,11 @@ function defaultPatterns() { return '<details>[\\s\\S]*?</details>\n\\{[A-Z_]+\\
     check('src: the plan rides in the SAME call as the panels — no second round trip',
         src.includes('const PLAN_LAWS = `') && src.includes('PLAN FIRST, IN THE SAME ANSWER')
         && src.includes('plan = parsePlan(raw, maxPanels);')
-        && src.includes('validatePlan(plan, castNames, maxPanels, { crowd: wantsCrowd })')
+        && src.includes('validatePlan(plan, castNames, maxPanels, { crowd: wantsCrowd, beatCount })')
         && src.includes('YOUR PLAN WAS REJECTED:')
         && !src.includes('const planRaw = await callLLM'));
     check('src: only a plan that fails validation costs an extra call',
-        src.split('await callLLM(').length - 1 === 7);
+        src.split('await callLLM(').length - 1 === 8);
     check('src: beats must chain — a panel states how it follows the one before it',
         src.includes('THE BEATS ARE A CHAIN, NOT A LIST')
         && src.includes('STRICT CHRONOLOGY') && src.includes('does not say how it follows panel'));
