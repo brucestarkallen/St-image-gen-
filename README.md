@@ -114,6 +114,12 @@ Stella: girl, long crimson hair, red eyes, large breasts, hair ribbon, school un
 
 ## Changelog
 
+### 0.39.0 — parallel panels; the camera reads sentences too
+- **Speed: panels render in parallel (concurrency 2).** Six sequential generations tripled the strip's wall-clock time for no reason; renders are independent, so they now run two-at-a-time. The remaining latency is the builder LLM — pick a FAST Connection Manager profile for the prompt builder (each corrective retry is a full builder call).
+- **Fixed: `from below` snuck back via sentence-only lying cues.** `head thrown back into pillow` isn't the word 'lying' — camera swaps now read the sentence too, and pillow/futon/bed count as lying cues.
+- Gate: 327 → 331 checks.
+- **Style levers (user-side, no code):** for the Bleach/DxD anime beauty — try `Always-append quality tags`: `masterpiece, best quality, very aesthetic, detailed background` (you banned these as defaults; as your own field they behave identically — A/B them). For SFW-only strips, **NAI V4.5 Curated** renders cleaner/prettier anime faces than Full (keep Full for NSFW). Style tags via Extra builder rules, e.g. `Every prompt includes: anime style, cel shading, clean lineart, glossy finish`.
+
 ### 0.38.0 — Qwen gets prose, not tag salad
 - **Fixed: natural mode still welded danbooru grammar.** The `1boy, 1girl` count run and tag-order weld were applied regardless of style — Qwen's LLM-grade encoder read them as noise and returned a dog-tongued protagonist with the partner teleported behind him. Natural mode now welds identity blocks as plain leading description, no count run.
 - **Fixed: the composition sentence was thrown away in natural mode.** The relational sentence ("his head at her breast while her spine arches beneath him") is the strongest spatial binder Qwen has — it now rides every style.

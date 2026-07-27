@@ -12,7 +12,7 @@ import { getBase64Async, saveBase64AsFile } from '../../../utils.js';
 import { callGenericPopup, POPUP_TYPE } from '../../../popup.js';
 
 const MODULE = 'sceneSnap';
-const VERSION = '0.38.0';
+const VERSION = '0.39.0';
 
 const defaultSettings = Object.freeze({
     enabled: true,
@@ -587,7 +587,7 @@ function scrubEchoedCounts(prompt) {
 
 // A camera UNDERNEATH a lying subject stands them up (field: the afterglow panel
 // rendered her standing alone, 'from below' fighting 'lying on back on futon').
-const LYING_STATE = /\b(?:lying|supine|on (?:her|his|their) back|flat on|collapsed flat|sprawled)\b/i;
+const LYING_STATE = /\b(?:lying|supine|on (?:her|his|their) back|flat on|collapsed flat|sprawled|into (?:the )?pillow|on the (?:futon|mattress|bed))\b/i;
 
 // 'under him' is a lying claim without the word: hips 'working in frantic circles
 // under him' with no lying cue reads as cowgirl and puts her ON TOP (field). The
@@ -1692,13 +1692,15 @@ ${FRAME_LAWS}${bubblesOn ? '\n\n' + BUBBLE_RULES : ''}\nOUTPUT (replaces the sin
             p.prompt = enforceShotGrammar([id.counts, ...id.blocks, bgTag, crowdTag, restPrompt].filter(Boolean).join(', '));
         }
         // A lying subject never gets a from-below camera — the model stands them up.
-        if (principals.some(w => LYING_STATE.test(String(w.state || '')))) {
+        // The sentence carries lying cues states miss ('head thrown back into pillow').
+        const lyingHere = principals.some(w => LYING_STATE.test(String(w.state || ''))) || LYING_STATE.test(p.sentence);
+        if (lyingHere) {
             p.prompt = p.prompt.replace(/\bfrom below\b/i, 'from above');
         }
         // An explicit panel with one partner lying and the other above needs the
         // camera overhead: eye level from the side shows only the top partner's back
         // and hair — a white-haired man on top reads as a white blanket (field).
-        if (p.explicit && principals.some(w => LYING_STATE.test(String(w.state || '')))
+        if (p.explicit && lyingHere
             && principals.some(w => /\babove (?:her|him|them)\b/i.test(String(w.state || '')))) {
             p.prompt = p.prompt.replace(/\beye level\b/i, 'from above');
         }
@@ -1876,6 +1878,22 @@ async function generateNanogpt(positive, negative, landscape, seed) {
     if (img?.b64_json) return { format: 'png', data: img.b64_json };
     if (img?.url) return { format: 'png', data: img.url, isUrl: true };
     throw new Error('NanoGPT returned no image');
+}
+
+// Panels render in parallel: six sequential generations tripled the strip's wait
+// for zero reason — the renders are independent. Concurrency 2 keeps NAI rate
+// limits calm while halving wall-clock time.
+async function mapLimit(items, limit, fn) {
+    const out = new Array(items.length);
+    let idx = 0;
+    async function worker() {
+        while (idx < items.length) {
+            const i = idx++;
+            out[i] = await fn(items[i], i);
+        }
+    }
+    await Promise.all(Array.from({ length: Math.min(limit, items.length) }, worker));
+    return out;
 }
 
 async function generateWithBackend(positive, negative, landscape, seed) {
@@ -2106,17 +2124,19 @@ async function illustrateMessage(mesId, { force = false } = {}) {
             panels.forEach((p, i) => p.bubbles.forEach(b => debugPrompts.push(`PANEL ${i + 1} BUBBLE — ${b.speaker || '?'}: "${b.text}"`)));
             console.log(`[SceneSnap] ${finals.length} panel(s) (${style}):`, finals);
             // One seed for the whole strip: same character rendering in every panel.
+            // Panels render in PARALLEL (concurrency 2) — sequential was the slowdown.
             const runSeed = Math.floor(Math.random() * 2 ** 31);
-            for (let i = 0; i < panels.length; i++) {
-                const result = await generateWithBackend(finals[i], negFull, panels.length > 1, seedForPanel(runSeed, (panels[i].who || []).map(w => w.name), panels[i].welded));
-                panelFormat = result.format || panelFormat;
+            panelImages = await mapLimit(panels, 2, async (p, i) => {
+                const result = await generateWithBackend(finals[i], negFull, panels.length > 1, seedForPanel(runSeed, (p.who || []).map(w => w.name), p.welded));
+                const fmt = result.format || panelFormat;
+                panelFormat = fmt;
                 let imageB64 = result.isUrl ? await urlToBase64(result.data) : result.data;
-                if (panels[i].bubbles.length) {
-                    try { imageB64 = await overlayBubbles(imageB64, panelFormat, panels[i].bubbles); }
+                if (p.bubbles.length) {
+                    try { imageB64 = await overlayBubbles(imageB64, fmt, p.bubbles); }
                     catch (e) { console.warn('[SceneSnap] bubble overlay failed, shipping the clean panel:', e); }
                 }
-                panelImages.push(imageB64);
-            }
+                return imageB64;
+            });
         positive = finals.join('  \u25ba  ');
 
 

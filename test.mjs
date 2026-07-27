@@ -30,7 +30,7 @@ const FUNCS = [
     'parsePanels', 'parseCastSheet', 'mergeCastLines', 'effectiveForcedTags',
     'composePositive', 'scanPresenceIn', 'markerDetails', 'ledgerStateLines',
     'stripScene', 'explainError', 'isStaleSession', 'stripLayoutMeta', 'appendAnchor', 'mineDressTags', 'normalizeCountTags', 'filterRankGarments', 'assembleIdentity', 'scrubState', 'seedForPanel', 'replaceNamesInSentence', 'capTagSafe', 'antiModernNegative', 'isPlaceholderTags', 'stripPlaceholderLines', 'getSize',
-    'backgroundFigureTag', 'dedupeAgainstAnchor', 'neutralizeRoleUniforms', 'unifyStripLighting', 'applyUndress', 'hoistCrowdTokens', 'extractCrowdTokens', 'purgeModernRoles', 'panelLacksAnatomy', 'stripPersonalGarments', 'cleanWorldDress', 'countSceneBeats', 'dressForPanel', 'anatomyContinuity', 'scrubEchoedCounts', 'inferLyingFromPosition',
+    'backgroundFigureTag', 'dedupeAgainstAnchor', 'neutralizeRoleUniforms', 'unifyStripLighting', 'applyUndress', 'hoistCrowdTokens', 'extractCrowdTokens', 'purgeModernRoles', 'panelLacksAnatomy', 'stripPersonalGarments', 'cleanWorldDress', 'countSceneBeats', 'dressForPanel', 'anatomyContinuity', 'scrubEchoedCounts', 'inferLyingFromPosition', 'mapLimit',
 ];
 
 const prelude = `
@@ -1128,6 +1128,28 @@ Rukia lay under him with her chest heaving, flushed pink from her face to her br
         src.includes("p.sentence ? `${appendAnchor(p.prompt, anchorFor(p))}, ${p.sentence}` : appendAnchor(p.prompt, anchorFor(p)),"));
 }
 
+// ---------------------------------------------------------------- parallel render + sentence lying cues (0.39.0)
+{
+    // Parallel panel rendering with a concurrency cap.
+    let peak = 0, active = 0;
+    const order = [];
+    const res = await S.mapLimit([1, 2, 3, 4, 5, 6], 2, async (n) => {
+        active++; peak = Math.max(peak, active);
+        await new Promise(r => setTimeout(r, 5));
+        active--; order.push(n);
+        return n * 10;
+    });
+    check('parallel: mapLimit preserves order and caps concurrency at 2',
+        JSON.stringify(res) === '[10,20,30,40,50,60]' && peak <= 2);
+    check('src: panels render via mapLimit, not a sequential for-loop',
+        src.includes('panelImages = await mapLimit(panels, 2,'));
+    // Lying cues live in sentences too ('head thrown back into pillow').
+    check('lying: pillow/futon cues count as lying',
+        S.LYING_STATE.test('head thrown back into pillow') && S.LYING_STATE.test('collapsed on the futon'));
+    check('src: camera swaps read states AND the sentence',
+        src.includes('|| LYING_STATE.test(p.sentence)'));
+}
+
 // ---------------------------------------------------------------- source-level invariants
 {
     check('src: single-panel bubble mode requests strict JSON', src.includes('exactly one panel'));
@@ -1143,7 +1165,7 @@ Rukia lay under him with her chest heaving, flushed pink from her face to her br
     check('src: dialogue fills both voices by default', src.includes('Use TWO lines whenever the beat has two voices'));
     check('src: run seed feeds who-derived per-panel seeds through all three backends',
         src.includes('const runSeed = Math.floor(Math.random() * 2 ** 31);')
-        && src.includes('seedForPanel(runSeed, (panels[i].who || []).map(w => w.name), panels[i].welded)')
+        && src.includes('seedForPanel(runSeed, (p.who || []).map(w => w.name), p.welded)')
         && src.includes('seed: Number.isInteger(seed) ? seed : -1,')
         && src.includes('seed: Number.isInteger(seed) ? seed : undefined,')
         && src.includes('Number.isInteger(seed) ? seed : Math.floor'));
@@ -1285,7 +1307,7 @@ Rukia lay under him with her chest heaving, flushed pink from her face to her br
         && src.includes("SHOW ITS SPEAKER'S FACE")
         && src.includes('A two-person exchange may play as a shot/reverse-shot pair across two panels.'));
     check('src: welded panels share the run seed (one place); the who-hash backstops unwelded ones',
-        src.includes('seedForPanel(runSeed, (panels[i].who || []).map(w => w.name), panels[i].welded)')
+        src.includes('seedForPanel(runSeed, (p.who || []).map(w => w.name), p.welded)')
         && src.includes('if (identityWelded) return (runSeed >>> 0) % 2147483647;')
         && src.includes('p.welded = id.blocks.length > 0;'));
     check('src: crowd dress is named in setting by contract',
