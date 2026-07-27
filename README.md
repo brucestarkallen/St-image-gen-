@@ -114,6 +114,12 @@ Stella: girl, long crimson hair, red eyes, large breasts, hair ribbon, school un
 
 ## Changelog
 
+### 0.45.0 — the anatomy floor; arched backs are lying; skin tone is mandatory
+- **Fixed: the position flip.** `back arched to maximum` wasn't a lying cue, so the from-below swap never fired — and from below + her arched and rising rendered her on top. `back arched / arched off / arched maximum` are lying cues now; the camera goes overhead.
+- **Fixed: a strip with breasts everywhere and zero nipples/genitals.** The builder dodged every act word the detector knew (`holding deep inside her`, `driving rhythmically`). The detector learned those — and now there's an anatomy FLOOR, builder-proof: explicit panels append `nipples` to breast-naming states without them, and each block gets its gendered genital (`pussy`/`penis` by the block's own first token). Code-owned, no retry needed.
+- **Fixed: the dark-skinned MC.** His cast line had no skin tone — the model guessed under `deep shadows across bare skin`. The cast author now requires a skin tone in EVERY line; existing sheets need it added once (or Clear cast → Auto-build).
+- Gate: 350 → 356 checks; anatomy floor negative-tested.
+
 ### 0.44.0 — afterglow is side-by-side; steps ceiling raised
 - **Fixed: the fused-futon afterglow.** Stacked contact postures (`above her, still joined` with both lying) fuse two bodies into one mass and flip who's on top — the field panel rendered him lying and her warped into the futon. New CONTACT POSTURES law: during the act, name the position; afterglow/cuddle panels show partners SIDE BY SIDE or one propped beside the other.
 - **Steps ceiling 28 → 50.** 28 was the free-Opus budget, not the API limit — paid tiers can run 35–40 for cleaner hands/anatomy. Settings hint updated; Scale 6 suggested for stubborn positions.

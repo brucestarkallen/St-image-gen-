@@ -12,7 +12,7 @@ import { getBase64Async, saveBase64AsFile } from '../../../utils.js';
 import { callGenericPopup, POPUP_TYPE } from '../../../popup.js';
 
 const MODULE = 'sceneSnap';
-const VERSION = '0.44.0';
+const VERSION = '0.45.0';
 
 const defaultSettings = Object.freeze({
     enabled: true,
@@ -113,10 +113,10 @@ RULES: no character names, no dialogue, no story text.`;
 const CAST_SYSTEM_PROMPT = `You extract character appearance sheets for an anime image model from a roleplay story.
 STORY MEMORY (established canon, summary snippets, author's note) is your PRIMARY source for appearances — it accumulates the whole story. Use the recent chat excerpt only for characters memory has not captured yet.
 Output one line per NEW named character, in exactly this format and nothing else:
-Name: girl|boy|woman|man, hair length + hair color, eye color, 2-5 distinctive physical tags, default outfit tags
+Name: girl|boy|woman|man, hair length + hair color, eye color, SKIN TONE (fair skin, tanned skin, pale skin, dark skin...), 2-5 distinctive physical tags, default outfit tags
 Example:
-Akane: girl, long black hair, ponytail, brown eyes, athletic build, school uniform, red ribbon
-Rules: visual traits only — never personality, locations, positions, or current actions. Max 12 tags per character, Danbooru-style tags, prefer information from character tracker blocks when present, skip characters already listed in EXISTING SHEET.
+Akane: girl, long black hair, ponytail, brown eyes, fair skin, athletic build, school uniform, red ribbon
+Rules: visual traits only — never personality, locations, positions, or current actions. Skin tone is MANDATORY in every line: an unspecified skin renders as whatever the model feels like, including the wrong ethnicity. Max 12 tags per character, Danbooru-style tags, prefer information from character tracker blocks when present, skip characters already listed in EXISTING SHEET.
 NO CHARACTER NAMES IN THE TAGS, EVER — not the character's, not the work's. A name tag makes the image model draw its own idea of that character, which then fights the body you described, and the two blend into something that is neither. Describe the BODY: sex, build, hair colour and length, eye colour, distinguishing marks, then clothing. "man, tall, lean, long red hair in a high ponytail, brown eyes, black tribal tattoos over brows and shoulders, white headband" — never "abarai renji", never "bleach".
 APPEARANCE SOURCE ORDER: 1) CANON WIKI DATA when present — it is authoritative; convert its prose faithfully into danbooru tags. 2) Story memory and chat text. 3) For an ESTABLISHED CANON CHARACTER of the story's fandom that neither source describes, use their widely known canonical appearance in standard danbooru tags — canon characters are never "unknown". Reserve "Name: gender, (appearance unknown — fill in)" strictly for ORIGINAL characters no source describes.
 RANK IS NOT AN OUTFIT, in the cast line either: write the garment you can SEE ('white armband on left arm'), never the rank that garment signifies ('lieutenant's badge', 'captain's insignia', 'officer's braid') — an image model reads a rank word as modern military dress and returns gold cuff braid and shoulder boards.
@@ -597,7 +597,7 @@ function scrubEchoedCounts(prompt) {
 
 // A camera UNDERNEATH a lying subject stands them up (field: the afterglow panel
 // rendered her standing alone, 'from below' fighting 'lying on back on futon').
-const LYING_STATE = /\b(?:lying|supine|on (?:her|his|their) back|flat on|collapsed flat|sprawled|into (?:the )?pillow|on the (?:futon|mattress|bed))\b/i;
+const LYING_STATE = /\b(?:lying|supine|on (?:her|his|their) back|flat on|collapsed flat|sprawled|into (?:the )?pillow|on the (?:futon|mattress|bed)|back arched|arched off|arched (?:to )?maximum)\b/i;
 
 // 'under him' is a lying claim without the word: hips 'working in frantic circles
 // under him' with no lying cue reads as cowgirl and puts her ON TOP (field). The
@@ -1001,7 +1001,7 @@ function extractCrowdTokens(prompt) {
 // prompts, states, and the setting — the anchor's own population words ('shinigami
 // in black shihakusho') name these people instead.
 // Sex acts, including the euphemisms builders hide behind, and genital anatomy.
-const SEX_ACT = /\b(?:thrust(?:ing|s)?|missionary|doggystyle|doggy style|cowgirl|vaginal|anal sex|fucking|intercourse|penetrat\w*|orgasm\w*|climax\w*|driv\w+ deep|buried (?:deep|inside|in (?:her|him|them))|still joined|impal\w*|balls?[- ]deep|mating press|prone bone|riding|straddling|pounding|slamming|ejaculat\w*|creampie)\b/i;
+const SEX_ACT = /\b(?:thrust(?:ing|s)?|missionary|doggystyle|doggy style|cowgirl|vaginal|anal sex|fucking|intercourse|penetrat\w*|orgasm\w*|climax\w*|driv\w+ (?:deep|rhythmically)|buried (?:deep|inside|in (?:her|him|them))|inside (?:her|him|them)|still joined|impal\w*|balls?[- ]deep|mating press|prone bone|riding|straddling|pounding|slamming|ejaculat\w*|creampie)\b/i;
 const GENITAL_TAG = /\b(?:penis|erection|testicles?|cock|dick|pussy|vulva|vagina|clitoris|labia|anus)\b/i;
 
 // A panel fails when it depicts a sex act — however euphemized — with zero genital
@@ -1146,6 +1146,24 @@ function dressForPanel(dress, explicit) {
 // later panel amputates them — the finale rendered a bare breast with NO nipple
 // because 'nipples' was missing from THAT panel alone (field). Inheritance, not
 // invention: tokens come only from the strip's own earlier states.
+// The anatomy floor: an explicit panel never shows a body region without its
+// anatomy. Breasts named without nipples get them; a block with no genital tag
+// gets the gendered one (the block's own first token decides). The builder's
+// vague streaks no longer get a vote on whether anatomy exists (field: a whole
+// strip with breasts everywhere and not one nipple or genital tag).
+function anatomyFloor(blocks, explicit) {
+    if (!explicit) return blocks;
+    return (blocks || []).map(b => {
+        const low = String(b).toLowerCase();
+        let out = String(b);
+        if (/\bbreasts?\b/.test(low) && !/\bnipples?\b/.test(low)) out += ', nipples';
+        const first = low.split(',')[0].trim();
+        if (/^(?:woman|girl|female)\b/.test(first) && !/\b(?:pussy|vulva|vagina)\b/.test(low)) out += ', pussy';
+        if (/^(?:man|boy|male)\b/.test(first) && !/\b(?:penis|erection|cock|dick|testicles)\b/.test(low)) out += ', penis';
+        return out;
+    });
+}
+
 function anatomyContinuity(state, stripAnatomy) {
     const st = String(state || '');
     const low = st.toLowerCase();
@@ -1774,6 +1792,7 @@ function capBubbleText(text) {
         for (const w of principals) w.state = unifyStripLighting(String(w.state || ''), anchorText);
         const id = assembleIdentity(principals, activeSheet, { dress: firstGarmentTag(dress), worldDress: dress });
         if (id.missing.length) console.warn('[SceneSnap] panel "who" names still not in cast sheet:', id.missing);
+        id.blocks = anatomyFloor(id.blocks, p.explicit);
         const bgTag = background.length ? backgroundFigureTag(background, activeSheet) : '';
         // Crowd tokens carrying ACTIONS hoist forward with the anchor's population.
         const deduped = unifyStripLighting(dedupeAgainstAnchor(antiModernOn ? purgeModernRoles(scrubEchoedCounts(p.prompt)) : scrubEchoedCounts(p.prompt), anchorText), anchorText);

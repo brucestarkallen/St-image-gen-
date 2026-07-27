@@ -30,7 +30,7 @@ const FUNCS = [
     'parsePanels', 'parseCastSheet', 'mergeCastLines', 'effectiveForcedTags',
     'composePositive', 'scanPresenceIn', 'markerDetails', 'ledgerStateLines',
     'stripScene', 'explainError', 'isStaleSession', 'stripLayoutMeta', 'appendAnchor', 'mineDressTags', 'normalizeCountTags', 'filterRankGarments', 'assembleIdentity', 'scrubState', 'seedForPanel', 'replaceNamesInSentence', 'capTagSafe', 'antiModernNegative', 'isPlaceholderTags', 'stripPlaceholderLines', 'getSize',
-    'backgroundFigureTag', 'dedupeAgainstAnchor', 'neutralizeRoleUniforms', 'unifyStripLighting', 'applyUndress', 'hoistCrowdTokens', 'extractCrowdTokens', 'purgeModernRoles', 'panelLacksAnatomy', 'stripPersonalGarments', 'cleanWorldDress', 'countSceneBeats', 'dressForPanel', 'anatomyContinuity', 'scrubEchoedCounts', 'inferLyingFromPosition', 'mapLimit', 'explicitFramingGuard', 'extractSceneQuotes', 'attributeSpeaker', 'capBubbleText',
+    'backgroundFigureTag', 'dedupeAgainstAnchor', 'neutralizeRoleUniforms', 'unifyStripLighting', 'applyUndress', 'hoistCrowdTokens', 'extractCrowdTokens', 'purgeModernRoles', 'panelLacksAnatomy', 'stripPersonalGarments', 'cleanWorldDress', 'countSceneBeats', 'dressForPanel', 'anatomyContinuity', 'scrubEchoedCounts', 'inferLyingFromPosition', 'mapLimit', 'explicitFramingGuard', 'extractSceneQuotes', 'attributeSpeaker', 'capBubbleText', 'anatomyFloor',
 ];
 
 const prelude = `
@@ -1227,6 +1227,30 @@ Rukia lay under him with her chest heaving, flushed pink from her face to her br
     check('src: NAI steps ceiling is 50 (28 was the free-Opus budget, not the API limit)',
         src.includes('Math.min(Math.max(1, Number(settings.naiSteps) || 28), 50)')
         && src.includes('max="50"'));
+}
+
+// ---------------------------------------------------------------- anatomy floor + arched-lying + skin tone (0.45.0)
+{
+    const blocks = S.anatomyFloor([
+        'woman, short black hair, violet eyes, completely nude, small breasts thrust upward',
+        'man, white hair, pale-blue eyes, completely nude, buried deep and holding still',
+    ], true);
+    check('floor: breasts get nipples, each block gets its gendered genital',
+        /nipples/.test(blocks[0]) && /pussy/.test(blocks[0]) && /penis/.test(blocks[1]));
+    check('floor: never doubles, SFW untouched',
+        S.anatomyFloor(['woman, nipples, pussy'], true).join(',') === 'woman, nipples, pussy'
+        && S.anatomyFloor(['woman, small breasts'], false).join(',') === 'woman, small breasts');
+    check('floor: wired after assembleIdentity', src.includes('id.blocks = anatomyFloor(id.blocks, p.explicit);'));
+    // The position-flip camera case: 'back arched to maximum' is lying.
+    check('lying: back-arched counts (the from-below swap fires)',
+        S.LYING_STATE.test('back arched to maximum') && S.LYING_STATE.test('back arched off futon'));
+    // The euphemism dodge is closed.
+    check('nsfw: deep-inside and rhythmic-driving are acts now',
+        S.SEX_ACT.test('holding deep inside her') && S.SEX_ACT.test('driving rhythmically'));
+    // Skin tone is mandatory in cast lines.
+    check('src: cast author requires skin tone in every line',
+        src.includes('SKIN TONE (fair skin, tanned skin, pale skin, dark skin...)')
+        && src.includes('Skin tone is MANDATORY in every line'));
 }
 
 // ---------------------------------------------------------------- source-level invariants
