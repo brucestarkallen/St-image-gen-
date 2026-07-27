@@ -1236,7 +1236,7 @@ Rukia lay under him with her chest heaving, flushed pink from her face to her br
         'man, white hair, pale-blue eyes, completely nude, buried deep and holding still',
     ], true);
     check('floor: breasts get nipples, each block gets its gendered genital',
-        /nipples/.test(blocks[0]) && /pussy/.test(blocks[0]) && /penis/.test(blocks[1]));
+        /nipples/.test(blocks[0]) && /pussy/.test(blocks[0]) && /penis, erection/.test(blocks[1]));
     check('floor: never doubles, SFW untouched',
         S.anatomyFloor(['woman, nipples, pussy'], true).join(',') === 'woman, nipples, pussy'
         && S.anatomyFloor(['woman, small breasts'], false).join(',') === 'woman, small breasts');
@@ -1266,6 +1266,24 @@ Rukia lay under him with her chest heaving, flushed pink from her face to her br
         S.openingBeatMissed(dropped, '') === false && S.openingBeatMissed(null, scene) === false);
     check('src: the opening check is in validatePlan and the law in PLAN_LAWS',
         src.includes('openingBeatMissed(plan, opts.scene)') && src.includes('THE OPENING IS SACRED'));
+}
+
+// ---------------------------------------------------------------- the vanishing partner (0.47.0)
+{
+    const plan = { panels: [
+        { beat: 'He drives into her.', who: ['Rukia Kuchiki', 'Jovan Oda'] },
+        { beat: 'Her reiatsu erupts off the futon.', follows: 'the pressure builds', who: ['Rukia Kuchiki'] },
+        { beat: 'He holds her through the climax.', follows: 'the wave peaks', who: ['Rukia Kuchiki', 'Jovan Oda'] },
+    ] };
+    check('plan: a solo spectacle frame between two dual frames is the vanishing partner',
+        S.validatePlan(plan, ['Rukia Kuchiki', 'Jovan Oda'], 4, {})
+            .some(p => p.includes('does not vanish mid-scene')));
+    check('plan: a solo frame between two OTHER solo frames is fine',
+        !S.validatePlan({ panels: [
+            { beat: 'He raises the blade.', who: ['Jovan Oda'] },
+            { beat: 'She chants.', follows: 'the blade is up', who: ['Rukia Kuchiki'] },
+            { beat: 'He lowers the blade.', follows: 'the chant dies', who: ['Jovan Oda'] },
+        ] }, ['Rukia Kuchiki', 'Jovan Oda'], 4, {}).some(p => p.includes('vanish')));
 }
 
 // ---------------------------------------------------------------- source-level invariants

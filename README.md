@@ -114,6 +114,11 @@ Stella: girl, long crimson hair, red eyes, large breasts, hair ribbon, school un
 
 ## Changelog
 
+### 0.47.0 — the vanishing partner
+- **Fixed: partners dropped mid-scene for spectacle beats.** The reiatsu-explosion frame rendered solo between two both-partner frames — though the scene has him inside her through the whole climax. New plan check: a solo frame wedged between two dual frames of the same pair is the vanishing partner and costs a replan. Law added to CONTACT POSTURES: a partner never vanishes for an aura/energy spectacle.
+- **Anatomy floor uses danbooru-standard `penis, erection`** — a bare `penis` tag renders flaccid/ghostly.
+- Gate: 360 → 362 checks.
+
 ### 0.46.0 — the opening is sacred
 - **Fixed: the strip starting mid-action.** The planner judged the scene's setup beat the 'weakest' and dropped it, so a scene opening with `"Moan in Japanese."` rendered that moment nowhere and read backwards. New law: panel 1 depicts the scene's FIRST visual beat; drop a middle beat, never the first and never the last. `openingBeatMissed()` enforces it — panel 1's beat is compared against the scene's actual opening paragraphs, and a miss is a plan problem with a corrective retry.
 - Gate: 356 → 360 checks; the opening check negative-tested.

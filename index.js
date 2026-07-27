@@ -12,7 +12,7 @@ import { getBase64Async, saveBase64AsFile } from '../../../utils.js';
 import { callGenericPopup, POPUP_TYPE } from '../../../popup.js';
 
 const MODULE = 'sceneSnap';
-const VERSION = '0.46.0';
+const VERSION = '0.47.0';
 
 const defaultSettings = Object.freeze({
     enabled: true,
@@ -134,7 +134,7 @@ const NSFW_RULE = `
 EXPLICIT SCENES: when the scene is sexual or nude, tag it exactly — never euphemize or fade to black.
 PANEL FOCUS LAW: a solo body moment (undressing, bathing, posing, touching herself) is ONE person in "who". A dialogue or an exchange is BOTH. A sex act is ALWAYS BOTH — and the act is named by its danbooru term in the shared prompt (vaginal sex, missionary, cowgirl position, doggystyle, standing sex) with the penetration state, while EACH character's state carries their visible anatomy: breast class + nipples, penis/erection/testicles, pussy/vulva, anus when visible, fluids. EUPHEMISMS ARE FAILED PANELS: 'drives deep', 'buried inside', 'joins with her', 'connected' are forbidden — if the act cannot be named in danbooru terms, it cannot be drawn.
 NUDITY: when the scene has a character naked, that character's state says 'completely nude' — 'uniform pushed open' or 'pulled aside' ONLY when the scene text says the clothes stay on. Otherwise state the garments removed/open, the exposed anatomy, and body proportions CONSISTENT with that character's cast tags in every panel. Anatomy follows the cast sheet: sizes, marks, and SKIN TONE come from cast tags and stay identical in every panel and every image — a character may never change complexion between panels. In natural-language mode, express the same specifics as prose.
-CONTACT POSTURES: during the act, name the position and keep both bodies. AFTERGLOW and cuddle panels (post-climax, resting, talking) show the partners SIDE BY SIDE or one propped beside the other — never stacked 'still joined above her' contact with both lying, which fuses two bodies into one mass and flips who is on top (field-proven).`;
+CONTACT POSTURES: during the act, name the position and keep both bodies. AFTERGLOW and cuddle panels (post-climax, resting, talking) show the partners SIDE BY SIDE or one propped beside the other — never stacked 'still joined above her' contact with both lying, which fuses two bodies into one mass and flips who is on top (field-proven). A partner NEVER vanishes for a spectacle beat: an aura, energy, or reiatsu eruption mid-act still includes the other person in the frame.`;
 
 // NovelAI V4.5 prompt craft from the official docs (strengthening-weakening): the
 // builder shapes the LANGUAGE of each panel; code assembles the structure. The user
@@ -1159,7 +1159,7 @@ function anatomyFloor(blocks, explicit) {
         if (/\bbreasts?\b/.test(low) && !/\bnipples?\b/.test(low)) out += ', nipples';
         const first = low.split(',')[0].trim();
         if (/^(?:woman|girl|female)\b/.test(first) && !/\b(?:pussy|vulva|vagina)\b/.test(low)) out += ', pussy';
-        if (/^(?:man|boy|male)\b/.test(first) && !/\b(?:penis|erection|cock|dick|testicles)\b/.test(low)) out += ', penis';
+        if (/^(?:man|boy|male)\b/.test(first) && !/\b(?:penis|erection|cock|dick|testicles)\b/.test(low)) out += ', penis, erection';
         return out;
     });
 }
@@ -1212,6 +1212,17 @@ function validatePlan(plan, castNames, maxPanels, opts = {}) {
     if (maxPanels >= 4 && plan.panels.length <= 2) problems.push(`You used only ${plan.panels.length} panels of a ${maxPanels}-panel budget. Read the scene again — its text holds more distinct beats than that. Give each its own panel, up to the budget.`);
     if ((opts.beatCount || 0) >= 2 && plan.panels.length < opts.beatCount) problems.push(`The scene's prose contains ${opts.beatCount} distinct beats (counted by code) and you returned ${plan.panels.length} panels. Render every beat, in scene order.`);
     if (opts.scene && openingBeatMissed(plan, opts.scene)) problems.push('Panel 1 is not the scene\'s opening beat — the strip starts mid-action. Panel 1 depicts the scene\'s FIRST visual beat; drop a middle beat, never the opening.');
+    // The vanishing partner: a solo frame wedged between two dual frames of the same
+    // pair — the spectacle beat dropped the partner mid-act (field: the reiatsu
+    // explosion rendered with him nowhere, though the scene has him inside her).
+    for (let i = 1; i < plan.panels.length - 1; i++) {
+        const prev = plan.panels[i - 1], cur = plan.panels[i], next = plan.panels[i + 1];
+        if ((cur.who || []).length === 1 && (prev.who || []).length === 2 && (next.who || []).length === 2
+            && prev.who.includes(cur.who[0]) && next.who.includes(cur.who[0])) {
+            const missing = prev.who.find(n => n !== cur.who[0]);
+            problems.push(`Panel ${i + 1} is ${cur.who[0]} alone between two frames with both of them — ${missing} does not vanish mid-scene. Include both.`);
+        }
+    }
     for (let i = 0; i < plan.panels.length; i++) {
         const p = plan.panels[i];
         if (p.who === null) problems.push(`Panel ${i + 1} has no "who" field at all. Every panel must have one, even if it is [].`);
