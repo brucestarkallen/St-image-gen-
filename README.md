@@ -114,6 +114,12 @@ Stella: girl, long crimson hair, red eyes, large breasts, hair ribbon, school un
 
 ## Changelog
 
+### 0.38.0 — Qwen gets prose, not tag salad
+- **Fixed: natural mode still welded danbooru grammar.** The `1boy, 1girl` count run and tag-order weld were applied regardless of style — Qwen's LLM-grade encoder read them as noise and returned a dog-tongued protagonist with the partner teleported behind him. Natural mode now welds identity blocks as plain leading description, no count run.
+- **Fixed: the composition sentence was thrown away in natural mode.** The relational sentence ("his head at her breast while her spine arches beneath him") is the strongest spatial binder Qwen has — it now rides every style.
+- **Added: a one-time warning when Prompt style is forced to `tags` on NanoGPT** — tag piles on Qwen are accuracy poison.
+- Gate: 324 → 327 checks.
+
 ### 0.37.0 — NanoGPT backend (Qwen-Image, Flux, 200+ models)
 - **New backend: NanoGPT** (`nano-gpt.com`, OpenAI-compatible `POST /v1/images/generations`). One API key, 200+ models. Settings: key, free-text model id (default `qwen-image`), steps, guidance. Seed forwarded as a hint; no negative field exists on the route and none is fabricated. Fetch-level failures name CORS honestly. Key/model survive Reset defaults.
 - **Style mapping: NanoGPT resolves to `natural` on Auto** — Qwen-Image's LLM-grade encoder reads paragraph prose, not danbooru. A Qwen-specific builder note is injected (natural mode only): concrete sentences, explicit spatial relations, no tag piles, no emphasis braces.

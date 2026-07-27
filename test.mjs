@@ -1117,6 +1117,15 @@ Rukia lay under him with her chest heaving, flushed pink from her face to her br
         src.includes("'nanogptKey', 'nanogptModel'"));
     check('src: qwen builder note is nanogpt+natural scoped only',
         src.includes("settings.backend === 'nanogpt' && style === 'natural'"));
+    check('src: natural mode welds WITHOUT the danbooru count run (0.38.0)',
+        src.includes("if (style === 'natural') {")
+        && src.includes("enforceShotGrammar([...id.blocks, bgTag, crowdTag, restPrompt]")
+        && src.includes("enforceShotGrammar([id.counts, ...id.blocks, bgTag, crowdTag, restPrompt]"));
+    check('src: tags style on nanogpt warns once per chat',
+        src.includes("settings.backend === 'nanogpt' && resolveStyle() === 'tags'")
+        && src.includes('nanogpt-tags:'));
+    check('src: the composition sentence rides BOTH styles (0.38.0)',
+        src.includes("p.sentence ? `${appendAnchor(p.prompt, anchorFor(p))}, ${p.sentence}` : appendAnchor(p.prompt, anchorFor(p)),"));
 }
 
 // ---------------------------------------------------------------- source-level invariants
@@ -1286,10 +1295,10 @@ Rukia lay under him with her chest heaving, flushed pink from her face to her br
         && src.includes('ACTING DENSITY') && src.includes('A two-tag state is a failed panel'));
     check('src: active cast is global — per-chat divergence removed',
         src.includes('settings.activeCast') && !src.includes('chatMetadata?.sceneSnapCast'));
-    check('src: hybrid natural-language sentence — schema, contract, and tags-mode append',
+    check('src: hybrid natural-language sentence — schema, contract, and append in EVERY style',
         src.includes('"sentence":"<ONE plain-English sentence')
         && src.includes('where natural language earns its keep')
-        && src.includes("p.sentence && style === 'tags'"));
+        && src.includes('p.sentence ? `${appendAnchor(p.prompt, anchorFor(p))}, ${p.sentence}`'));
     check('src: state purity is enforced in code, not requested',
         src.includes('function scrubState(') && src.includes('stripRankInsignia(scrubState(state, tags, EXPLICIT_STATE.test(state) ? 420 : 200))'));
     check('src: state is bound to its owner by schema and weld',

@@ -12,7 +12,7 @@ import { getBase64Async, saveBase64AsFile } from '../../../utils.js';
 import { callGenericPopup, POPUP_TYPE } from '../../../popup.js';
 
 const MODULE = 'sceneSnap';
-const VERSION = '0.37.0';
+const VERSION = '0.38.0';
 
 const defaultSettings = Object.freeze({
     enabled: true,
@@ -1682,7 +1682,15 @@ ${FRAME_LAWS}${bubblesOn ? '\n\n' + BUBBLE_RULES : ''}\nOUTPUT (replaces the sin
             crowdTag = [hoistCrowdTokens(anchorText, true), cx.crowd].filter(Boolean).join(', ');
             restPrompt = cx.rest;
         }
-        p.prompt = enforceShotGrammar([id.counts, ...id.blocks, bgTag, crowdTag, restPrompt].filter(Boolean).join(', '));
+        // Natural-language encoders (Qwen/Flux) read description, not danbooru
+        // grammar: the '1boy, 1girl' count run is tag-model syntax and reads as
+        // noise — the field run rendered a dog-tongued protagonist with the partner
+        // teleported behind him. Identity blocks lead as plain description instead.
+        if (style === 'natural') {
+            p.prompt = enforceShotGrammar([...id.blocks, bgTag, crowdTag, restPrompt].filter(Boolean).join(', '));
+        } else {
+            p.prompt = enforceShotGrammar([id.counts, ...id.blocks, bgTag, crowdTag, restPrompt].filter(Boolean).join(', '));
+        }
         // A lying subject never gets a from-below camera — the model stands them up.
         if (principals.some(w => LYING_STATE.test(String(w.state || '')))) {
             p.prompt = p.prompt.replace(/\bfrom below\b/i, 'from above');
@@ -2040,6 +2048,15 @@ async function illustrateMessage(mesId, { force = false } = {}) {
             }
         }
 
+        // A tag-style prompt on a natural-language model is tag noise (field: Qwen
+        // given '1boy, 1girl' tag piles returned a dog-tongued protagonist).
+        if (settings.backend === 'nanogpt' && resolveStyle() === 'tags') {
+            const wk = `nanogpt-tags:${getContext().chatId ?? 'chat'}`;
+            if (!sheetWarned.has(wk)) {
+                sheetWarned.add(wk);
+                toastr.warning('Qwen-Image reads natural language — Prompt style: tags is hurting accuracy. Set Prompt style to Auto or Natural.', 'SceneSnap', { timeOut: 10000 });
+            }
+        }
         const negative = effectiveNegative();
         let panelImages = [];
         let panelFormat = 'png';
@@ -2069,7 +2086,10 @@ async function illustrateMessage(mesId, { force = false } = {}) {
             // read short natural sentences well, and sentences beat tags at spatial relations —
             // so one composition sentence rides at the end, tags mode only.
             const finals = panels.map(p => composePositive(
-                p.sentence && style === 'tags' ? `${appendAnchor(p.prompt, anchorFor(p))}, ${p.sentence}` : appendAnchor(p.prompt, anchorFor(p)),
+                // The composition sentence rides EVERY style — on natural-language
+                // models (Qwen) it is the strongest spatial binder there is, and it
+                // was being thrown away exactly where it mattered most (field).
+                p.sentence ? `${appendAnchor(p.prompt, anchorFor(p))}, ${p.sentence}` : appendAnchor(p.prompt, anchorFor(p)),
                 style,
             ));
             debugRaw = raw;
