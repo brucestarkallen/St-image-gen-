@@ -114,6 +114,11 @@ Stella: girl, long crimson hair, red eyes, large breasts, hair ribbon, school un
 
 ## Changelog
 
+### 0.43.0 — the crowd beat gets a foreground witness
+- **Law inversion: pure crowd frames are dead.** Field evidence across five strips: bare `who: []` frames render empty halls, tiny people, or scale insanity — while crowds *behind a principal* render every time. A crowd-reaction beat must now list ONE principal as foreground witness (crowd shown reacting behind them); `who: []` is a plan-validation problem when named characters exist, legal only for cast-less scenes. The repair acceptance flipped with it.
+- **Fixed: 'alone' on the empty hall.** Code bubbles never land on speaker-less establishing frames anymore.
+- Gate: 345 → 347 checks.
+
 ### 0.42.0 — casts follow chats, bubbles leave the builder's homework to code
 - **Per-chat cast selection.** Each chat remembers which cast it uses (chat metadata), restored on chat switch — no more re-picking, no more Story B wearing Story A's faces. Sheets stay global, so two chats can deliberately share a world.
 - **Clear cast button** in settings (confirms, empties the active sheet; it re-seeds on next illustration).

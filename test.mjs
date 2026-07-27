@@ -516,8 +516,19 @@ function defaultPatterns() { return '<details>[\\s\\S]*?</details>\n\\{[A-Z_]+\\
         ] }), 4);
         check('plan: parsed into beats and who, world carried',
             goodPlan.panels.length === 3 && goodPlan.panels[2].who.length === 0 && goodPlan.dress === 'black shihakusho');
-        check('plan: a valid plan raises no problems',
-            S.validatePlan(goodPlan, ['Jovan Oda', 'Rukia Kuchiki', 'Ashida Tetsuzan'], 4, { crowd: true }).length === 0);
+        // 0.43.0 inverts the crowd law: a bare who:[] frame is the problem now;
+        // the crowd beat needs a foreground witness when named characters exist.
+        check('plan: a bare crowd frame is flagged when named characters exist (0.43.0)',
+            S.validatePlan(goodPlan, ['Jovan Oda', 'Rukia Kuchiki', 'Ashida Tetsuzan'], 4, { crowd: true })
+                .some(p => p.includes('bare crowd frame')));
+        check('plan: a bare crowd frame is legal with an empty cast',
+            S.validatePlan(goodPlan, [], 4, { crowd: true }).length === 0);
+        check('plan: a crowd beat with a foreground witness raises no crowd problem',
+            !S.validatePlan({ panels: [
+                { beat: 'He raises the blade over the courtyard.', who: ['Jovan Oda'] },
+                { beat: 'The old soldier salutes as the courtyard erupts behind him.', follows: 'the blade is up now', who: ['Ashida Tetsuzan'] },
+            ] }, ['Jovan Oda', 'Ashida Tetsuzan'], 4, { crowd: true })
+                .some(p => p.includes('bare crowd frame')));
         check('plan: the chain is carried, panel 1 needs no antecedent',
             goodPlan.panels[0].follows === '' && goodPlan.panels[1].follows.includes('blade is up'));
     }
@@ -573,13 +584,13 @@ function defaultPatterns() { return '<details>[\\s\\S]*?</details>\n\\{[A-Z_]+\\
     check('plan: an unknown name and a missing who field are caught',
         (() => { const p = S.validatePlan({ panels: [{ beat: 'A stranger waves.', who: ['Nobody Here'] }, { beat: 'Wind moves.', follows: 'the square empties', who: null }] }, ['Jovan Oda'], 4, {});
             return p.some(x => x.includes('not in the cast sheet')) && p.some(x => x.includes('no "who" field')); })());
-    check('plan: a crowd scene with no crowd frame is caught',
+    check('plan: a crowd scene where no beat shows the crowd is caught (0.43.0)',
         S.validatePlan({ panels: [
             { beat: 'He raises the blade.', who: ['Jovan Oda'] },
-            { beat: 'She chants at his shoulder.', follows: 'the blade is up and she answers it', between: 'she answers the blade he raised', who: ['Jovan Oda', 'Rukia Kuchiki'] },
+            { beat: 'She meets his eyes.', follows: 'the blade is up and she answers it', between: 'she answers the blade he raised', who: ['Jovan Oda', 'Rukia Kuchiki'] },
             { beat: 'The old soldier salutes.', follows: 'her voice carries into the ranks', who: ['Ashida Tetsuzan'] },
         ] }, ['Jovan Oda', 'Rukia Kuchiki', 'Ashida Tetsuzan'], 4, { crowd: true })
-            .some(p => p.includes('gives the crowd the frame')));
+            .some(p => p.includes('no panel shows it')));
     check('plan: unparseable output returns null so the caller can fall back',
         S.parsePlan('sorry, I cannot do that', 4) === null && S.parsePlan('{"panels":[]}', 4) === null);
 
@@ -1200,6 +1211,8 @@ Rukia lay under him with her chest heaving, flushed pink from her face to her br
     check('src: silent panels get scene quotes as backstop after the builder path',
         src.includes('const quotes = extractSceneQuotes(scene);')
         && src.includes('panels[i].bubbles.push({ speaker: attributeSpeaker('));
+    check('src: code bubbles never land on speaker-less establishing frames (the "alone" bug)',
+        src.includes('if (!(panels[i].who || []).length) continue;'));
     check('src: cast selection is per-chat via chatMetadata, sheets stay global',
         src.includes('chatMetadata?.scenesnap_cast') && src.includes('md.scenesnap_cast = name'));
     check('src: clear cast button exists and clears the active sheet',
@@ -1276,7 +1289,7 @@ Rukia lay under him with her chest heaving, flushed pink from her face to her br
     check('src: who-membership is ONE rule with no counter-rule pulling against it',
         src.includes("WHO IS THE PEOPLE THE BEAT'S ACTION PASSES BETWEEN")
         && src.includes('Never pad a frame to two, and never cut a frame to one.')
-        && src.includes('"who" is [] — the field must still be PRESENT')
+        && src.includes('"who": [] is reserved for scenes with NO named characters present, and must still be PRESENT')
         && src.includes('ONE BEAT PER PANEL, and every panel a DIFFERENT beat')
         // the rule this one replaced pulled the opposite way and produced an all-solo strip
         && !src.includes('Defaulting everything to solo is a failed strip')

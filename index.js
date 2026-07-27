@@ -12,7 +12,7 @@ import { getBase64Async, saveBase64AsFile } from '../../../utils.js';
 import { callGenericPopup, POPUP_TYPE } from '../../../popup.js';
 
 const MODULE = 'sceneSnap';
-const VERSION = '0.42.0';
+const VERSION = '0.43.0';
 
 const defaultSettings = Object.freeze({
     enabled: true,
@@ -156,7 +156,7 @@ GROUND TRUTH: when a CURRENT WORLD STATE block is provided, it is authoritative 
 const FRAME_LAWS = `PANEL DISCIPLINE (binding rules for every panel):
 - When someone acts ON another person (healing, striking, carrying, restraining), the panel shows BOTH — the object of the action is never cropped out. A medic kneels beside a VISIBLE patient.
 - WHO writes identity AND owns state, and WHO is not you: list each panel's characters in "who" as {"name": exact cast-sheet name, "state": THAT character's pose, expression, wounds, and action tags — pose and feeling ONLY. Never a count tag (1boy, 1girl, 2boys, solo) and never a garment: the extension computes every count itself and dresses every character itself, and a count tag inside a character's block reads to the image model as a second person starting there, which fuses the frame's two characters into one} — primary first, AT MOST TWO. Two is model physics, not preference: single-prompt tag binding cannot reliably assign a garment or a wound across three people, so a frame never holds more than two principals — everyone else is crowd. The extension enforces the cap.
-- WHO IS THE PEOPLE THE BEAT'S ACTION PASSES BETWEEN, and nobody else. If the beat is an action between two people — speaking to, striking, healing, carrying, standing at someone's shoulder, reacting to each other — BOTH are in "who"; cropping the other one out is a failed panel. If the beat happens inside one person — a private realization, a salute to a memory, a face in the ranks — that is one name. If the beat belongs to the place or the crowd itself (the courtyard erupting, three hundred voices at once), "who" is [] — the field must still be PRESENT, because an omitted "who" is non-compliance and gets the panel rejected. Never more than two: single-prompt tag binding cannot assign a garment or a wound across three people, so a third principal means the beat SPLITS across two panels and everyone else is crowd. Never pad a frame to two, and never cut a frame to one.
+- WHO IS THE PEOPLE THE BEAT'S ACTION PASSES BETWEEN, and nobody else. If the beat is an action between two people — speaking to, striking, healing, carrying, standing at someone's shoulder, reacting to each other — BOTH are in "who"; cropping the other one out is a failed panel. If the beat happens inside one person — a private realization, a salute to a memory, a face in the ranks — that is one name. If the beat belongs to the crowd itself (the courtyard erupting, three hundred voices at once), pick ONE principal as the foreground witness and show the crowd behind them — pure crowd frames render empty or insane (field-proven, repeatedly); "who": [] is reserved for scenes with NO named characters present, and must still be PRESENT, because an omitted "who" is non-compliance and gets the panel rejected. Never more than two: single-prompt tag binding cannot assign a garment or a wound across three people, so a third principal means the beat SPLITS across two panels and everyone else is crowd. Never pad a frame to two, and never cut a frame to one.
 - A panel that carries a dialogue bubble must SHOW ITS SPEAKER'S FACE: dialogue never rides a from-behind, neck-down, or faceless framing of its own speaker. Only a character in THIS panel's "who" may speak in this panel — a line belonging to anyone else moves to the panel that draws them, or is dropped. The extension enforces this. The extension inserts each character's appearance block VERBATIM from the cast sheet, welds their state onto it, and computes the counts — one contiguous run per character, so the image model cannot give one character's laugh or wound to another. The panel "prompt" therefore contains ONLY what is shared: camera, lighting, atmosphere, environment, and scene-wide effects. A per-character detail in the shared prompt, or any appearance trait anywhere, is a failed panel.
 - The character an effect happens TO carries it in their OWN "state": the exploding sword detonates in its holder's state, the wound bleeds in the wounded one's state — a climax panel whose victim is missing from "who" is a failed panel. Healing, striking, carrying, restraining: BOTH parties in "who", each with their own state; "hand on patient" with no patient listed is a failed panel.
 - Characters not in physical contact get explicit spatial-relation tags in the prompt (distance between them, one far in the background, facing from across the field).
@@ -192,7 +192,7 @@ PANELS: pick how many the scene's climax needs (2 to %MAX%). One DISTINCT beat e
 WHO is the people the beat's action passes BETWEEN, and nobody else:
 - An action between two people (speaking to, striking, healing, standing at someone's shoulder, reacting to each other) lists BOTH — cropping the other one out is a failed panel.
 - A beat that happens inside ONE person (a private realization, a salute to a memory) lists that one name.
-- A beat belonging to the place or the crowd (the courtyard erupting, three hundred voices at once) lists NOBODY: "who": []. A scene whose crowd reacts needs one such frame; a strip of nothing but single faces has thrown the scene away.
+- A beat belonging to the crowd (the courtyard erupting, three hundred voices at once) is drawn THROUGH one foreground witness: pick the principal whose reaction best carries the beat and show the crowd behind them — field-proven: pure crowd frames render empty halls and scale insanity, crowds behind a principal render every time. "who": [] is reserved for scenes where NO named character is present.
 - Never more than two names: a single image prompt cannot bind a garment or a wound across three people. A third principal means the beat splits across two panels.
 - Never pad a frame to two, and never cut a frame to one. Use EXACT cast-sheet names.
 - A panel with TWO names must fill "between" with what passes between them — who is looking at, speaking to, touching, or answering whom. Two people who merely happen to be in the same courtyard doing separate things are not a two-shot; that is two panels, or one.
@@ -1200,8 +1200,15 @@ function validatePlan(plan, castNames, maxPanels, opts = {}) {
     if (named.length >= 3 && named.every(p => p.who.length === 1) && (castNames || []).length >= 2) {
         problems.push('Every panel is a single person. If any beat in this scene is an action BETWEEN two people, that panel must list both.');
     }
-    if (opts.crowd && plan.panels.length >= 3 && !plan.panels.some(p => (p.who || []).length === 0)) {
-        problems.push('This scene has a crowd reacting and no panel gives the crowd the frame. Make one panel "who": [].');
+    // Pure crowd frames fail in the field (empty halls, tiny people, scale insanity)
+    // while crowds behind a principal render every time. When named characters exist,
+    // a crowd-reaction beat needs a foreground witness, not "who": [].
+    if (opts.crowd && (castNames || []).length && plan.panels.some(p => Array.isArray(p.who) && p.who.length === 0)) {
+        problems.push('A panel is "who": [] — a bare crowd frame. Pure crowd frames render empty or insane; give the crowd beat ONE foreground witness (the principal whose reaction carries it) and show the crowd behind them.');
+    }
+    if (opts.crowd && plan.panels.length >= 3 && (castNames || []).length
+        && !plan.panels.some(p => /crowd|erupt|hundreds|voices|roar|chant|cheer|spectators/i.test(p.beat))) {
+        problems.push('This scene has a crowd reacting and no panel shows it. Give one panel a foreground witness with the crowd reacting behind them.');
     }
     return problems;
 }
@@ -1589,8 +1596,8 @@ function capBubbleText(text) {
                         // fixed the MISSING CROWD PANEL die on an equal score, and the
                         // strip shipped without its eruption frame (field).
                         const crowdRestored = wantsCrowd
-                            && !plan.panels.some(p => (p.who || []).length === 0)
-                            && planFix.panels.some(p => (p.who || []).length === 0);
+                            && plan.panels.some(p => (p.who || []).length === 0)
+                            && !planFix.panels.some(p => (p.who || []).length === 0);
                         if (fixProblems.length < problems.length || (crowdRestored && fixProblems.length <= problems.length)) {
                             const panelsFix = parsePanels(rawFix, style, maxPanels, { bubbles: bubblesOn, sceneText: scene, expectJson: structuredSingle });
                             if (panelsFix.length) { plan = planFix; panels = panelsFix; raw = rawFix; }
@@ -1663,6 +1670,9 @@ function capBubbleText(text) {
             let qi = 0;
             for (let i = 0; i < panels.length && qi < fresh.length; i++) {
                 if ((panels[i].bubbles || []).length) continue;
+                // Establishing frames have no speaker — a code bubble there is a
+                // floating word on an empty hall (field: 'alone').
+                if (!(panels[i].who || []).length) continue;
                 if (!panels[i].bubbles) panels[i].bubbles = [];
                 const remainingPanels = panels.length - i;
                 const take = Math.min(2, Math.max(1, Math.ceil((fresh.length - qi) / remainingPanels)));
