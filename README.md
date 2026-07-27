@@ -114,6 +114,10 @@ Stella: girl, long crimson hair, red eyes, large breasts, hair ribbon, school un
 
 ## Changelog
 
+### 0.46.0 — the opening is sacred
+- **Fixed: the strip starting mid-action.** The planner judged the scene's setup beat the 'weakest' and dropped it, so a scene opening with `"Moan in Japanese."` rendered that moment nowhere and read backwards. New law: panel 1 depicts the scene's FIRST visual beat; drop a middle beat, never the first and never the last. `openingBeatMissed()` enforces it — panel 1's beat is compared against the scene's actual opening paragraphs, and a miss is a plan problem with a corrective retry.
+- Gate: 356 → 360 checks; the opening check negative-tested.
+
 ### 0.45.0 — the anatomy floor; arched backs are lying; skin tone is mandatory
 - **Fixed: the position flip.** `back arched to maximum` wasn't a lying cue, so the from-below swap never fired — and from below + her arched and rising rendered her on top. `back arched / arched off / arched maximum` are lying cues now; the camera goes overhead.
 - **Fixed: a strip with breasts everywhere and zero nipples/genitals.** The builder dodged every act word the detector knew (`holding deep inside her`, `driving rhythmically`). The detector learned those — and now there's an anatomy FLOOR, builder-proof: explicit panels append `nipples` to breast-naming states without them, and each block gets its gendered genital (`pussy`/`penis` by the block's own first token). Code-owned, no retry needed.

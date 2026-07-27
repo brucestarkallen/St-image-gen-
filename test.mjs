@@ -30,7 +30,7 @@ const FUNCS = [
     'parsePanels', 'parseCastSheet', 'mergeCastLines', 'effectiveForcedTags',
     'composePositive', 'scanPresenceIn', 'markerDetails', 'ledgerStateLines',
     'stripScene', 'explainError', 'isStaleSession', 'stripLayoutMeta', 'appendAnchor', 'mineDressTags', 'normalizeCountTags', 'filterRankGarments', 'assembleIdentity', 'scrubState', 'seedForPanel', 'replaceNamesInSentence', 'capTagSafe', 'antiModernNegative', 'isPlaceholderTags', 'stripPlaceholderLines', 'getSize',
-    'backgroundFigureTag', 'dedupeAgainstAnchor', 'neutralizeRoleUniforms', 'unifyStripLighting', 'applyUndress', 'hoistCrowdTokens', 'extractCrowdTokens', 'purgeModernRoles', 'panelLacksAnatomy', 'stripPersonalGarments', 'cleanWorldDress', 'countSceneBeats', 'dressForPanel', 'anatomyContinuity', 'scrubEchoedCounts', 'inferLyingFromPosition', 'mapLimit', 'explicitFramingGuard', 'extractSceneQuotes', 'attributeSpeaker', 'capBubbleText', 'anatomyFloor',
+    'backgroundFigureTag', 'dedupeAgainstAnchor', 'neutralizeRoleUniforms', 'unifyStripLighting', 'applyUndress', 'hoistCrowdTokens', 'extractCrowdTokens', 'purgeModernRoles', 'panelLacksAnatomy', 'stripPersonalGarments', 'cleanWorldDress', 'countSceneBeats', 'dressForPanel', 'anatomyContinuity', 'scrubEchoedCounts', 'inferLyingFromPosition', 'mapLimit', 'explicitFramingGuard', 'extractSceneQuotes', 'attributeSpeaker', 'capBubbleText', 'anatomyFloor', 'openingBeatMissed',
 ];
 
 const prelude = `
@@ -1253,6 +1253,21 @@ Rukia lay under him with her chest heaving, flushed pink from her face to her br
         && src.includes('Skin tone is MANDATORY in every line'));
 }
 
+// ---------------------------------------------------------------- the opening is sacred (0.46.0)
+{
+    const scene = '"Moan in Japanese."\n\nRukia\'s glazed eyes found his face through the dark, and he snapped his hips into her and her refusal came apart down the middle.\n\nHe fucked her harder, no build, no mercy, the rhythm punishing.';
+    const dropped = S.parsePlan(JSON.stringify({ plan: [{ beat: 'He drives into her with punishing force, her body jolting.', who: ['Jovan Oda'] }] }), 4);
+    check('opening: a strip that skips the scene\'s first beat is flagged',
+        S.openingBeatMissed(dropped, scene) === true);
+    const kept = S.parsePlan(JSON.stringify({ plan: [{ beat: 'He orders her to moan in Japanese and her refusal comes apart.', who: ['Jovan Oda', 'Rukia Kuchiki'] }] }), 4);
+    check('opening: a strip that opens on the scene\'s first beat passes',
+        S.openingBeatMissed(kept, scene) === false);
+    check('opening: empty inputs never flag',
+        S.openingBeatMissed(dropped, '') === false && S.openingBeatMissed(null, scene) === false);
+    check('src: the opening check is in validatePlan and the law in PLAN_LAWS',
+        src.includes('openingBeatMissed(plan, opts.scene)') && src.includes('THE OPENING IS SACRED'));
+}
+
 // ---------------------------------------------------------------- source-level invariants
 {
     check('src: single-panel bubble mode requests strict JSON', src.includes('exactly one panel'));
@@ -1340,7 +1355,7 @@ Rukia lay under him with her chest heaving, flushed pink from her face to her br
     check('src: the plan rides in the SAME call as the panels — no second round trip',
         src.includes('const PLAN_LAWS = `') && src.includes('PLAN FIRST, IN THE SAME ANSWER')
         && src.includes('plan = parsePlan(raw, maxPanels);')
-        && src.includes('validatePlan(plan, castNames, maxPanels, { crowd: wantsCrowd, beatCount })')
+        && src.includes('validatePlan(plan, castNames, maxPanels, { crowd: wantsCrowd, beatCount, scene })')
         && src.includes('YOUR PLAN WAS REJECTED:')
         && !src.includes('const planRaw = await callLLM'));
     check('src: only a plan that fails validation costs an extra call',

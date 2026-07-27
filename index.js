@@ -12,7 +12,7 @@ import { getBase64Async, saveBase64AsFile } from '../../../utils.js';
 import { callGenericPopup, POPUP_TYPE } from '../../../popup.js';
 
 const MODULE = 'sceneSnap';
-const VERSION = '0.45.0';
+const VERSION = '0.46.0';
 
 const defaultSettings = Object.freeze({
     enabled: true,
@@ -201,7 +201,7 @@ WHO is the people the beat's action passes BETWEEN, and nobody else:
 
 WORLD, derived once: "setting" is the standing description of the place stamped on every panel — location, architecture, weather, light, AND the scene's population with what that population wears ("packed stands of shinigami in black shihakusho"). Never what the population is momentarily doing. "dress" is ONLY the universal base outfit an ordinary person of this world wears — never rank- or status-specific garments.
 
-THE BEATS ARE IN THE SCENE, not in a template. Read the scene's own action sequence: every distinct physical beat the TEXT contains is a panel candidate, in scene order, up to %MAX%. A scene that opens mid-act opens mid-act — never import beats the scene does not have (undress when they are already naked), never compress a scene with six beats into two panels. The climax action itself MUST be one of them.
+THE BEATS ARE IN THE SCENE, not in a template. Read the scene's own action sequence: every distinct physical beat the TEXT contains is a panel candidate, in scene order, up to %MAX%. THE OPENING IS SACRED: panel 1 depicts the scene's FIRST visual beat — never open mid-scene when the scene's own opening is visual. More beats than panels: drop a MIDDLE beat, never the first and never the last. A scene that opens mid-act opens mid-act — never import beats the scene does not have (undress when they are already naked), never compress a scene with six beats into two panels. The climax action itself MUST be one of them.
 
 The plan entry for each panel is: {"beat":"<one plain sentence: what this frame shows>","follows":"<how this moment follows the previous panel — omit on panel 1>","between":"<what passes between the two people — required when "who" has two names>","who":["Exact Cast Name"]}`;
 
@@ -1189,6 +1189,20 @@ function beatsAreTheSame(a, b) {
     return shared / Math.min(A.size, B.size) >= 0.6;
 }
 
+// Panel 1 must BE the scene's opening. The planner kept judging the setup beat the
+// 'weakest' and dropping it — the strip then opens mid-action and reads backwards
+// (field: 'Moan in Japanese' is the scene's first line and appeared nowhere).
+function openingBeatMissed(plan, scene) {
+    const paras = String(scene || '').split(/\n+/).map(s => s.trim())
+        .filter(s => s.length > 10 && !s.startsWith('[') && !/^~t~/.test(s));
+    const opening = beatWords(paras.slice(0, 2).join(' '));
+    const first = beatWords(plan?.panels?.[0]?.beat || '');
+    if (opening.size < 2 || first.size < 2) return false;
+    let shared = 0;
+    for (const w of first) if (opening.has(w)) shared++;
+    return shared / first.size < 0.34;
+}
+
 // Everything the plan can get wrong that a human would catch by reading the list. Each
 // problem is returned as a sentence the repair call can act on directly.
 function validatePlan(plan, castNames, maxPanels, opts = {}) {
@@ -1197,6 +1211,7 @@ function validatePlan(plan, castNames, maxPanels, opts = {}) {
     if (maxPanels > 1 && plan.panels.length < 2) problems.push('You returned fewer than 2 panels; a strip needs at least 2.');
     if (maxPanels >= 4 && plan.panels.length <= 2) problems.push(`You used only ${plan.panels.length} panels of a ${maxPanels}-panel budget. Read the scene again — its text holds more distinct beats than that. Give each its own panel, up to the budget.`);
     if ((opts.beatCount || 0) >= 2 && plan.panels.length < opts.beatCount) problems.push(`The scene's prose contains ${opts.beatCount} distinct beats (counted by code) and you returned ${plan.panels.length} panels. Render every beat, in scene order.`);
+    if (opts.scene && openingBeatMissed(plan, opts.scene)) problems.push('Panel 1 is not the scene\'s opening beat — the strip starts mid-action. Panel 1 depicts the scene\'s FIRST visual beat; drop a middle beat, never the opening.');
     for (let i = 0; i < plan.panels.length; i++) {
         const p = plan.panels[i];
         if (p.who === null) problems.push(`Panel ${i + 1} has no "who" field at all. Every panel must have one, even if it is [].`);
@@ -1601,7 +1616,7 @@ function capBubbleText(text) {
         if (plan) {
             const castNames = parseCastSheet(getActiveCastSheet()).map(c => c.name);
             const wantsCrowd = framesCrowd(plan.setting) || framesCrowd(scene);
-            const problems = validatePlan(plan, castNames, maxPanels, { crowd: wantsCrowd, beatCount });
+            const problems = validatePlan(plan, castNames, maxPanels, { crowd: wantsCrowd, beatCount, scene });
             if (problems.length) {
                 console.warn('[SceneSnap] plan rejected:', problems);
                 planNotes = problems.slice();
@@ -1609,7 +1624,7 @@ function capBubbleText(text) {
                     const rawFix = await callLLM(`${fullSystem}\n\nYOUR PLAN WAS REJECTED:\n- ${problems.join('\n- ')}\nRe-output the complete corrected JSON now — plan AND panels.`, user, maxTokens);
                     const planFix = parsePlan(rawFix, maxPanels);
                     if (planFix) {
-                        const fixProblems = validatePlan(planFix, castNames, maxPanels, { crowd: wantsCrowd, beatCount });
+                        const fixProblems = validatePlan(planFix, castNames, maxPanels, { crowd: wantsCrowd, beatCount, scene });
                         // A repair is accepted on fewer problems — OR on restoring the
                         // crowd frame outright. Strictly-fewer-only let a repair that
                         // fixed the MISSING CROWD PANEL die on an equal score, and the
