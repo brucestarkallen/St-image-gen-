@@ -30,7 +30,7 @@ const FUNCS = [
     'parsePanels', 'parseCastSheet', 'mergeCastLines', 'effectiveForcedTags',
     'composePositive', 'scanPresenceIn', 'markerDetails', 'ledgerStateLines',
     'stripScene', 'explainError', 'isStaleSession', 'stripLayoutMeta', 'appendAnchor', 'mineDressTags', 'normalizeCountTags', 'filterRankGarments', 'assembleIdentity', 'scrubState', 'seedForPanel', 'replaceNamesInSentence', 'capTagSafe', 'antiModernNegative', 'isPlaceholderTags', 'stripPlaceholderLines', 'getSize',
-    'backgroundFigureTag', 'dedupeAgainstAnchor', 'neutralizeRoleUniforms', 'unifyStripLighting', 'applyUndress', 'hoistCrowdTokens', 'extractCrowdTokens', 'purgeModernRoles', 'panelLacksAnatomy', 'stripPersonalGarments', 'cleanWorldDress', 'countSceneBeats', 'dressForPanel', 'anatomyContinuity', 'scrubEchoedCounts',
+    'backgroundFigureTag', 'dedupeAgainstAnchor', 'neutralizeRoleUniforms', 'unifyStripLighting', 'applyUndress', 'hoistCrowdTokens', 'extractCrowdTokens', 'purgeModernRoles', 'panelLacksAnatomy', 'stripPersonalGarments', 'cleanWorldDress', 'countSceneBeats', 'dressForPanel', 'anatomyContinuity', 'scrubEchoedCounts', 'inferLyingFromPosition',
 ];
 
 const prelude = `
@@ -56,7 +56,7 @@ function extractConst(name) {
     if (!line) throw new Error(`extractConst: ${name} not found`);
     return line;
 }
-const CONSTS = ['escRe', 'BACKGROUND_STATE', 'CODE_OWNED_TAG', 'GARMENT_CONDITION', 'TRANSIENT_ACTIVITY', 'FRAMING_TAG', 'ANGLE_TAG', 'SIZE_WORD', 'SIZE_NOUN', 'GARMENT_WORDS', 'RANK_WORD', 'DECORATION_WORD', 'BEAT_STOPWORD', 'LIGHT_TOKEN', 'EXPLICIT_STATE', 'CROWD_ANCHOR_TOKEN', 'MODERN_ROLE', 'SEX_ACT', 'GENITAL_TAG', 'COUNT_TAG_ONLY', 'LYING_STATE'];
+const CONSTS = ['escRe', 'BACKGROUND_STATE', 'CODE_OWNED_TAG', 'GARMENT_CONDITION', 'TRANSIENT_ACTIVITY', 'FRAMING_TAG', 'ANGLE_TAG', 'SIZE_WORD', 'SIZE_NOUN', 'GARMENT_WORDS', 'RANK_WORD', 'DECORATION_WORD', 'BEAT_STOPWORD', 'LIGHT_TOKEN', 'EXPLICIT_STATE', 'CROWD_ANCHOR_TOKEN', 'MODERN_ROLE', 'SEX_ACT', 'GENITAL_TAG', 'COUNT_TAG_ONLY', 'LYING_STATE', 'UNDER_PARTNER'];
 
 const sandboxPath = '/tmp/ss_sandbox_' + process.pid + '.mjs';
 writeFileSync(sandboxPath, prelude + '\n' + CONSTS.map(extractConst).join('\n') + '\n' + FUNCS.map(extract).join('\n\n')
@@ -1083,6 +1083,23 @@ Rukia lay under him with her chest heaving, flushed pink from her face to her br
         && src.includes("p.prompt.replace(/\\bfrom below\\b/i, 'from above')"));
     check('lying: the detector knows lying, not standing',
         S.LYING_STATE.test('lying on back on futon, spent') && !S.LYING_STATE.test('standing tall, shouting'));
+}
+
+// ---------------------------------------------------------------- position inference (0.36.0)
+{
+    // 'under him' without a lying cue = cowgirl (field: she rendered on top).
+    check('position: under-him infers lying on back',
+        S.inferLyingFromPosition('heels locked behind his back, hips working in frantic circles under him')
+            === 'heels locked behind his back, hips working in frantic circles under him, lying on back');
+    check('position: existing lying cue untouched',
+        S.inferLyingFromPosition('lying on back, hips working under him') === 'lying on back, hips working under him');
+    check('position: no spatial claim untouched',
+        S.inferLyingFromPosition('standing tall, shouting') === 'standing tall, shouting');
+    check('src: the inference is welded before assembly',
+        src.includes('w.state = inferLyingFromPosition(String(w.state || \'\'));'));
+    check('src: explicit lying+above panels get an overhead camera',
+        src.includes("/\\babove (?:her|him|them)\\b/i.test(String(w.state || '')")
+        && src.includes("p.prompt.replace(/\\beye level\\b/i, 'from above')"));
 }
 
 // ---------------------------------------------------------------- source-level invariants

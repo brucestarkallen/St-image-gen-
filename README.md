@@ -114,6 +114,11 @@ Stella: girl, long crimson hair, red eyes, large breasts, hair ribbon, school un
 
 ## Changelog
 
+### 0.36.0 — 'under him' means lying down
+- **Fixed: she rendered on top.** Her state said `heels locked behind his back, hips working in frantic circles under him` — frantic hip motion with zero lying cue reads as cowgirl to the model. `inferLyingFromPosition`: `under/beneath him|her|them` in a state without a lying tag welds `lying on back` in.
+- **Fixed: the white-blanket ghost.** An explicit panel with one partner lying and the other `above her` at `eye level` shows only the top partner's back and hair from the side — a white-haired man on top reads as a blanket. Such panels get the camera moved overhead (`eye level` → `from above`), where both faces live.
+- Gate: 314 → 319 checks.
+
 ### 0.35.0 — lying subjects never get a from-below camera; silent speech beats cost a retry
 - **Fixed: the standing-alone afterglow panel.** The prompt said `lying on back on futon, staring at ceiling` with a `from below` camera — a camera underneath a lying person stands them up. When any principal is lying/supine, `from below` is code-swapped to `from above`.
 - **Fixed: speech beats shipping silent.** The plan declares which beats are speech (screamed, whispered, threatened); a speech-beat panel with an empty bubbles array is a dropped voice. Silent speech beats are now listed by number and cost a corrective retry — alongside the existing <2-bubbles trigger.

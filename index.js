@@ -12,7 +12,7 @@ import { getBase64Async, saveBase64AsFile } from '../../../utils.js';
 import { callGenericPopup, POPUP_TYPE } from '../../../popup.js';
 
 const MODULE = 'sceneSnap';
-const VERSION = '0.35.0';
+const VERSION = '0.36.0';
 
 const defaultSettings = Object.freeze({
     enabled: true,
@@ -581,6 +581,17 @@ function scrubEchoedCounts(prompt) {
 // A camera UNDERNEATH a lying subject stands them up (field: the afterglow panel
 // rendered her standing alone, 'from below' fighting 'lying on back on futon').
 const LYING_STATE = /\b(?:lying|supine|on (?:her|his|their) back|flat on|collapsed flat|sprawled)\b/i;
+
+// 'under him' is a lying claim without the word: hips 'working in frantic circles
+// under him' with no lying cue reads as cowgirl and puts her ON TOP (field). The
+// lying tag is derived from the state's own spatial claim.
+const UNDER_PARTNER = /\b(?:under|beneath) (?:him|her|them)\b/i;
+
+function inferLyingFromPosition(state) {
+    const st = String(state || '');
+    if (UNDER_PARTNER.test(st) && !LYING_STATE.test(st)) return `${st}, lying on back`;
+    return st;
+}
 
 // A garment tag in `state` is a SECOND outfit competing with the one the code welds —
 // the field run put "shinigami uniform" beside "black shihakusho" and the model blended
@@ -1643,6 +1654,8 @@ ${FRAME_LAWS}${bubblesOn ? '\n\n' + BUBBLE_RULES : ''}\nOUTPUT (replaces the sin
             }
         }
         if (antiModernOn) for (const w of principals) w.state = purgeModernRoles(String(w.state || ''));
+        // 'under him' without a lying cue renders as cowgirl (field). Derive it.
+        for (const w of principals) w.state = inferLyingFromPosition(String(w.state || ''));
         // Lighting smuggled in via STATE bypasses the sky-unifier, which only scrubs
         // the shared prompt (field: 'dramatic backlighting from pale sun' welded into
         // a block gave one panel its own sky).
@@ -1663,6 +1676,13 @@ ${FRAME_LAWS}${bubblesOn ? '\n\n' + BUBBLE_RULES : ''}\nOUTPUT (replaces the sin
         // A lying subject never gets a from-below camera — the model stands them up.
         if (principals.some(w => LYING_STATE.test(String(w.state || '')))) {
             p.prompt = p.prompt.replace(/\bfrom below\b/i, 'from above');
+        }
+        // An explicit panel with one partner lying and the other above needs the
+        // camera overhead: eye level from the side shows only the top partner's back
+        // and hair — a white-haired man on top reads as a white blanket (field).
+        if (p.explicit && principals.some(w => LYING_STATE.test(String(w.state || '')))
+            && principals.some(w => /\babove (?:her|him|them)\b/i.test(String(w.state || '')))) {
+            p.prompt = p.prompt.replace(/\beye level\b/i, 'from above');
         }
         p.who = principals;
         // Identity welded by code — the seed no longer has to protect subject appearance.
