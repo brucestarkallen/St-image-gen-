@@ -114,6 +114,13 @@ Stella: girl, long crimson hair, red eyes, large breasts, hair ribbon, school un
 
 ## Changelog
 
+### 0.30.0 — the builder gets the official NAI craft; euphemisms count as acts
+- **The builder now receives the official NovelAI prompt guidance** (from docs.novelai.net/en/image/strengthening-weakening): order = strength, 1-3 `{braced}` critical tags per panel chosen by the builder itself, hybrid natural phrases, concreteness. Code assembles structure; the builder shapes language — the user asked for exactly this split.
+- **NSFW PANEL FOCUS LAW (user's own):** solo body moments (undress/bathing/posing) = ONE person in who; dialogue = BOTH; a sex act = ALWAYS BOTH, the act named by its danbooru term in the shared prompt (vaginal sex, missionary, doggystyle...) and every state carrying visible anatomy. Euphemisms are failed panels: 'drives deep', 'buried inside', 'joins with her' are forbidden. Naked characters must say 'completely nude' — 'pushed open/pulled aside' only when the scene says the clothes stay on (this was the clothes-ON-naked bug).
+- **Euphemisms now trigger the anatomy retry:** the sex-act detector learned 'drives deep', 'stays buried inside her', climax/riding/straddling and friends — 0.29.0's narrow regex let a full sex scene ship with zero genital tags.
+- Gate: 279 → 283 checks.
+- Note: `no text` in the tail suppresses MODEL-drawn gibberish text only; dialogue bubbles are drawn by SceneSnap's own overlay and are unaffected.
+
 ### 0.29.0 — nudity is welded, anatomy is enforced, roles are purged
 - **Fixed: the clothed-'nude' contradiction (THE NSFW bug).** `nude` was floating in the environment tags while `shinigami uniform` and `black kosode` stayed welded into both character blocks — the model drew the clothes ON and zero anatomy. Panel-level nudity is now welded into every principal's state: `applyUndress` strips all garments from their blocks and the explicit tag lands where identity is read.
 - **Enforced: a sex act with no genital tags costs a re-call.** The field panel said 'thrusting motion' with not one anatomy tag. Any panel matching a sex-act pattern with zero genital/anatomy tags anywhere now triggers one corrective builder retry demanding concrete anatomy (breast class + nipples, penis/erection, pussy/vulva, anus), accepted only if the anatomy arrives.

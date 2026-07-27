@@ -12,7 +12,7 @@ import { getBase64Async, saveBase64AsFile } from '../../../utils.js';
 import { callGenericPopup, POPUP_TYPE } from '../../../popup.js';
 
 const MODULE = 'sceneSnap';
-const VERSION = '0.29.0';
+const VERSION = '0.30.0';
 
 const defaultSettings = Object.freeze({
     enabled: true,
@@ -120,11 +120,23 @@ COPY, never compose: take each trait's wording from the story/memory VERBATIM wh
 const BUBBLE_RULES = `DIALOGUE BUBBLES (active):
 Alongside each panel prompt, pick 0-2 spoken lines for that panel's beat, copied VERBATIM from the SCENE text — never invent, paraphrase, translate, or merge lines. Prefer ONE line per panel, spreading the dialogue across panels in speaking order; put two lines in one panel only for a tight same-beat exchange, and never repeat a line across panels. Max 12 words per line; prefer the punchiest dialogue of the beat. "speaker" is the exact character name. If the beat has no spoken dialogue, use an empty array. The image prompt itself must still contain no dialogue or quotation marks — spoken lines go ONLY in the bubbles field; SceneSnap draws them onto the image afterward.`;
 
-// Explicit scenes get explicit tags: vagueness is the accuracy killer in NSFW beats,
-// and body position accuracy is the hardest part of any scene. One canonical rule.
+// Explicit scenes get explicit tags: vagueness is the accuracy killer in NSFW beats.
+// The panel-focus law is the user's own: solo for body moments, duo for dialogue,
+// BOTH with visible named genitals for sex. Euphemism is a failed panel.
 const NSFW_RULE = `
 
-EXPLICIT SCENES: when the scene is sexual or nude, tag it exactly — never euphemize or fade to black. State per character: state of undress (specific garments removed/open), exposed anatomy with concrete danbooru anatomy tags (breast size class and nipples, penis/erection/testicles, pussy/vulva, pubic hair state, skin tone and texture details), and body proportions CONSISTENT with that character's cast tags in every panel. Name the exact position by its danbooru term (missionary, cowgirl position, doggystyle, standing sex, ...), the penetration or contact state, hand and leg placement, and fluids. In natural-language mode, express the same specifics as prose. Anatomy follows the cast sheet: sizes, marks, and SKIN TONE come from cast tags and stay identical in every panel and every image — a character may never change complexion between panels.`;
+EXPLICIT SCENES: when the scene is sexual or nude, tag it exactly — never euphemize or fade to black.
+PANEL FOCUS LAW: a solo body moment (undressing, bathing, posing, touching herself) is ONE person in "who". A dialogue or an exchange is BOTH. A sex act is ALWAYS BOTH — and the act is named by its danbooru term in the shared prompt (vaginal sex, missionary, cowgirl position, doggystyle, standing sex) with the penetration state, while EACH character's state carries their visible anatomy: breast class + nipples, penis/erection/testicles, pussy/vulva, anus when visible, fluids. EUPHEMISMS ARE FAILED PANELS: 'drives deep', 'buried inside', 'joins with her', 'connected' are forbidden — if the act cannot be named in danbooru terms, it cannot be drawn.
+NUDITY: when the scene has a character naked, that character's state says 'completely nude' — 'uniform pushed open' or 'pulled aside' ONLY when the scene text says the clothes stay on. Otherwise state the garments removed/open, the exposed anatomy, and body proportions CONSISTENT with that character's cast tags in every panel. Anatomy follows the cast sheet: sizes, marks, and SKIN TONE come from cast tags and stay identical in every panel and every image — a character may never change complexion between panels. In natural-language mode, express the same specifics as prose.`;
+
+// NovelAI V4.5 prompt craft from the official docs (strengthening-weakening): the
+// builder shapes the LANGUAGE of each panel; code assembles the structure. The user
+// asked for this explicitly — guidance in the builder's hands, not code's format.
+const NAI_GUIDANCE = `NOVELAI V4.5 PROMPT CRAFT (official guidance — apply it yourself):
+- ORDER IS STRENGTH: the model reads left to right. What matters most goes first — identity traits and the panel's main action early, atmosphere last.
+- EMPHASIS: wrap 1-3 CRITICAL tags per panel in {braces} to strengthen them ({sky-blue blade}, {violet eyes}); [brackets] weaken something that keeps stealing focus. Emphasis on everything is emphasis on nothing — never more than 3 braced tags per panel. For the ONE thing the panel lives or dies by, numerical emphasis is allowed (1.2::tag::).
+- HYBRID: V4.5 reads short natural phrases as tags — 'rain-light through shoji' or 'crowd laughing and retreating toward the doors' bind better than fragment piles.
+- CONCRETENESS: every tag must be something a camera can see. No moods, no metaphors.`;
 
 // One canonical grounding-authority rule, cited by both builder paths — never restated.
 const GROUNDING_RULE = `
@@ -905,6 +917,17 @@ function extractCrowdTokens(prompt) {
 // a shihakusho crowd). When the anti-modern gate fires, role tokens are purged from
 // prompts, states, and the setting — the anchor's own population words ('shinigami
 // in black shihakusho') name these people instead.
+// Sex acts, including the euphemisms builders hide behind, and genital anatomy.
+const SEX_ACT = /\b(?:thrust(?:ing|s)?|missionary|doggystyle|doggy style|cowgirl|vaginal|anal sex|fucking|intercourse|penetrat\w*|orgasm\w*|climax\w*|driv\w+ deep|buried inside|balls?[- ]deep|mating press|prone bone|riding|straddling|pounding|slamming|ejaculat\w*|creampie)\b/i;
+const GENITAL_TAG = /\b(?:penis|erection|testicles?|cock|dick|pussy|vulva|vagina|clitoris|labia|anus)\b/i;
+
+// A panel fails when it depicts a sex act — however euphemized — with zero genital
+// tags anywhere the model can read them.
+function panelLacksAnatomy(p) {
+    const text = [p?.prompt, p?.sentence, ...(p?.who || []).map(w => String(w?.state ?? w ?? ''))].join(' ');
+    return SEX_ACT.test(text) && !GENITAL_TAG.test(text);
+}
+
 const MODERN_ROLE = /\b(?:soldiers?|troop|troops|army|military|marines?|sailors?|police|officers?|security)\b/i;
 
 function purgeModernRoles(text) {
@@ -1296,7 +1319,7 @@ async function buildScenePrompt(mesId) {
     const structuredSingle = maxPanels === 1 && style === 'tags' && castEntryCount > 0;
     let fullSystem = system;
     if (settings.backend === 'novelai' && style === 'tags') {
-        fullSystem += '\n\nTARGET MODEL: NovelAI Diffusion V4.5 — blend Danbooru tags with a few short natural phrases used as tags (e.g. "moonlit stone alley at night", "crowded arena under harsh sun"); count tags and sheet-verbatim appearance rules still apply.';
+        fullSystem += '\n\nTARGET MODEL: NovelAI Diffusion V4.5 — blend Danbooru tags with a few short natural phrases used as tags (e.g. "moonlit stone alley at night", "crowded arena under harsh sun"); count tags and sheet-verbatim appearance rules still apply.\n\n' + NAI_GUIDANCE;
     }
     if (grounding.has) fullSystem += GROUNDING_RULE;
     fullSystem += NSFW_RULE;
@@ -1380,19 +1403,14 @@ ${FRAME_LAWS}${bubblesOn ? '\n\n' + BUBBLE_RULES : ''}\nOUTPUT (replaces the sin
         } catch (e) { console.warn('[SceneSnap] corrective retry failed, keeping first output:', e); }
     }
     // Explicit panels must NAME the anatomy — a sex act with zero genital tags is a
-    // builder failure, and it is exactly how 'thrusting motion' rendered clothed
-    // people with the word 'nude' floating in the scenery (field). One corrective
-    // re-call, accepted only if the anatomy actually arrives.
-    const SEX_ACT = /\b(?:thrusting|missionary|doggystyle|cowgirl|vaginal|anal sex|fucking|intercourse|penetrating|penetration|orgasm)\b/i;
-    const GENITAL_TAG = /\b(?:penis|erection|testicles?|cock|dick|pussy|vulva|vagina|clitoris|labia|anus)\b/i;
-    const panelTextOf = p => [p.prompt, p.sentence, ...(p.who || []).map(w => String(w?.state ?? w ?? ''))].join(' ');
-    const anatomyMissing = p => SEX_ACT.test(panelTextOf(p)) && !GENITAL_TAG.test(panelTextOf(p));
-    if (panels.length && schemaSent && panels.some(anatomyMissing)) {
+    // builder failure. Euphemisms count as acts: 'drives deep' and 'stays buried
+    // inside her' escaped 0.29.0's narrow regex and shipped genital-free (field).
+    if (panels.length && schemaSent && panels.some(panelLacksAnatomy)) {
         console.warn('[SceneSnap] explicit panel names no anatomy — issuing one corrective retry');
         try {
-            const raw3 = await callLLM(fullSystem + `\n\nPREVIOUS OUTPUT REJECTED: a panel depicts a sex act but names no anatomy. In explicit scenes every character's "state" MUST carry concrete danbooru anatomy tags (breast class + nipples, penis/erection, pussy/vulva, anus when visible, fluids) and the state of undress per character — a sex act with no genital tag is a failed panel. Re-output the complete corrected JSON now.`, user, maxTokens);
+            const raw3 = await callLLM(fullSystem + `\n\nPREVIOUS OUTPUT REJECTED: a panel depicts a sex act but names no anatomy, or names the act only in euphemism. In explicit scenes the shared prompt MUST name the act by its danbooru term (vaginal sex, missionary, doggystyle...) and every character's "state" MUST carry their visible anatomy (breast class + nipples, penis/erection, pussy/vulva, anus when visible, fluids), with 'completely nude' per naked character. Re-output the complete corrected JSON now.`, user, maxTokens);
             const panels3 = parsePanels(raw3, style, maxPanels, { bubbles: bubblesOn, sceneText: scene, expectJson: structuredSingle });
-            if (panels3.length && !panels3.some(anatomyMissing)) { panels = panels3; raw = raw3; }
+            if (panels3.length && !panels3.some(panelLacksAnatomy)) { panels = panels3; raw = raw3; }
         } catch (e) { console.warn('[SceneSnap] anatomy corrective retry failed, keeping first output:', e); }
     }
     // World anchor: builder-derived, cast-mined as backstop. Stamped onto every panel by

@@ -30,7 +30,7 @@ const FUNCS = [
     'parsePanels', 'parseCastSheet', 'mergeCastLines', 'effectiveForcedTags',
     'composePositive', 'scanPresenceIn', 'markerDetails', 'ledgerStateLines',
     'stripScene', 'explainError', 'isStaleSession', 'stripLayoutMeta', 'appendAnchor', 'mineDressTags', 'normalizeCountTags', 'filterRankGarments', 'assembleIdentity', 'scrubState', 'seedForPanel', 'replaceNamesInSentence', 'capTagSafe', 'antiModernNegative', 'isPlaceholderTags', 'stripPlaceholderLines', 'getSize',
-    'backgroundFigureTag', 'dedupeAgainstAnchor', 'neutralizeRoleUniforms', 'unifyStripLighting', 'applyUndress', 'hoistCrowdTokens', 'extractCrowdTokens', 'purgeModernRoles',
+    'backgroundFigureTag', 'dedupeAgainstAnchor', 'neutralizeRoleUniforms', 'unifyStripLighting', 'applyUndress', 'hoistCrowdTokens', 'extractCrowdTokens', 'purgeModernRoles', 'panelLacksAnatomy',
 ];
 
 const prelude = `
@@ -56,7 +56,7 @@ function extractConst(name) {
     if (!line) throw new Error(`extractConst: ${name} not found`);
     return line;
 }
-const CONSTS = ['escRe', 'BACKGROUND_STATE', 'CODE_OWNED_TAG', 'GARMENT_CONDITION', 'TRANSIENT_ACTIVITY', 'FRAMING_TAG', 'ANGLE_TAG', 'SIZE_WORD', 'SIZE_NOUN', 'GARMENT_WORDS', 'RANK_WORD', 'DECORATION_WORD', 'BEAT_STOPWORD', 'LIGHT_TOKEN', 'EXPLICIT_STATE', 'CROWD_ANCHOR_TOKEN', 'MODERN_ROLE'];
+const CONSTS = ['escRe', 'BACKGROUND_STATE', 'CODE_OWNED_TAG', 'GARMENT_CONDITION', 'TRANSIENT_ACTIVITY', 'FRAMING_TAG', 'ANGLE_TAG', 'SIZE_WORD', 'SIZE_NOUN', 'GARMENT_WORDS', 'RANK_WORD', 'DECORATION_WORD', 'BEAT_STOPWORD', 'LIGHT_TOKEN', 'EXPLICIT_STATE', 'CROWD_ANCHOR_TOKEN', 'MODERN_ROLE', 'SEX_ACT', 'GENITAL_TAG'];
 
 const sandboxPath = '/tmp/ss_sandbox_' + process.pid + '.mjs';
 writeFileSync(sandboxPath, prelude + '\n' + CONSTS.map(extractConst).join('\n') + '\n' + FUNCS.map(extract).join('\n\n')
@@ -926,13 +926,30 @@ function defaultPatterns() { return '<details>[\\s\\S]*?</details>\n\\{[A-Z_]+\\
         { dress: 'black shihakusho', worldDress: 'black shihakusho' });
     check('nude: BOTH principals stripped of welded garments, anatomy kept',
         nid3.blocks.every(b => !/kosode|uniform/.test(b)) && /small breasts bouncing/.test(nid3.blocks[1]));
+    // Euphemisms count as acts: 'drives deep' and 'stays buried inside her' escaped 0.29.0.
+    check('nsfw: euphemistic acts are acts',
+        S.panelLacksAnatomy({ prompt: 'cowboy shot, dramatic lighting', sentence: 'he stays buried inside her with his face against her breast', who: [{ name: 'A', state: 'above her' }] }) === true
+        && S.panelLacksAnatomy({ prompt: 'missionary, vaginal sex, penis, pussy', sentence: '', who: [] }) === false
+        && S.panelLacksAnatomy({ prompt: 'close-up, lying beside her propped on one elbow', sentence: 'they rest in the quiet', who: [{ name: 'A', state: 'small breasts exposed, nipples flushed' }] }) === false);
     // The anatomy enforcement and panel-nude weld are wired in source.
     check('src: sex act with zero genital tags costs one corrective retry',
-        src.includes('anatomyMissing') && src.includes('GENITAL_TAG') && src.includes('names no anatomy'));
+        src.includes('panels.some(panelLacksAnatomy)') && src.includes('names no anatomy'));
     check('src: panel-level nudity is welded into every principal state',
         src.includes("if (!/\\b(?:nude|naked)\\b/i.test(String(w.state || ''))) w.state = [String(w.state || '').trim(), 'nude'].filter(Boolean).join(', ');"));
     check('src: modern role words purged when the anti-modern gate fires',
         src.includes('const antiModernOn = !!antiModernNegative(dress);') && src.includes('purgeModernRoles(p.prompt)'));
+}
+
+// ---------------------------------------------------------------- NAI guidance to the builder + panel focus law (0.30.0)
+{
+    check('guidance: the official NAI craft is handed to the builder, not buried in code',
+        src.includes('const NAI_GUIDANCE = `') && src.includes('+ NAI_GUIDANCE')
+        && src.includes('{sky-blue blade}') && src.includes('ORDER IS STRENGTH'));
+    check('guidance: the panel focus law is the user\'s own (solo/duo/both-with-genitals)',
+        src.includes('PANEL FOCUS LAW') && src.includes('A sex act is ALWAYS BOTH')
+        && src.includes('EUPHEMISMS ARE FAILED PANELS'));
+    check('guidance: complete nudity is demanded per naked character',
+        src.includes("'completely nude'") && src.includes('ONLY when the scene text says the clothes stay on'));
 }
 
 // ---------------------------------------------------------------- source-level invariants
