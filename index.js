@@ -12,7 +12,7 @@ import { getBase64Async, saveBase64AsFile } from '../../../utils.js';
 import { callGenericPopup, POPUP_TYPE } from '../../../popup.js';
 
 const MODULE = 'sceneSnap';
-const VERSION = '0.33.0';
+const VERSION = '0.34.0';
 
 const defaultSettings = Object.freeze({
     enabled: true,
@@ -597,6 +597,16 @@ function scrubState(state, blockTags, cap = 200) {
     // produces ONE token that matches no single block tag, so exact-token comparison
     // let the whole appearance block through twice. Compare on words, not tokens.
     const blockWords = new Set(blockToks.flatMap(t => t.toLowerCase().split(/[\s-]+/)).filter(Boolean));
+    // A 2+ word consecutive phrase from the owner's own block, repeated in their
+    // state with extra words around it, is a restatement too — 'medium white hair
+    // falling over her chest' survived the word-subset rule, and the third repetition
+    // of his white hair in one frame bled onto the black-haired partner (field:
+    // white-haired Rukia; the panel-5 fused monster).
+    const blockBigrams = new Set();
+    for (const bt of blockToks) {
+        const w = bt.toLowerCase().split(/[\s-]+/).filter(Boolean);
+        for (let i = 0; i + 1 < w.length; i++) blockBigrams.add(w[i] + ' ' + w[i + 1]);
+    }
     const out = [];
     let used = 0;
     for (const raw of String(state || '').split(',')) {
@@ -606,6 +616,19 @@ function scrubState(state, blockTags, cap = 200) {
         if (blockSet.has(low)) continue;
         if (CODE_OWNED_TAG.test(low)) continue;
         if (hasGarment(low) && !GARMENT_CONDITION.test(low)) continue;
+        if (blockBigrams.size) {
+            const w = low.split(/[\s-]+/).filter(Boolean);
+            let phraseHit = false;
+            for (let i = 0; i + 1 < w.length; i++) {
+                if (blockBigrams.has(w[i] + ' ' + w[i + 1])) { phraseHit = true; break; }
+            }
+            // Hair-identity restatements are the cross-binding agent — the third
+            // 'medium white hair' in a frame bleeds onto the black-haired partner
+            // (field: white-haired Rukia). Gaze/expression tokens with an embedded
+            // trait stay: they carry the acting, and eyes rarely bleed.
+            if (phraseHit && /\b(?:hair|ponytail|twintails|ahoge|bangs)\b/.test(low)
+                && !(GARMENT_CONDITION.test(low) && hasGarment(low))) continue;
+        }
         if (low.length >= 4 && blockToks.some(b => b.toLowerCase() !== low && b.toLowerCase().startsWith(low))) continue;
         const words = low.split(/[\s-]+/).filter(Boolean);
         if (words.length >= 2 && words.every(w => blockWords.has(w))) continue;
@@ -1060,6 +1083,20 @@ function dressForPanel(dress, explicit) {
     return explicit ? '' : String(dress || '');
 }
 
+// Anatomy continuity across a strip: once a strip establishes nipples/genitals, no
+// later panel amputates them — the finale rendered a bare breast with NO nipple
+// because 'nipples' was missing from THAT panel alone (field). Inheritance, not
+// invention: tokens come only from the strip's own earlier states.
+function anatomyContinuity(state, stripAnatomy) {
+    const st = String(state || '');
+    const low = st.toLowerCase();
+    const add = [];
+    if (/\bbreasts?\b/.test(low) && !/\bnipples?\b/.test(low) && stripAnatomy.has('nipples')) add.push('nipples');
+    if (/\b(?:legs (?:spread|fallen) open|spread legs|between (?:her|his) (?:legs|thighs))\b/.test(low)
+        && !/\b(?:pussy|vulva|vagina)\b/.test(low) && stripAnatomy.has('pussy')) add.push('pussy');
+    return add.length ? `${st}, ${add.join(', ')}` : st;
+}
+
 // Two beats are the same beat when their content words mostly coincide. This is the
 // check that catches a sword leaving its sheath followed by that same sword overhead.
 const BEAT_STOPWORD = /^(?:the|a|an|and|or|but|as|at|in|on|of|to|his|her|their|its|with|while|over|into|from|for|by|is|are|was|were|he|she|they|it|this|that|up|down|out)$/i;
@@ -1485,11 +1522,11 @@ ${FRAME_LAWS}${bubblesOn ? '\n\n' + BUBBLE_RULES : ''}\nOUTPUT (replaces the sin
     // lines exist; empty arrays everywhere mean it didn't try (field: a scene of
     // screams shipped silent).
     if (bubblesOn && schemaSent && panels.length
-        && panels.reduce((n, p) => n + (p.bubbles || []).length, 0) === 0
+        && panels.reduce((n, p) => n + (p.bubbles || []).length, 0) < 2
         && (scene.match(/"[^"]{2,}"/g) || []).length >= 2) {
-        console.warn('[SceneSnap] dialogue-heavy scene produced zero bubbles — one corrective retry');
+        console.warn('[SceneSnap] dialogue-heavy scene produced fewer than 2 bubbles — one corrective retry');
         try {
-            const raw4 = await callLLM(fullSystem + `\n\nPREVIOUS OUTPUT REJECTED: the scene is full of spoken lines and every "bubbles" array came back empty. Pick 1-2 VERBATIM spoken lines per talkative panel (moans, cries, spilled names count), copied exactly from the scene. Re-output the complete corrected JSON now.`, user, maxTokens);
+            const raw4 = await callLLM(fullSystem + `\n\nPREVIOUS OUTPUT REJECTED: the scene is full of spoken lines and the strip carries almost no bubbles. EVERY talkative panel needs 1-2 VERBATIM spoken lines (moans, cries, spilled names count), copied exactly from the scene, spread in speaking order. Re-output the complete corrected JSON now.`, user, maxTokens);
             const panels4 = parsePanels(raw4, style, maxPanels, { bubbles: bubblesOn, sceneText: scene, expectJson: structuredSingle });
             if (panels4.length && panels4.reduce((n, p) => n + (p.bubbles || []).length, 0) > 0) { panels = panels4; raw = raw4; }
         } catch (e) { console.warn('[SceneSnap] bubble corrective retry failed, keeping first output:', e); }
@@ -1531,10 +1568,23 @@ ${FRAME_LAWS}${bubblesOn ? '\n\n' + BUBBLE_RULES : ''}\nOUTPUT (replaces the sin
     // clothing authority there is — it overrides cast sheets AND builder states.
     const sceneNude = /\|\s*(?:nothing|nude|naked)\s*(?:\||\])/i.test(scene);
     const anchorText = [panels.setting || '', dress].filter(Boolean).join(', ');
+    // Anatomy the strip established anywhere must survive everywhere.
+    const stripAnatomy = new Set();
+    for (const p of panels) {
+        for (const w of (p.who || [])) {
+            const st = String(w?.state || '').toLowerCase();
+            if (/\bnipples?\b/.test(st)) stripAnatomy.add('nipples');
+            if (/\bpussy\b/.test(st)) stripAnatomy.add('pussy');
+            if (/\bpenis\b/.test(st)) stripAnatomy.add('penis');
+        }
+    }
     for (const p of panels) {
         const crowdHere = framesCrowd(anchorText) || framesCrowd(p.prompt);
         p.crowd = crowdHere;
         p.explicit = sceneNude || EXPLICIT_STATE.test([p.prompt, p.sentence, ...(p.who || []).map(w => String(w?.state || ''))].join(' '));
+        if (p.explicit) {
+            for (const w of (p.who || [])) w.state = anatomyContinuity(String(w?.state || ''), stripAnatomy);
+        }
         p.sentence = replaceNamesInSentence(p.sentence, activeSheet);
         if (!p.who || !p.who.length) {
             // An establishing frame: the crowd or the place IS the subject. It leads

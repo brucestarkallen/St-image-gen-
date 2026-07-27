@@ -30,7 +30,7 @@ const FUNCS = [
     'parsePanels', 'parseCastSheet', 'mergeCastLines', 'effectiveForcedTags',
     'composePositive', 'scanPresenceIn', 'markerDetails', 'ledgerStateLines',
     'stripScene', 'explainError', 'isStaleSession', 'stripLayoutMeta', 'appendAnchor', 'mineDressTags', 'normalizeCountTags', 'filterRankGarments', 'assembleIdentity', 'scrubState', 'seedForPanel', 'replaceNamesInSentence', 'capTagSafe', 'antiModernNegative', 'isPlaceholderTags', 'stripPlaceholderLines', 'getSize',
-    'backgroundFigureTag', 'dedupeAgainstAnchor', 'neutralizeRoleUniforms', 'unifyStripLighting', 'applyUndress', 'hoistCrowdTokens', 'extractCrowdTokens', 'purgeModernRoles', 'panelLacksAnatomy', 'stripPersonalGarments', 'cleanWorldDress', 'countSceneBeats', 'dressForPanel',
+    'backgroundFigureTag', 'dedupeAgainstAnchor', 'neutralizeRoleUniforms', 'unifyStripLighting', 'applyUndress', 'hoistCrowdTokens', 'extractCrowdTokens', 'purgeModernRoles', 'panelLacksAnatomy', 'stripPersonalGarments', 'cleanWorldDress', 'countSceneBeats', 'dressForPanel', 'anatomyContinuity',
 ];
 
 const prelude = `
@@ -624,8 +624,9 @@ function defaultPatterns() { return '<details>[\\s\\S]*?</details>\n\\{[A-Z_]+\\
     check('scrub: a size word inside a real action tag is not a stature restatement',
         S.scrubState('small smile playing at her mouth, standing', 'woman, petite').includes('small smile'));
 
-    check('scrub: real action tags that reuse one appearance word survive',
-        S.scrubState('white hair blowing in wind, teeth clenched', 'man, white hair, tall').includes('blowing'));
+    check('scrub: one-word reuse survives; 2+ word hair-identity phrases are the bleed vector and drop',
+        S.scrubState('wind blowing, teeth clenched', 'man, white hair, tall').includes('wind blowing')
+        && S.scrubState('white hair blowing in wind, teeth clenched', 'man, white hair, tall') === 'teeth clenched');
 }
 
 // ---------------------------------------------------------------- count-tag normalization
@@ -1043,8 +1044,34 @@ Rukia lay under him with her chest heaving, flushed pink from her face to her br
         && src.includes('opts.beatCount'));
     check('src: the anchor drops dress on explicit panels',
         src.includes('dressForPanel(dress, p?.explicit)'));
-    check('src: a dialogue-heavy scene with zero bubbles costs one retry',
-        src.includes('produced zero bubbles'));
+    check('src: a dialogue-heavy scene with nearly no bubbles costs one retry',
+        src.includes('produced fewer than 2 bubbles'));
+}
+
+// ---------------------------------------------------------------- phrase-overlap scrub + anatomy continuity (0.34.0)
+{
+    const hisBlock = 'man, tall, lean build, medium white hair, pale blue eyes, sharp features, no insignia';
+    // The third repetition of his white hair in one frame bled onto her (field).
+    check('scrub: hair-identity phrases repeated in state are dropped, gaze actions stay',
+        !/medium white hair/.test(S.scrubState('medium white hair falling over her chest, jaw clenched', hisBlock))
+        && /pale blue eyes intent/.test(S.scrubState('pale blue eyes intent, hips driven forward', hisBlock))
+        && !/hair strand between eyes/.test(S.scrubState('hair strand between eyes stuck to cheek, sobbing', 'woman, short black hair, hair strand between eyes, violet eyes')));
+    // Action and motion survive; condition garments survive.
+    check('scrub: motion and condition garments survive the phrase rule',
+        /small breasts bouncing/.test(S.scrubState('small breasts bouncing, back arched', 'woman, short black hair, violet eyes, petite'))
+        && /black kosode pushed open/.test(S.scrubState('black kosode pushed open, sweat on back', hisBlock)));
+    // The strip cannot amputate established anatomy in a later panel (field: the
+    // finale's bare breast had no nipple).
+    const anatomy = new Set(['nipples', 'pussy']);
+    check('continuity: a bare-breast panel inherits nipples, open legs inherit pussy',
+        /nipples$/.test(S.anatomyContinuity('chest heaving, flushed pink from face to breasts', anatomy))
+        && /pussy$/.test(S.anatomyContinuity('legs fallen open, too spent to hold', anatomy)));
+    check('continuity: never doubles, never invents',
+        S.anatomyContinuity('nipples flushed dark', anatomy) === 'nipples flushed dark'
+        && S.anatomyContinuity('chest heaving', new Set()) === 'chest heaving');
+    // Bubbles: fewer than two in a dialogue-rich strip now costs a retry.
+    check('src: bubble retry fires below 2 bubbles, not only at 0',
+        src.includes('< 2') && src.includes('fewer than 2 bubbles'));
 }
 
 // ---------------------------------------------------------------- source-level invariants

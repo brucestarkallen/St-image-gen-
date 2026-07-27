@@ -114,6 +114,12 @@ Stella: girl, long crimson hair, red eyes, large breasts, hair ribbon, school un
 
 ## Changelog
 
+### 0.34.0 — hair restatements die; anatomy can't be amputated mid-strip
+- **Fixed: the white-haired Rukia / fused-monster panels.** His state repeated `medium white hair` up to three times per panel (cast + state), and in a two-person frame the model bound it to both figures — she rendered white-haired; tangled poses plus triple hair-identity fused the bodies. `scrubState` now drops 2+ word hair-identity phrases repeated from the owner's own block (`medium white hair falling over her chest` dies; `pale blue eyes intent` and `small breasts bouncing` live — gaze and motion are not the bleed vector).
+- **Fixed: the finale's nipple-less breast.** A strip that establishes nipples/genitals cannot amputate them in a later panel — `anatomyContinuity` welds the strip's own established tokens into states that show the region without naming it (bare breasts inherit `nipples`, fallen-open legs inherit `pussy`). Inheritance from the strip, never invention.
+- **Bubble retry fires below 2, not only at 0** — a dialogue-rich strip with one lonely bubble now gets the corrective re-call.
+- Gate: 305 → 310 checks; continuity negative-tested.
+
 ### 0.33.0 — code counts the beats; explicit panels never see the dress
 - **Panel count is no longer the builder's choice.** Six versions of "the scene has 9 beats" shipping as 2 panels ends here: `countSceneBeats` reads the prose (paragraphs with action or dialogue = beats, headers/thought-blocks excluded), and the builder is instructed with the exact number — "the scene contains exactly N distinct visual beats, counted by code, output EXACTLY N panels" — with plan validation + corrective retry when it returns fewer.
 - **Fixed: the world dress stamped onto NUDE panels.** `shihakusho, kosode` riding the anchor tail of an explicit panel is how clothes creep back onto bare skin. Explicit panels now drop the dress from the anchor entirely (`dressForPanel`).
