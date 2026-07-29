@@ -31,6 +31,7 @@ const FUNCS = [
     'composePositive', 'scanPresenceIn', 'markerDetails', 'ledgerStateLines',
     'stripScene', 'explainError', 'isStaleSession', 'stripLayoutMeta', 'appendAnchor', 'mineDressTags', 'normalizeCountTags', 'filterRankGarments', 'assembleIdentity', 'scrubState', 'seedForPanel', 'replaceNamesInSentence', 'capTagSafe', 'antiModernNegative', 'isPlaceholderTags', 'stripPlaceholderLines', 'getSize',
     'backgroundFigureTag', 'dedupeAgainstAnchor', 'neutralizeRoleUniforms', 'unifyStripLighting', 'applyUndress', 'hoistCrowdTokens', 'extractCrowdTokens', 'purgeModernRoles', 'panelLacksAnatomy', 'stripPersonalGarments', 'cleanWorldDress', 'countSceneBeats', 'dressForPanel', 'anatomyContinuity', 'scrubEchoedCounts', 'inferLyingFromPosition', 'mapLimit', 'explicitFramingGuard', 'extractSceneQuotes', 'attributeSpeaker', 'capBubbleText', 'anatomyFloor', 'openingBeatMissed',
+    'pickPanelRefs', 'nanogptIsStructured', 'nanogptMaxRefs', 'structuredResolutionFor', 'buildNanogptStructuredBody', 'genderToken', 'extractNanogptImage',
 ];
 
 const prelude = `
@@ -56,7 +57,7 @@ function extractConst(name) {
     if (!line) throw new Error(`extractConst: ${name} not found`);
     return line;
 }
-const CONSTS = ['escRe', 'BACKGROUND_STATE', 'CODE_OWNED_TAG', 'GARMENT_CONDITION', 'TRANSIENT_ACTIVITY', 'FRAMING_TAG', 'ANGLE_TAG', 'SIZE_WORD', 'SIZE_NOUN', 'GARMENT_WORDS', 'RANK_WORD', 'DECORATION_WORD', 'BEAT_STOPWORD', 'LIGHT_TOKEN', 'EXPLICIT_STATE', 'CROWD_ANCHOR_TOKEN', 'MODERN_ROLE', 'SEX_ACT', 'GENITAL_TAG', 'COUNT_TAG_ONLY', 'LYING_STATE', 'UNDER_PARTNER'];
+const CONSTS = ['escRe', 'BACKGROUND_STATE', 'CODE_OWNED_TAG', 'GARMENT_CONDITION', 'TRANSIENT_ACTIVITY', 'FRAMING_TAG', 'ANGLE_TAG', 'SIZE_WORD', 'SIZE_NOUN', 'GARMENT_WORDS', 'RANK_WORD', 'DECORATION_WORD', 'BEAT_STOPWORD', 'LIGHT_TOKEN', 'EXPLICIT_STATE', 'CROWD_ANCHOR_TOKEN', 'MODERN_ROLE', 'SEX_ACT', 'GENITAL_TAG', 'COUNT_TAG_ONLY', 'LYING_STATE', 'UNDER_PARTNER', 'NANOGPT_RES_ASPECTS'];
 
 const sandboxPath = '/tmp/ss_sandbox_' + process.pid + '.mjs';
 writeFileSync(sandboxPath, prelude + '\n' + CONSTS.map(extractConst).join('\n') + '\n' + FUNCS.map(extract).join('\n\n')
@@ -1153,7 +1154,7 @@ Rukia lay under him with her chest heaving, flushed pink from her face to her br
     check('parallel: mapLimit preserves order and caps concurrency at 2',
         JSON.stringify(res) === '[10,20,30,40,50,60]' && peak <= 2);
     check('src: panels render via mapLimit, not a sequential for-loop',
-        src.includes('panelImages = await mapLimit(panels, 2,'));
+        src.includes('panelImages = await mapLimit(panels, rollingOn ? 1 : 2,'));
     // Lying cues live in sentences too ('head thrown back into pillow').
     check('lying: pillow/futon cues count as lying',
         S.LYING_STATE.test('head thrown back into pillow') && S.LYING_STATE.test('collapsed on the futon'));
@@ -1496,7 +1497,8 @@ Rukia lay under him with her chest heaving, flushed pink from her face to her br
         src.includes('WHO writes identity AND owns state, and WHO is not you')
         && src.includes('one contiguous run per character')
         && src.includes('a climax panel whose victim is missing from "who" is a failed panel')
-        && src.includes('assembleIdentity(principals, activeSheet, { dress: firstGarmentTag(dress), worldDress: dress })')
+        && src.includes('assembleIdentity(principals, activeSheet, {')
+        && src.includes('dress: firstGarmentTag(dress), worldDress: dress,')
         && src.includes('Never blend two people into one')
         && src.includes('never render anyone as a child unless their cast tags say so'));
     check('src: scene population is setting-state with continuity',
@@ -1578,6 +1580,109 @@ Rukia lay under him with her chest heaving, flushed pink from her face to her br
     check('src: autoBuildCast has a real re-entrancy mutex, released in finally',
         src.includes('let castBuildRunning = false;')
         && src.includes('if (castBuildRunning)') && src.includes('castBuildRunning = false;\n        $btn.removeClass'));
+}
+
+
+// ---------------------------------------------------------------- reference images (0.48.0)
+{
+    const refMap = { jovan: 'data:j', stella: 'data:s' };
+    const r1 = S.pickPanelRefs(['Jovan', 'Stella'], refMap, 'data:anchor', 'data:roll', 4);
+    eq('refs: principals first, then anchor, then rolling — in that order', r1.refs, ['data:j', 'data:s', 'data:anchor', 'data:roll']);
+    eq('refs: shipped names exactly the principals whose refs made budget', r1.shipped, ['jovan', 'stella']);
+    eq('refs: budget 2 = principals only, anchor+rolling dropped',
+        S.pickPanelRefs(['Jovan', 'Stella'], refMap, 'data:anchor', 'data:roll', 2).refs, ['data:j', 'data:s']);
+    eq('refs: budget 1 keeps the FIRST principal — second must not report shipped',
+        S.pickPanelRefs(['Jovan', 'Stella'], refMap, 'data:anchor', null, 1).shipped, ['jovan']);
+    const r4 = S.pickPanelRefs(['Mari'], refMap, 'data:anchor', 'data:roll', 3);
+    eq('refs: an unreffed principal costs no slot — anchor+rolling still ride', r4.refs, ['data:anchor', 'data:roll']);
+    eq('refs: an unreffed principal never reports shipped', r4.shipped, []);
+    eq('refs: budget 0 ships nothing', S.pickPanelRefs(['Jovan'], refMap, 'a', 'r', 0).refs, []);
+    eq('refs: case-insensitive name match', S.pickPanelRefs(['JOVAN'], refMap, null, null, 4).shipped, ['jovan']);
+    eq('refs: null map tolerated (anchor still rides)', S.pickPanelRefs(['Jovan'], null, 'data:anchor', null, 2).refs, ['data:anchor']);
+}
+{
+    check('nanogpt: qwen is structured even with no metadata (field-verified export outranks the lookup)',
+        S.nanogptIsStructured(null, 'qwen-image-3') === true);
+    check('nanogpt: declared imageDataUrls parameter marks structured',
+        S.nanogptIsStructured({ supported_parameters: { imageDataUrls: {} } }, 'wai-illustrious') === true);
+    check('nanogpt: declared nImages parameter marks structured',
+        S.nanogptIsStructured({ supported_parameters: { nImages: {} } }, 'x') === true);
+    check('nanogpt: unknown model with no structured params = classic route',
+        S.nanogptIsStructured({ supported_parameters: { size: {} } }, 'flux-dev') === false);
+    check('nanogpt: reference budget from the declared constraint',
+        S.nanogptMaxRefs({ input_reference_constraints: { max_items: 4 } }) === 4);
+    check('nanogpt: absent constraint = conservative 1',
+        S.nanogptMaxRefs({}) === 1 && S.nanogptMaxRefs(null) === 1);
+    check('nanogpt: zero/garbage constraint = conservative 1',
+        S.nanogptMaxRefs({ input_reference_constraints: { max_items: 0 } }) === 1);
+}
+{
+    eq('res: portrait maps to 768x1024', S.structuredResolutionFor(false, 'portrait', ['auto', '768x1024']), '768x1024');
+    eq('res: strip landscape maps to 1024x768', S.structuredResolutionFor(true, 'portrait', ['1024x768', 'auto']), '1024x768');
+    eq('res: wide strip maps to 1024x576', S.structuredResolutionFor(true, 'wide', ['1024x576', 'auto']), '1024x576');
+    eq('res: square maps to 1024x1024', S.structuredResolutionFor(false, 'square', ['1024x1024']), '1024x1024');
+    eq('res: unlisted want degrades to auto, never a guess', S.structuredResolutionFor(false, 'portrait', ['auto', '1024x1024']), 'auto');
+    eq('res: no auto either = first declared option', S.structuredResolutionFor(false, 'portrait', ['512x512']), '512x512');
+    eq('res: null options fall back to the documented set', S.structuredResolutionFor(false, 'portrait', null), '768x1024');
+}
+{
+    const b = S.buildNanogptStructuredBody('qwen-image', 'a scene', 'bad stuff', '768x1024', '3:4', 30, 7.5, false, ['data:1', 'data:2']);
+    eq('body: references ride as imageDataUrls', b.imageDataUrls, ['data:1', 'data:2']);
+    check('body: wan27 flag mirrors reference presence', b.wan27_has_reference_images === true && b.wan27_has_video_input === false);
+    check('body: negative prompt travels (the classic route cannot carry one)', b.negative_prompt === 'bad stuff');
+    check('body: SFW = safety checker on, explicit flag off', b.showExplicitContent === false && b.enable_safety_checker === true);
+    check('body: NO seed key on the unverified route', !('seed' in b));
+    check('body: single image, explicit resolution, aspect label', b.nImages === 1 && b.resolutionExplicit === true && b.aspect_ratio === '3:4');
+    const b2 = S.buildNanogptStructuredBody('m', 'p', '', 'auto', '1:1', 30, 2.5, true, []);
+    check('body: no refs = no imageDataUrls key, wan27 flag false', !('imageDataUrls' in b2) && b2.wan27_has_reference_images === false);
+    check('body: explicit = native NSFW flags, safety checker off', b2.showExplicitContent === true && b2.enable_safety_checker === false);
+}
+{
+    eq('gender: first gendered token wins over leading traits', S.genderToken('short black hair, boy, red eyes'), 'boy');
+    eq('gender: gendered token found mid-list', S.genderToken('tall, muscular, man, scar'), 'man');
+    eq('gender: no gendered token = first token fallback', S.genderToken('androgynous, silver hair'), 'androgynous');
+    eq('gender: empty tolerated', S.genderToken(''), '');
+}
+{
+    check('extract: OpenAI b64 shape', S.extractNanogptImage({ data: [{ b64_json: 'AAA' }] })?.b64 === 'AAA');
+    check('extract: url in data[0]', S.extractNanogptImage({ data: [{ url: 'https://x/img.png' }] })?.url === 'https://x/img.png');
+    check('extract: images[] raw-string shape', S.extractNanogptImage({ images: ['https://y/generated-img.png'] })?.url === 'https://y/generated-img.png');
+    check('extract: bare data.url shape', S.extractNanogptImage({ url: 'https://z/image.png' })?.url === 'https://z/image.png');
+    check('extract: empty/null = null', S.extractNanogptImage({}) === null && S.extractNanogptImage(null) === null);
+}
+{
+    const sheet = 'Jovan: boy, short black hair, red eyes, academy uniform\nStella: girl, long crimson hair, red eyes';
+    const who = [{ name: 'Jovan', state: 'clenched fist, gritted teeth, lunging forward' }, { name: 'Stella', state: 'wide eyes, hand raised' }];
+    const plain = S.assembleIdentity(who, sheet, { dress: '', worldDress: '' });
+    const reffed = S.assembleIdentity(who, sheet, { dress: '', worldDress: '', refNames: new Set(['jovan']) });
+    check('weld: a reffed character drops appearance prose, keeps gender word + state',
+        reffed.blocks[0].startsWith('boy') && !/black hair/.test(reffed.blocks[0]) && !/academy uniform/.test(reffed.blocks[0]) && /clenched fist/.test(reffed.blocks[0]));
+    check('weld: the unreffed character in the SAME frame keeps the full verbatim block',
+        /long crimson hair/.test(reffed.blocks[1]));
+    check('weld: counts survive suppression (the gender word carries them)', reffed.counts === '1boy, 1girl');
+    check('weld: no refNames = byte-identical to the classic weld',
+        JSON.stringify(plain) === JSON.stringify(S.assembleIdentity(who, sheet, { dress: '', worldDress: '' })));
+    check('weld: world dress is NOT welded onto a reffed character (the reference owns the outfit)',
+        !/blazer/.test(S.assembleIdentity([{ name: 'Stella', state: 'smiling' }], 'Stella: girl, long crimson hair', { dress: 'blazer', worldDress: 'blazer', refNames: new Set(['stella']) }).blocks[0]));
+    check('weld: an undress state survives suppression (positive state beats the reference)',
+        /nude/.test(S.assembleIdentity([{ name: 'Stella', state: 'completely nude, arching' }], 'Stella: girl, long crimson hair, school uniform', { dress: '', worldDress: '', refNames: new Set(['stella']) }).blocks[0]));
+}
+{
+    check('src: reference capture happens on the CLEAN image, before any bubble bake',
+        src.includes('before any bubble bake') && src.indexOf('rawPanelRefs[i] = await normalizeRefImage') < src.indexOf('await overlayBubbles(imageB64'));
+    check('src: rolling references force sequential generation (concurrency 1)',
+        src.includes('mapLimit(panels, rollingOn ? 1 : 2,'));
+    check('src: the chat anchor is CHAT-SCOPED (chatMetadata), stored only after the origin pin',
+        src.includes('ctx2.chatMetadata.scenesnap_anchor = rawPanelRefs[fi];')
+        && src.indexOf('The chat changed while the image was generating') < src.indexOf('ctx2.chatMetadata.scenesnap_anchor = rawPanelRefs[fi];'));
+    check('src: the classic NanoGPT route branches to structured ONLY when references ride',
+        src.includes('if (Array.isArray(extra?.refs) && extra.refs.length) {')
+        && src.includes('return generateNanogptStructured(key, model, positive, negative, landscape, extra);'));
+    check('src: references stay opt-in — the master default is off',
+        src.includes('nanogptRefs: false,') && src.includes('refChatAnchor: false,') && src.includes('refRolling: false,'));
+    check('src: weld suppression is fed by pickPanelRefs shipped, natural style only',
+        src.includes('pickPanelRefs(principals.map(w => w.name), refMap, null, null, refMeta.maxRefs).shipped')
+        && src.includes("refNames: (style === 'natural' && refShipped && refShipped.length) ? new Set(refShipped) : null"));
 }
 
 console.log(`\n${pass} passed, ${fail} failed`);

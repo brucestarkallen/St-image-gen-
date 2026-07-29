@@ -39,7 +39,7 @@ Generation runs after the message renders. It never delays text generation. The 
 | **Runware** (recommended) | Danbooru tags | API key + model AIR | Runs any Civitai checkpoint (Illustrious/NoobAI family) at sub-cent cost, typically 1–3 s per image. Get the AIR from the model page sidebar on Civitai, e.g. `civitai:XXXXXX@XXXXXXX`. |
 | **NovelAI** | Danbooru tags | NovelAI key set in ST's API Connections | V4.5 Full is the strongest anime model available; Opus sub = effectively unlimited standard-size gens. Steps default to 28 (the free-generation band) and can be raised to 50 on paid tiers. |
 | **Pollinations** | Natural language | None | Free, zero-config. Use it to test the pipeline before paying for anything. Quality/consistency below the other two. |
-| **NanoGPT** | Natural language | API key | One OpenAI-compatible key for Qwen-Image, Flux & 200+ models. Set Prompt style to Auto — Qwen reads paragraphs, not danbooru. |
+| **NanoGPT** | Natural language | API key | One OpenAI-compatible key for Qwen-Image, Flux & 200+ models. Set Prompt style to Auto — Qwen reads paragraphs, not danbooru. Optional **reference images** lock character likeness (experimental, below). |
 
 > API keys (Runware, NanoGPT) are stored in SillyTavern's extension settings on your server. They are included in settings exports and backups — treat those files as sensitive.
 
@@ -58,6 +58,14 @@ Set **Max panels** to 2–4 and the builder decides *per scene* whether the clim
 On by default. The builder picks up to two spoken lines per panel — **copied verbatim from the scene** — and SceneSnap draws them onto the image as manhwa-style floating bubbles (first top-left, second top-right, in speech order). Because SceneSnap renders the text itself on canvas, it is pixel-legible on **every** backend and can never come out model-garbled — no dependence on any image model's typography lottery.
 
 The verbatim guarantee is enforced, not requested: a line the builder returns is dropped unless it literally occurs in the scene text (curly quotes, case, and whitespace normalized). Invented dialogue can never reach an image. If a beat has no dialogue, the panel ships clean. Overlay failures also ship the clean panel — bubbles can never cost you the image. Pair with **Max panels 2–4** for the full stacked-strip look.
+
+## Reference images — identity by image (NanoGPT, experimental)
+
+Tag backends lock identity with verbatim tags; natural-language models don't have that grammar, so faces drift. The fix is a reference image: settings → NanoGPT → **Reference images** gives every cast character an upload slot. A character's reference rides every panel they appear in (up to the model's own declared budget, principals first), and their appearance prose is suppressed from the prompt — the image owns hair/eyes/build/outfit, while the prompt keeps the gender word, pose, expression, and state (an undress state still beats the reference). A cast entry without an upload falls back to an ST character card of the same name, if one exists; wrong-person references are never guessed.
+
+Two more sources, both opt-in: **Chat anchor** stores this chat's first clean image (chat-scoped, forgettable) as a permanent style/likeness reference; **Chain panels** feeds each panel the previous one — strips generate sequentially while it's on. References are re-encoded to clean ≤768px JPEG before sending; the structured route carries a real negative prompt but no seed (reference chaining replaces seed-locking there).
+
+**Experimental and default-off**: the request shape mirrors a field-verified NanoGPT API export, but SceneSnap's own end-to-end hop is unverified — if generations error with it on, turn it off and report. Models that don't accept references (per their own metadata) generate without them, with one warning.
 
 ## World-state grounding
 
@@ -106,6 +114,15 @@ Stella: girl, long crimson hair, red eyes, large breasts, hair ribbon, school un
 - **Auto mode fired on an old message** — it only targets the newest AI message and suppresses itself for a moment after chat switches; if you see otherwise, report the console log.
 
 ## Changelog
+
+### 0.48.0 — reference images: identity by image (NanoGPT, experimental, default-off)
+- **New: per-character reference images on the NanoGPT backend.** Natural-language models (Qwen/Flux-class) bind prose appearance weakly — faces drift between panels the way tag models never do. Each cast character can now carry a reference image (settings → NanoGPT → Reference images); it rides every panel that character appears in via NanoGPT's structured route, and that character's appearance prose is dropped from the prompt — text restating what the reference shows fights the reference and distorts likeness. Gender word + pose/expression/state still weld (an undress state beats the reference; counts survive).
+- **Chat anchor (opt-in):** a chat's first clean generated image becomes its permanent style/likeness reference, stored chat-scoped in chat metadata, forgettable from settings. **Panel chaining (opt-in):** each panel references the previous one — strips generate sequentially when on.
+- Reference priority is identity-first and budget-aware: the frame's principals' own references outrank the anchor, which outranks the rolling panel; the budget comes from the model's own declared `input_reference_constraints`. Prose suppression applies ONLY to references that actually made the budget — a budget-dropped character keeps full text identity (never an identity hole).
+- One deterministic avatar fallback: an ST character card whose name matches a cast entry without an upload. No persona-avatar autodetect (every known detection path is version-fragile import-poking) and no blind avatar dumping — a wrong-person reference corrupts likeness, worse than none.
+- References are re-encoded to clean ≤768px JPEG (strips metadata NanoGPT's parser was field-observed choking on upstream; the known "image too large" false positive gets one retry with the lowest-priority reference dropped). Capture happens on the CLEAN image, before any bubble bake.
+- The classic OpenAI-compatible route is byte-identical for every referenceless call; the structured route sends no seed (unverified parameter there — reference chaining replaces seed-locking). **Field-unverified end-to-end: ships default-off until the live battery proves it.**
+- Gate: 374 → 426 checks; reference priority, prose suppression, and the no-seed rule negative-tested.
 
 ### 0.47.2 — origin-pinned attachment; resilient strips; same-origin downloads
 - **Fixed: an image could be saved into the WRONG chat.** Switching chats while a strip was generating attached the image to whatever message sat at that index in the new chat — and persisted it there. The run is now pinned to its origin chat and message object; on mismatch the image is discarded with a clear message instead of corrupting another chat.

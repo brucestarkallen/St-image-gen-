@@ -7,7 +7,7 @@ export default [
             globals: {
                 $: 'readonly', jQuery: 'readonly', toastr: 'readonly',
                 window: 'readonly', document: 'readonly', console: 'readonly',
-                fetch: 'readonly', WebSocket: 'readonly', Image: 'readonly',
+                fetch: 'readonly', WebSocket: 'readonly', Image: 'readonly', FileReader: 'readonly',
                 Blob: 'readonly', Response: 'readonly', DecompressionStream: 'readonly',
                 DataView: 'readonly', Uint8Array: 'readonly', btoa: 'readonly',
                 setTimeout: 'readonly', clearTimeout: 'readonly',

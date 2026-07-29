@@ -12,7 +12,7 @@ import { getBase64Async, saveBase64AsFile } from '../../../utils.js';
 import { callGenericPopup, POPUP_TYPE } from '../../../popup.js';
 
 const MODULE = 'sceneSnap';
-const VERSION = '0.47.2';
+const VERSION = '0.48.0';
 
 const defaultSettings = Object.freeze({
     enabled: true,
@@ -48,6 +48,13 @@ const defaultSettings = Object.freeze({
     nanogptModel: 'qwen-image',
     nanogptSteps: 30,
     nanogptCfg: 7.5,
+    // Identity-by-image (0.48.0, NanoGPT structured route). EXPERIMENTAL and default-off:
+    // request shapes mirror a field-verified NanoGPT API export, but SceneSnap's own
+    // end-to-end hop is unverified on the field device (0.10.0 doctrine).
+    nanogptRefs: false,
+    refChatAnchor: false,
+    refRolling: false,
+    castRefs: {},            // { castName: { characterName: dataUrl } } — curated reference images
 });
 
 const SIZE_PRESETS = {
@@ -854,6 +861,18 @@ function assembleIdentity(who, sheetText, opts = {}) {
         if (hit && !isPlaceholderTags(hit.tags)) {
             const tags = neutralizeRoleUniforms(stripRankInsignia(stripNameTags(hit.tags, hit.name)), opts.worldDress || opts.dress);
             const scrubbed = stripRankInsignia(scrubState(state, tags, EXPLICIT_STATE.test(state) ? 420 : 200));
+            // Identity-by-image (0.48.0): when THIS character's reference image ships with
+            // the panel, appearance prose is suppressed — text restating what the reference
+            // shows fights the reference and distorts likeness (field-verified upstream).
+            // Only the count-bearing gender word + this character's state (pose, expression,
+            // action, undress) remain. refNames is populated ONLY from refs that made the
+            // model's budget, so suppression can never outrun shipping; world dress is not
+            // welded either — the reference owns the outfit, while an undress state in the
+            // scrubbed text still beats the reference (positives always win).
+            if (opts.refNames && opts.refNames.has(hit.name.toLowerCase())) {
+                blocks.push([genderToken(tags), scrubbed].filter(Boolean).join(', '));
+                continue;
+            }
             // A state of undress UNDRESSES the weld, or the welded garment wins.
             const dressed = applyUndress(tags, scrubbed);
             // A character the state undressed never gets re-dressed by the world
@@ -1781,6 +1800,25 @@ function capBubbleText(text) {
     if (antiModernOn && panels.setting) panels.setting = purgeModernRoles(neutralizeRoleUniforms(panels.setting, rawDress));
     const dress = cleanWorldDress(stripPersonalGarments(rawDress, getActiveCastSheet()), antiModernOn);
     let activeSheet = getActiveCastSheet();
+    // Identity-by-image resolution (0.48.0): active only on the NanoGPT backend with the
+    // master switch on and a natural-language prompt in play. Resolved BEFORE the weld so
+    // prose suppression and the actual send agree on exactly which references ship.
+    let refMap = null;
+    let refMeta = null;
+    if (settings.backend === 'nanogpt' && settings.nanogptRefs && style === 'natural') {
+        const endpoint = await fetchNanogptEndpointMeta(settings.nanogptModel);
+        if (!nanogptIsStructured(endpoint, settings.nanogptModel)) {
+            const wk = `nanogpt-norefs:${getContext().chatId ?? 'chat'}`;
+            if (!sheetWarned.has(wk)) {
+                sheetWarned.add(wk);
+                toastr.warning(`"${settings.nanogptModel}" does not accept reference images on NanoGPT — generating without them.`, 'SceneSnap', { timeOut: 9000 });
+            }
+        } else {
+            refMap = await resolveCharacterRefs();
+            refMeta = { maxRefs: nanogptMaxRefs(endpoint) };
+            if (!Object.keys(refMap).length && !settings.refChatAnchor && !settings.refRolling) { refMap = null; refMeta = null; }
+        }
+    }
     // The scene's own wardrobe tracker ('| nothing |' in the header) is the highest
     // clothing authority there is — it overrides cast sheets AND builder states.
     const sceneNude = /\|\s*(?:nothing|nude|naked)\s*(?:\||\])/i.test(scene);
@@ -1837,7 +1875,13 @@ function capBubbleText(text) {
         // the shared prompt (field: 'dramatic backlighting from pale sun' welded into
         // a block gave one panel its own sky).
         for (const w of principals) w.state = unifyStripLighting(String(w.state || ''), anchorText);
-        const id = assembleIdentity(principals, activeSheet, { dress: firstGarmentTag(dress), worldDress: dress });
+        const refShipped = (refMap && refMeta)
+            ? pickPanelRefs(principals.map(w => w.name), refMap, null, null, refMeta.maxRefs).shipped
+            : null;
+        const id = assembleIdentity(principals, activeSheet, {
+            dress: firstGarmentTag(dress), worldDress: dress,
+            refNames: (style === 'natural' && refShipped && refShipped.length) ? new Set(refShipped) : null,
+        });
         if (id.missing.length) console.warn('[SceneSnap] panel "who" names still not in cast sheet:', id.missing);
         id.blocks = anatomyFloor(id.blocks, p.explicit);
         const bgTag = background.length ? backgroundFigureTag(background, activeSheet) : '';
@@ -1878,7 +1922,7 @@ function capBubbleText(text) {
         // Identity welded by code — the seed no longer has to protect subject appearance.
         p.welded = id.blocks.length > 0;
     }
-    return { panels, style, raw: String(raw), setting: panels.setting || '', dress, schemaSent, plan, planNotes };
+    return { panels, style, raw: String(raw), setting: panels.setting || '', dress, schemaSent, plan, planNotes, refMap, refMeta };
 }
 
 // ------------------------------------------------------------------ backends
@@ -2013,16 +2057,271 @@ function isStaleSession(status, bodyText) {
     return status === 403 && /invalid csrf token/i.test(String(bodyText || ''));
 }
 
+// ------------------------------------------------------------------ reference images (0.48.0)
+// Identity-by-image for natural-language models: prose descriptions of appearance bind
+// weakly on Qwen/Flux-class encoders — faces drift between panels the way tag models
+// never do. A reference image of the character locks likeness the way verbatim tags
+// lock it on tag backends. EXPERIMENTAL + default-off: the structured-route request
+// shape mirrors a NanoGPT API export field-verified upstream (comic-panel-generator),
+// but SceneSnap's own end-to-end hop is unverified on the field device.
+
+// Aspect labels NanoGPT's own request examples pair with each documented resolution.
+const NANOGPT_RES_ASPECTS = { 'auto': '1:1', '1024x1024': '1:1', '512x512': '1:1', '768x1024': '3:4', '576x1024': '9:16', '1024x768': '4:3', '1024x576': '16:9' };
+
+// Structured-route detection: Qwen-family is structured by the field-verified export
+// (checked FIRST — that export outranks the metadata endpoint, whose shape is less
+// proven); other models are structured when their own declared parameters say so.
+function nanogptIsStructured(endpoint, model) {
+    if (/qwen/i.test(String(model || ''))) return true;
+    const params = endpoint?.supported_parameters ? Object.keys(endpoint.supported_parameters) : [];
+    return params.includes('imageDataUrl') || params.includes('imageDataUrls') || params.includes('nImages');
+}
+
+// The model's own declared reference budget; a structured model that declares none gets
+// the conservative 1 — over-sending references is a 400, under-sending is just weaker.
+function nanogptMaxRefs(endpoint) {
+    const m = endpoint?.input_reference_constraints?.max_items;
+    return (typeof m === 'number' && m > 0) ? m : 1;
+}
+
+// Map SceneSnap's size presets onto the structured route's resolution enum, honoring the
+// model's own declared options; an unrecognized list degrades to 'auto', never a guess.
+function structuredResolutionFor(landscape, sizePreset, options) {
+    const want = landscape
+        ? (sizePreset === 'wide' ? '1024x576' : '1024x768')
+        : (sizePreset === 'square' ? '1024x1024' : '768x1024');
+    const list = Array.isArray(options) && options.length ? options : Object.keys(NANOGPT_RES_ASPECTS);
+    if (list.includes(want)) return want;
+    if (list.includes('auto')) return 'auto';
+    return list[0];
+}
+
+// Every field mirrors the verified export, including the wan27_* scaffolding NanoGPT's
+// own frontend always sends. NO seed: the export never carries one, and an unverified
+// parameter on this route risks a 400 — reference chaining replaces seed-locking here.
+function buildNanogptStructuredBody(model, prompt, negative, resolution, aspect, steps, cfg, explicit, refs) {
+    const body = {
+        model,
+        prompt,
+        negative_prompt: negative || '',
+        resolution,
+        resolutionExplicit: true,
+        aspect_ratio: aspect,
+        nImages: 1,
+        guidance_scale: cfg,
+        num_inference_steps: steps,
+        showExplicitContent: !!explicit,
+        enable_safety_checker: !explicit,
+        wan27_has_video_input: false,
+        wan27_has_reference_images: Array.isArray(refs) && refs.length > 0,
+    };
+    if (Array.isArray(refs) && refs.length > 0) body.imageDataUrls = refs.slice();
+    return body;
+}
+
+// Reference priority is identity-first, always: the frame's principals' own references
+// (in who order) outrank the chat anchor, which outranks the rolling previous panel.
+// `shipped` names exactly which principals' refs made the budget — the weld suppresses
+// appearance prose for THOSE characters and no one else. A character whose ref was
+// budget-dropped keeps full text identity; suppressing without shipping would be an
+// identity hole, the exact regression class invariant 1a0000 forbids.
+function pickPanelRefs(principalNames, refMap, anchorRef, rollingRef, maxRefs) {
+    const cap = Math.max(0, Number(maxRefs) || 0);
+    const refs = [];
+    const shipped = [];
+    for (const n of (principalNames || [])) {
+        if (refs.length >= cap) break;
+        const key = String(n || '').trim().toLowerCase();
+        const u = refMap && Object.prototype.hasOwnProperty.call(refMap, key) ? refMap[key] : null;
+        if (u) { refs.push(u); shipped.push(key); }
+    }
+    if (anchorRef && refs.length < cap) refs.push(anchorRef);
+    if (rollingRef && refs.length < cap) refs.push(rollingRef);
+    return { refs, shipped };
+}
+
+// The one token a reference image cannot carry into the prompt: the count-bearing
+// gender word. First gendered token of the cast block wins; first token as fallback.
+function genderToken(tags) {
+    const toks = String(tags || '').split(',').map(t => t.trim()).filter(Boolean);
+    for (const t of toks) {
+        if (/\b(?:boy|girl|man|woman|male|female|other)\b/i.test(t)) return t;
+    }
+    return toks[0] || '';
+}
+
+// Defensive extraction across every response shape NanoGPT's image routes have been
+// seen to return (OpenAI-style data[], images[], output[], bare url, raw string).
+function extractNanogptImage(data) {
+    const first = data?.data?.[0] ?? data?.images?.[0] ?? data?.output?.[0];
+    if (typeof first === 'string' && first.length > 15) return { url: first };
+    if (first?.b64_json) return { b64: first.b64_json };
+    if (first?.url) return { url: first.url };
+    if (typeof data?.url === 'string' && data.url.length > 15) return { url: data.url };
+    return null;
+}
+
+const nanogptEndpointCache = new Map();
+
+// Endpoint metadata: the model's own declared constraints (reference budget, resolution
+// options), cached per model. Direct fetch matches this backend's established CORS
+// posture (nano-gpt.com serves CORS headers; generateNanogpt has fetched it directly
+// since the backend shipped). Failure caches null and the feature degrades to
+// no-references — never to a broken image.
+async function fetchNanogptEndpointMeta(model) {
+    const id = String(model || '').trim();
+    if (!id) return null;
+    if (nanogptEndpointCache.has(id)) return nanogptEndpointCache.get(id);
+    let endpoint = null;
+    try {
+        const headers = { 'Content-Type': 'application/json' };
+        const key = String(settings.nanogptKey || '').trim();
+        if (key) headers['Authorization'] = `Bearer ${key}`;
+        const res = await fetch(`https://nano-gpt.com/api/v1/images/models/${encodeURIComponent(id)}/endpoints`, { headers });
+        if (res.ok) {
+            const data = await res.json().catch(() => null);
+            endpoint = Array.isArray(data?.endpoints) ? (data.endpoints[0] || null) : null;
+        }
+    } catch (e) {
+        console.warn('[SceneSnap] NanoGPT endpoint metadata fetch failed (references degrade to conservative defaults):', e);
+    }
+    nanogptEndpointCache.set(id, endpoint);
+    return endpoint;
+}
+
+// Canvas re-encode: bounds the long edge to 768px (settings/chatMetadata weight) and
+// strips embedded metadata — NanoGPT's parser was field-observed upstream rejecting a
+// normal-sized generated image as "too large" over something non-pixel in the file.
+// Output is a clean JPEG data URL. Callers treat failure as "no reference captured";
+// this never throws into a generation path uncaught.
+function normalizeRefImage(dataUrl) {
+    return new Promise((resolve, reject) => {
+        const img = new Image();
+        img.onload = () => {
+            try {
+                const long = Math.max(img.naturalWidth, img.naturalHeight) || 1;
+                const scale = Math.min(1, 768 / long);
+                const canvas = document.createElement('canvas');
+                canvas.width = Math.max(1, Math.round(img.naturalWidth * scale));
+                canvas.height = Math.max(1, Math.round(img.naturalHeight * scale));
+                canvas.getContext('2d').drawImage(img, 0, 0, canvas.width, canvas.height);
+                resolve(canvas.toDataURL('image/jpeg', 0.9));
+            } catch (e) { reject(e); }
+        };
+        img.onerror = () => reject(new Error('reference image failed to decode'));
+        img.src = dataUrl;
+    });
+}
+
+// Full data URL (mime intact) via the same same-origin rules as urlToBase64.
+async function urlToDataUrl(url) {
+    const u = String(url);
+    const fetchUrl = /^https?:\/\//i.test(u) ? `/proxy/${encodeURIComponent(u)}` : u;
+    const res = await fetch(fetchUrl);
+    if (!res.ok) throw new Error(`Failed to download image (${res.status})`);
+    return String(await getBase64Async(await res.blob()));
+}
+
+const avatarRefCache = new Map();
+
+// Per-character reference map for the ACTIVE cast: curated uploads first (settings.castRefs,
+// stored normalized), then the one deterministic avatar fallback — an ST character card
+// whose NAME matches a cast entry that has no upload. No blind avatar dumping: a
+// reference of the wrong person corrupts likeness, which is worse than no reference.
+// (Persona-avatar autodetect is deliberately absent: every known detection path is
+// version-fragile import-poking — upload the persona's reference on their cast line.)
+async function resolveCharacterRefs() {
+    const out = {};
+    const names = parseCastSheet(getActiveCastSheet()).map(c => c.name);
+    const stored = (settings.castRefs && settings.castRefs[getActiveCastName()]) || {};
+    const storedKeys = Object.keys(stored);
+    for (const n of names) {
+        const key = n.toLowerCase();
+        const hit = storedKeys.find(k => k.toLowerCase() === key);
+        if (hit && typeof stored[hit] === 'string' && stored[hit].startsWith('data:')) out[key] = stored[hit];
+    }
+    try {
+        const ctx = getContext();
+        for (const ch of (ctx.characters || [])) {
+            const key = String(ch?.name || '').trim().toLowerCase();
+            if (!key || out[key] || !ch?.avatar || !names.some(n => n.toLowerCase() === key)) continue;
+            if (!avatarRefCache.has(ch.avatar)) {
+                try {
+                    avatarRefCache.set(ch.avatar, await normalizeRefImage(await urlToDataUrl(`/characters/${encodeURIComponent(ch.avatar)}`)));
+                } catch (e) {
+                    console.warn('[SceneSnap] avatar reference fetch failed for', ch.name, e);
+                    avatarRefCache.set(ch.avatar, null);
+                }
+            }
+            if (avatarRefCache.get(ch.avatar)) out[key] = avatarRefCache.get(ch.avatar);
+        }
+    } catch { /* references degrade silently */ }
+    return out;
+}
+
+// The structured route (/api/v1/images/generations) is the only NanoGPT route that
+// accepts reference images. Used ONLY when references actually ride along — the classic
+// OpenAI-compatible route below stays byte-identical for every referenceless call, so
+// the experiment can never regress the shipped path. No seed on this route (unverified);
+// likeness continuity is the references' job.
+async function generateNanogptStructured(key, model, positive, negative, landscape, extra) {
+    const endpoint = await fetchNanogptEndpointMeta(model);
+    const options = endpoint?.supported_parameters?.resolution?.options;
+    const resolution = structuredResolutionFor(landscape, settings.sizePreset, Array.isArray(options) ? options.map(o => o?.value).filter(Boolean) : null);
+    const body = buildNanogptStructuredBody(
+        model, positive, negative,
+        resolution, NANOGPT_RES_ASPECTS[resolution] || '1:1',
+        Math.max(1, Number(settings.nanogptSteps) || 30), Number(settings.nanogptCfg) || 7.5,
+        !!extra?.explicit, extra.refs,
+    );
+    console.log(`[SceneSnap] NanoGPT structured route: ${body.imageDataUrls?.length || 0} reference(s), ${resolution}`);
+    const attempt = async () => {
+        try {
+            return await fetch('https://nano-gpt.com/api/v1/images/generations', {
+                method: 'POST',
+                headers: { 'Authorization': `Bearer ${key}`, 'Content-Type': 'application/json' },
+                body: JSON.stringify(body),
+            });
+        } catch (e) {
+            throw new Error('NanoGPT request failed at browser level — if this repeats, the API host is refusing cross-origin browser calls (CORS), and this backend needs a proxy. ' + (e?.message || e));
+        }
+    };
+    let res = await attempt();
+    if (!res.ok) {
+        let text = await res.text().catch(() => '');
+        // Field-known NanoGPT parser bug (observed upstream): a reference of perfectly
+        // normal decoded dimensions rejected as "too large" with a nonsense size. One
+        // retry with the LOWEST-priority reference dropped — never a dead panel over it.
+        if ((res.status === 413 || /IMAGE_INPUT_TOO_LARGE/i.test(text)) && Array.isArray(body.imageDataUrls) && body.imageDataUrls.length) {
+            console.warn('[SceneSnap] NanoGPT rejected a reference as too large (known false positive) — retrying with the last reference dropped:', text);
+            body.imageDataUrls = body.imageDataUrls.slice(0, -1);
+            body.wan27_has_reference_images = body.imageDataUrls.length > 0;
+            if (!body.imageDataUrls.length) delete body.imageDataUrls;
+            res = await attempt();
+            if (!res.ok) text = await res.text().catch(() => '');
+        }
+        if (!res.ok) throw new Error(`NanoGPT: ${text || res.status} (check your API key and model id)`);
+    }
+    const data = await res.json().catch(() => null);
+    const out = extractNanogptImage(data);
+    if (out?.b64) return { format: 'png', data: out.b64 };
+    if (out?.url) return { format: 'png', data: out.url, isUrl: true };
+    throw new Error('NanoGPT returned no image');
+}
+
 // NanoGPT's OpenAI-compatible image route: one key, 200+ models (Qwen-Image, Flux,
 // HiDream...). The route has NO negative-prompt field — Qwen/Flux-class models
 // largely ignore negatives anyway, so nothing is fabricated. Seed is forwarded as a
 // hint (reproducibility is model-dependent per the docs). Discovery of each model's
 // capabilities (including the nsfw flag) lives at GET /api/v1/images/models.
-async function generateNanogpt(positive, negative, landscape, seed) {
+async function generateNanogpt(positive, negative, landscape, seed, extra) {
     const key = String(settings.nanogptKey || '').trim();
     const model = String(settings.nanogptModel || 'qwen-image').trim();
     if (!key) throw new Error('NanoGPT API key is not set (SceneSnap settings)');
     if (!model) throw new Error('NanoGPT model is not set — e.g. qwen-image, flux, hidream');
+    if (Array.isArray(extra?.refs) && extra.refs.length) {
+        return generateNanogptStructured(key, model, positive, negative, landscape, extra);
+    }
     const { width, height } = getSize(landscape);
     let res;
     try {
@@ -2070,11 +2369,11 @@ async function mapLimit(items, limit, fn) {
     return out;
 }
 
-async function generateWithBackend(positive, negative, landscape, seed) {
+async function generateWithBackend(positive, negative, landscape, seed, extra) {
     switch (settings.backend) {
         case 'runware': return generateRunware(positive, negative, landscape, seed);
         case 'novelai': return generateNovelAI(positive, negative, landscape, seed);
-        case 'nanogpt': return generateNanogpt(positive, negative, landscape, seed);
+        case 'nanogpt': return generateNanogpt(positive, negative, landscape, seed, extra);
         default: return generatePollinations(positive, negative, landscape, seed);
     }
 }
@@ -2263,7 +2562,7 @@ async function illustrateMessage(mesId, { force = false } = {}) {
         let debugPrompts = [];
 
 
-            const { panels, style, raw, setting, dress, schemaSent, plan, planNotes } = await buildScenePrompt(mesId);
+            const { panels, style, raw, setting, dress, schemaSent, plan, planNotes, refMap, refMeta } = await buildScenePrompt(mesId);
             // V4.5 Curated is trained on filtered data and suppresses explicit
             // anatomy. An explicit panel on Curated is a silent NSFW kill — warn
             // once per chat instead of letting the user debug a blank.
@@ -2302,22 +2601,44 @@ async function illustrateMessage(mesId, { force = false } = {}) {
             }
             panels.forEach((p, i) => debugPrompts.push(`PANEL ${i + 1} WHO — ${p.who && p.who.length ? p.who.map(w => w.state ? `${w.name} [${w.state}]` : w.name).join(' | ') : (p.whoDeclared ? '(establishing frame — crowd is the subject)' : schemaSent ? '(builder omitted the who field)' : '(single frame — builder-written identity)')}`));
             panels.forEach((p, i) => p.bubbles.forEach(b => debugPrompts.push(`PANEL ${i + 1} BUBBLE — ${b.speaker || '?'}: "${b.text}"`)));
+            if (refMap && refMeta) debugPrompts.push(`REFS — ${Object.keys(refMap).length} character reference(s) [${Object.keys(refMap).join(', ')}], budget ${refMeta.maxRefs}${settings.refChatAnchor ? ', chat anchor on' : ''}${settings.refRolling ? ', rolling on' : ''}`);
             console.log(`[SceneSnap] ${finals.length} panel(s) (${style}):`, finals);
             // One seed for the whole strip: same character rendering in every panel.
             // Panels render in PARALLEL (concurrency 2) — sequential was the slowdown.
             const runSeed = Math.floor(Math.random() * 2 ** 31);
+            // Identity-by-image (0.48.0): per-panel reference assembly. The chat anchor is
+            // CHAT-SCOPED state (chatMetadata, like the cast binding); the rolling reference
+            // chains panels and therefore forces sequential generation — likeness continuity
+            // bought with wall-clock, the user's explicit opt-in trade.
+            const refsActive = !!(refMap && refMeta);
+            const anchorRef = refsActive && settings.refChatAnchor ? (getContext().chatMetadata?.scenesnap_anchor || null) : null;
+            const rollingOn = refsActive && !!settings.refRolling;
+            const wantAnchorCapture = refsActive && settings.refChatAnchor && !anchorRef;
+            const rawPanelRefs = [];
             // A panel that fails must not kill the strip: one retry, then the panel
             // drops out and the survivors ship. Only a TOTAL failure errors — and it
             // errors with the backend's own message, not a generic one. Panels that
             // already succeeded are paid API calls; throwing them away was the bug.
             const failedPanels = [];
             let lastPanelError = null;
-            panelImages = await mapLimit(panels, 2, async (p, i) => {
+            panelImages = await mapLimit(panels, rollingOn ? 1 : 2, async (p, i) => {
                 const produce = async () => {
-                    const result = await generateWithBackend(finals[i], negFull, panels.length > 1, seedForPanel(runSeed, (p.who || []).map(w => w.name), p.welded));
+                    let extra;
+                    if (refsActive) {
+                        const rolling = rollingOn && i > 0 ? (rawPanelRefs[i - 1] || null) : null;
+                        const { refs } = pickPanelRefs((p.who || []).map(w => w.name), refMap, anchorRef, rolling, refMeta.maxRefs);
+                        if (refs.length) extra = { refs, explicit: !!p.explicit };
+                    }
+                    const result = await generateWithBackend(finals[i], negFull, panels.length > 1, seedForPanel(runSeed, (p.who || []).map(w => w.name), p.welded), extra);
                     const fmt = result.format || panelFormat;
                     panelFormat = fmt;
                     let imageB64 = result.isUrl ? await urlToBase64(result.data) : result.data;
+                    // Reference capture happens on the CLEAN image, before any bubble bake —
+                    // a baked bubble in a reference teaches the model to draw bubble shapes.
+                    if (rollingOn || wantAnchorCapture) {
+                        try { rawPanelRefs[i] = await normalizeRefImage(`data:image/${fmt === 'jpg' ? 'jpeg' : fmt};base64,${imageB64}`); }
+                        catch (e) { console.warn('[SceneSnap] reference capture failed (generation unaffected):', e); }
+                    }
                     if (p.bubbles.length) {
                         try { imageB64 = await overlayBubbles(imageB64, fmt, p.bubbles); }
                         catch (e) { console.warn('[SceneSnap] bubble overlay failed, shipping the clean panel:', e); }
@@ -2361,6 +2682,18 @@ async function illustrateMessage(mesId, { force = false } = {}) {
         // persist the corruption. Discard instead of corrupting; never the reverse.
         if ((ctx2.chatId ?? null) !== chatId0 || ctx2.chat[mesId] !== message) {
             throw new Error('The chat changed while the image was generating — the image was discarded rather than attached to the wrong chat. Press the button again to regenerate here.');
+        }
+
+        // Chat anchor (0.48.0): the chat's FIRST clean image becomes its permanent
+        // likeness reference — stored in chatMetadata (chat-scoped, persisted by the
+        // saveChat below), only after the origin pin proved this is still that chat.
+        // Forgettable from settings.
+        if (wantAnchorCapture) {
+            const fi = rawPanelRefs.findIndex(Boolean);
+            if (fi >= 0 && ctx2.chatMetadata) {
+                ctx2.chatMetadata.scenesnap_anchor = rawPanelRefs[fi];
+                refreshRefsUI();
+            }
         }
 
         const subFolder = String(ctx2.name2 || 'SceneSnap');
@@ -2671,6 +3004,14 @@ function settingsHtml() {
                         <div class="flex1"><label for="snapshot_nanogpt_cfg">Guidance</label><input id="snapshot_nanogpt_cfg" type="number" min="0" max="20" step="0.5" class="text_pole"></div>
                     </div>
                     <small class="snapshot_hint">Steps 20–40 is the sweet spot. Guidance: prompt adherence, ~7.5 default; lower for softer interpretation.</small>
+                    <label class="checkbox_label"><input id="snapshot_nanogpt_refs" type="checkbox"><span>Reference images — identity by image (experimental)</span></label>
+                    <div id="snapshot_refs_block">
+                        <small class="snapshot_hint">Natural-language models drift on faces; a reference image locks likeness. A character's reference rides every panel they appear in, and their appearance prose is dropped from the prompt — the image owns it. Field-unverified route: if generations error, turn this off and report.</small>
+                        <div id="snapshot_refs_list"></div>
+                        <label class="checkbox_label"><input id="snapshot_refs_anchor" type="checkbox"><span>Chat anchor — this chat's first image becomes its permanent style/likeness reference</span></label>
+                        <div id="snapshot_refs_anchor_row"></div>
+                        <label class="checkbox_label"><input id="snapshot_refs_rolling" type="checkbox"><span>Chain panels — each panel references the previous one (strips generate sequentially: slower)</span></label>
+                    </div>
                 </div>
 
                 <div id="snapshot_pollinations_block" class="snapshot_backend_block">
@@ -2765,6 +3106,44 @@ function refreshCastUI() {
     }
     $sel.val(active);
     $('#snapshot_cast_sheet').val(settings.casts[active] || '');
+    refreshRefsUI();
+}
+
+// Reference-image UI (0.48.0): one row per cast character (thumb + set/clear), plus the
+// per-chat anchor thumbnail with its forget button. Re-rendered whenever the cast, the
+// chat, or the toggles change — rows are delegated-bound, so re-rendering is safe.
+function refreshRefsUI() {
+    const $block = $('#snapshot_refs_block');
+    if (!$block.length) return;
+    $('#snapshot_nanogpt_refs').prop('checked', !!settings.nanogptRefs);
+    $('#snapshot_refs_anchor').prop('checked', !!settings.refChatAnchor);
+    $('#snapshot_refs_rolling').prop('checked', !!settings.refRolling);
+    $block.toggle(!!settings.nanogptRefs);
+    const $list = $('#snapshot_refs_list').empty();
+    const stored = (settings.castRefs && settings.castRefs[getActiveCastName()]) || {};
+    const storedKeys = Object.keys(stored);
+    for (const c of parseCastSheet(getActiveCastSheet())) {
+        const hit = storedKeys.find(k => k.toLowerCase() === c.name.toLowerCase());
+        const $row = $('<div class="snapshot_ref_row">').attr('data-name', c.name);
+        if (hit) $row.append($('<img class="snapshot_ref_thumb" alt="">').attr('src', stored[hit]));
+        $row.append($('<span class="snapshot_ref_name">').text(c.name));
+        $row.append($('<button class="menu_button snapshot_ref_pick" title="Set reference image">📎</button>'),
+            $('<input type="file" accept="image/*" class="snapshot_ref_file" hidden>'));
+        if (hit) $row.append($('<button class="menu_button snapshot_ref_clear" title="Remove reference">✕</button>'));
+        $list.append($row);
+    }
+    if (!$list.children().length) $list.append($('<small class="snapshot_hint">Cast sheet is empty — add characters first; each gets a reference slot here.</small>'));
+    const $arow = $('#snapshot_refs_anchor_row').empty();
+    if (settings.refChatAnchor) {
+        let anchor = null;
+        try { anchor = getContext().chatMetadata?.scenesnap_anchor || null; } catch { /* noop */ }
+        if (anchor) {
+            $arow.append($('<img class="snapshot_ref_thumb" alt="">').attr('src', anchor),
+                $('<button class="menu_button" id="snapshot_refs_anchor_forget" title="Forget this chat&#39;s anchor">Forget anchor</button>'));
+        } else {
+            $arow.append($('<small class="snapshot_hint">No anchor yet — this chat&#39;s next generated image will be stored.</small>'));
+        }
+    }
 }
 
 function toggleBackendBlocks() {
@@ -2805,7 +3184,7 @@ function syncUI() {
 }
 
 // Settings that survive a reset: credentials, model choice, and user-authored content.
-const RESET_KEEP_KEYS = ['runwareKey', 'runwareModel', 'casts', 'extraRules', 'builderProfile', 'backend', 'nanogptKey', 'nanogptModel'];
+const RESET_KEEP_KEYS = ['runwareKey', 'runwareModel', 'casts', 'castRefs', 'extraRules', 'builderProfile', 'backend', 'nanogptKey', 'nanogptModel'];
 
 function resetToDefaults() {
     const kept = {};
@@ -2850,6 +3229,51 @@ function bindSettings() {
     $('#snapshot_nanogpt_steps').on('input', function () { settings.nanogptSteps = Number(this.value) || 30; saveSettingsDebounced(); });
     $('#snapshot_nanogpt_cfg').on('input', function () { settings.nanogptCfg = Number(this.value) || 7.5; saveSettingsDebounced(); });
 
+    $('#snapshot_nanogpt_refs').on('change', function () { settings.nanogptRefs = this.checked; saveSettingsDebounced(); refreshRefsUI(); });
+    $('#snapshot_refs_anchor').on('change', function () { settings.refChatAnchor = this.checked; saveSettingsDebounced(); refreshRefsUI(); });
+    $('#snapshot_refs_rolling').on('change', function () { settings.refRolling = this.checked; saveSettingsDebounced(); });
+    $(document).on('click', '#snapshot_refs_anchor_forget', () => {
+        try {
+            const ctx = getContext();
+            if (ctx.chatMetadata) {
+                delete ctx.chatMetadata.scenesnap_anchor;
+                if (typeof ctx.saveMetadataDebounced === 'function') ctx.saveMetadataDebounced();
+                else if (typeof ctx.saveChat === 'function') ctx.saveChat();
+            }
+        } catch { /* noop */ }
+        refreshRefsUI();
+    });
+    $(document).on('click', '.snapshot_ref_pick', function () { $(this).siblings('.snapshot_ref_file').trigger('click'); });
+    $(document).on('change', '.snapshot_ref_file', function () {
+        const file = this.files && this.files[0];
+        const name = $(this).closest('.snapshot_ref_row').attr('data-name');
+        this.value = '';
+        if (!file || !name) return;
+        const reader = new FileReader();
+        reader.onload = async () => {
+            try {
+                const normalized = await normalizeRefImage(String(reader.result));
+                const castName = getActiveCastName();
+                if (!settings.castRefs || typeof settings.castRefs !== 'object') settings.castRefs = {};
+                if (!settings.castRefs[castName] || typeof settings.castRefs[castName] !== 'object') settings.castRefs[castName] = {};
+                settings.castRefs[castName][name] = normalized;
+                saveSettingsDebounced();
+                refreshRefsUI();
+            } catch (e) { toastr.error(`Could not read that image: ${e?.message || e}`, 'SceneSnap'); }
+        };
+        reader.onerror = () => toastr.error('Could not read that file', 'SceneSnap');
+        reader.readAsDataURL(file);
+    });
+    $(document).on('click', '.snapshot_ref_clear', function () {
+        const name = $(this).closest('.snapshot_ref_row').attr('data-name');
+        const stored = settings.castRefs && settings.castRefs[getActiveCastName()];
+        if (stored && name) {
+            const hit = Object.keys(stored).find(k => k.toLowerCase() === name.toLowerCase());
+            if (hit) { delete stored[hit]; saveSettingsDebounced(); }
+        }
+        refreshRefsUI();
+    });
+
     $('#snapshot_reset').on('click', () => {
         if (!window.confirm('Reset SceneSnap to default settings?\n\nKept: API key, Runware model, cast sheets, extra rules, builder profile, backend choice.')) return;
         resetToDefaults();
@@ -2859,10 +3283,12 @@ function bindSettings() {
     $('#snapshot_cast_select').on('change', function () {
         setActiveCastName(this.value);
         $('#snapshot_cast_sheet').val(settings.casts[this.value] || '');
+        refreshRefsUI();
     });
     $('#snapshot_cast_sheet').on('input', function () {
         settings.casts[getActiveCastName()] = this.value;
         saveSettingsDebounced();
+        refreshRefsUI();
     });
     $('#snapshot_cast_new').on('click', () => {
         const name = window.prompt('New cast name:');
