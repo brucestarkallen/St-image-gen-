@@ -1691,13 +1691,17 @@ Rukia lay under him with her chest heaving, flushed pink from her face to her br
     check('seed: deterministic — same chat id, same seed, every time',
         S.hashSeed('chat-123#0') === S.hashSeed('chat-123#0'));
     check('seed: different chats decorrelate', S.hashSeed('chat-123#0') !== S.hashSeed('chat-124#0'));
-    check('seed: a reroll advances the seed', S.hashSeed('chat-123#0') !== S.hashSeed('chat-123#1'));
+    check('seed: a reroll advances the seed', S.hashSeed('chat-123#7#0') !== S.hashSeed('chat-123#7#1'));
+    check('seed: different MESSAGES decorrelate — no chat-wide monotony, no cursed base seed',
+        S.hashSeed('chat-123#7#0') !== S.hashSeed('chat-123#8#0'));
+    check('seed: same (chat, message, roll) always redraws the same image',
+        S.hashSeed('chat-123#7#0') === S.hashSeed('chat-123#7#0'));
     check('seed: int31 backend-safe on hostile input',
         [S.hashSeed(''), S.hashSeed(null), S.hashSeed('𝕬𝖇𝖈'.repeat(64))].every(n => Number.isInteger(n) && n >= 0 && n < 2 ** 31));
     check('seed: threads seedForPanel unchanged — welded panels share the chat base',
         S.seedForPanel(S.hashSeed('c#0'), ['A'], true) === S.hashSeed('c#0') % 2147483647);
     check('src: the run seed derives from the CHAT; rolls advance it; random only without a chat id',
-        src.includes('hashSeed(`${chatId0}#${rolls}`)')
+        src.includes('hashSeed(`${chatId0}#${mesId}#${rolls}`)')
         && src.includes('Number(message.extra?.scenesnap_rolls) || 0')
         && !src.includes('const runSeed = Math.floor(Math.random()'));
     check('src: the roll counter advances on SUCCESS only, on the illustrated message',

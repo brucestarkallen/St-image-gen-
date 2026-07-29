@@ -117,6 +117,10 @@ Stella: girl, long crimson hair, red eyes, large breasts, hair ribbon, school un
 
 ## Changelog
 
+### 0.50.1 — seed correction: deterministic per message, never shared chat-wide
+- **Corrects 0.49.0's over-reach.** Keying the base seed to the chat alone gave every message's *first* generation one shared seed: similar beats pulled visibly similar compositions, and an unlucky base seed haunted every new message with per-message rerolls as the only escape. The base now derives from **chat id + message id + roll** — different messages decorrelate exactly like the old random behavior, but reproducibly: a failed panel retries *its* seed, a regenerate advances the roll, and the same (chat, message, roll) always redraws the same image. Cross-message character consistency was never the seed's job — the cast weld and reference images own it. Within a strip nothing changes.
+- Gate: 449 → 451 checks; the chat-only regression negative-tested.
+
 ### 0.50.0 — the cast is the chat's (kills cross-story character leakage)
 - **Fixed: new chats inherited old chats' characters.** Every chat's auto-seeded characters piled into the shared global `Default` cast, and an unbound chat fell back to it — so a brand-new story opened with the previous story's faces in its sheet, its builder context, and its world-dress mining. Root cause: `getActiveCastName()`'s global fallback. Now an unbound chat **derives its own cast** — `card · chatId` — automatically: it starts EMPTY, auto-build seeds *this* chat's characters, and the binding persists in chat metadata. Same card, different chat = different cast; the leak is structurally impossible.
 - Deliberate world-sharing still works and is the sharing mechanism: bind any chats to one named cast via the dropdown (persists per chat, as since 0.42.0). The dropdown lists the chat's derived cast even before it has content.

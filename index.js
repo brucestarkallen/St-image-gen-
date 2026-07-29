@@ -12,7 +12,7 @@ import { getBase64Async, saveBase64AsFile } from '../../../utils.js';
 import { callGenericPopup, POPUP_TYPE } from '../../../popup.js';
 
 const MODULE = 'sceneSnap';
-const VERSION = '0.50.0';
+const VERSION = '0.50.1';
 
 const defaultSettings = Object.freeze({
     enabled: true,
@@ -2664,17 +2664,19 @@ async function illustrateMessage(mesId, { force = false } = {}) {
             panels.forEach((p, i) => p.bubbles.forEach(b => debugPrompts.push(`PANEL ${i + 1} BUBBLE — ${b.speaker || '?'}: "${b.text}"`)));
             if (refMap && refMeta) debugPrompts.push(`REFS — ${Object.keys(refMap).length} character reference(s) [${Object.keys(refMap).join(', ')}], budget ${refMeta.maxRefs}${settings.refChatAnchor ? ', chat anchor on' : ''}${settings.refRolling ? ', rolling on' : ''}`);
             console.log(`[SceneSnap] ${finals.length} panel(s) (${style}):`, finals);
-            // THE SEED IS THE CHAT'S (0.49.0): one world, one rendering. A random seed per
-            // run re-rolled the whole chat's look on every image for no reason — the same
-            // people in the same place drew a fresh face-lottery every message. The base
-            // derives from the chat id (each chat is its own universe; branches inherit the
-            // id and therefore the look); regenerating the SAME message advances a
-            // per-message roll counter, so a reroll is still a reroll. Random only when
-            // there is no chat id to derive from. One seed still rules the whole strip;
-            // seedForPanel keeps decorrelating unwelded who-sets.
+            // THE SEED IS DETERMINISTIC, NOT SHARED (0.50.1, corrects 0.49.0): the base
+            // derives from chat id + MESSAGE id + roll. 0.49.0 keyed it to the chat alone,
+            // which handed every message's first generation ONE seed — similar beats pulled
+            // visibly similar compositions, and an ugly base seed haunted every new message
+            // with per-message rerolls as the only escape. Cross-message consistency is the
+            // cast weld's and the reference images' job, never the seed's; the seed's job
+            // is reproducibility: a failed panel retries ITS seed, a regenerate advances
+            // the roll, the same (chat, message, roll) always redraws the same image.
+            // Within a strip nothing changes — one runSeed rules the run and seedForPanel
+            // keeps decorrelating unwelded who-sets. Random only without a chat id.
             const rolls = Number(message.extra?.scenesnap_rolls) || 0;
             const runSeed = chatId0 != null
-                ? hashSeed(`${chatId0}#${rolls}`)
+                ? hashSeed(`${chatId0}#${mesId}#${rolls}`)
                 : Math.floor(Math.random() * 2 ** 31);
             debugPrompts.push(chatId0 != null ? `SEED — ${runSeed} (chat-derived, roll ${rolls})` : `SEED — ${runSeed} (random: no chat id)`);
             // Identity-by-image (0.48.0): per-panel reference assembly. The chat anchor is
