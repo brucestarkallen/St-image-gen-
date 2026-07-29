@@ -1543,5 +1543,42 @@ Rukia lay under him with her chest heaving, flushed pink from her face to her br
     })());
 }
 
+// ---------------------------------------------------------------- origin pin + per-chat persistence (0.47.2)
+{
+    check('src: the run is pinned to its origin chat AND message object, verified before attach',
+        src.includes('const chatId0 = ctx.chatId ?? null;')
+        && src.includes('(ctx2.chatId ?? null) !== chatId0 || ctx2.chat[mesId] !== message'));
+    check('src: a chat switch mid-generation discards the image instead of corrupting the wrong chat',
+        src.includes('discarded rather than attached to the wrong chat'));
+    check('src: per-chat cast selection is persisted to chat metadata immediately',
+        src.includes("typeof ctx.saveMetadataDebounced === 'function'")
+        && src.includes("typeof ctx.saveChat === 'function'"));
+}
+
+// ---------------------------------------------------------------- same-origin downloads + resilient strips (0.47.2)
+{
+    check('src: third-party image downloads ride the same-origin proxy, percent-encoded (invariants 6+8)',
+        src.includes('`/proxy/${encodeURIComponent(u)}`'));
+    check('src: a failed panel gets ONE retry, then drops out instead of killing the strip',
+        src.includes('one retry:') && src.includes('failed twice — dropped from the strip')
+        && src.includes('panelImages = panelImages.filter(Boolean);'));
+    check('src: a surviving-panels strip ships with a warning naming the dropout',
+        src.includes('shipping the ${panelImages.length} surviving panel(s)'));
+    check('src: only a TOTAL panel failure throws — with the backend error, not a generic one',
+        src.includes('throw (lastPanelError || new Error('));
+}
+
+// ---------------------------------------------------------------- socket + re-entrancy guards (0.47.2)
+{
+    check('src: runware socket close fails fast instead of hanging to the timeout',
+        src.includes('ws.onclose = () => finish(reject,'));
+    check('src: in-flight dedupe is per chat AND message (no cross-chat false positive)',
+        src.includes('const flightKey = `${chatId0 ?? \'chat\'}:${mesId}`;')
+        && src.includes('inFlight.has(flightKey)') && src.includes('inFlight.delete(flightKey)'));
+    check('src: autoBuildCast has a real re-entrancy mutex, released in finally',
+        src.includes('let castBuildRunning = false;')
+        && src.includes('if (castBuildRunning)') && src.includes('castBuildRunning = false;\n        $btn.removeClass'));
+}
+
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);
