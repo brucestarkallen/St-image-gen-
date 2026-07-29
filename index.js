@@ -12,7 +12,7 @@ import { getBase64Async, saveBase64AsFile } from '../../../utils.js';
 import { callGenericPopup, POPUP_TYPE } from '../../../popup.js';
 
 const MODULE = 'sceneSnap';
-const VERSION = '0.47.1';
+const VERSION = '0.47.2';
 
 const defaultSettings = Object.freeze({
     enabled: true,
@@ -257,7 +257,12 @@ function notifyError(err) {
 }
 
 async function urlToBase64(url) {
-    const res = await fetch(url);
+    // Invariants 6+8: third-party URLs ride ST's same-origin CORS proxy, percent-encoded.
+    // A direct cross-origin fetch can die at browser level, and explainError would then
+    // misdiagnose it as SillyTavern itself being down — every HTTP call stays same-origin.
+    const u = String(url);
+    const fetchUrl = /^https?:\/\//i.test(u) ? `/proxy/${encodeURIComponent(u)}` : u;
+    const res = await fetch(fetchUrl);
     if (!res.ok) throw new Error(`Failed to download generated image (${res.status})`);
     const blob = await res.blob();
     const dataUrl = await getBase64Async(blob);
@@ -292,8 +297,16 @@ function getActiveCastName() {
 function setActiveCastName(name) {
     settings.activeCast = name;
     try {
-        const md = getContext().chatMetadata;
-        if (md) md.scenesnap_cast = name;
+        const ctx = getContext();
+        const md = ctx.chatMetadata;
+        if (md) {
+            md.scenesnap_cast = name;
+            // saveSettingsDebounced never writes chat metadata — without an explicit
+            // metadata save the per-chat binding survived only until the next
+            // unrelated saveChat, and a reload could resurrect the wrong cast.
+            if (typeof ctx.saveMetadataDebounced === 'function') ctx.saveMetadataDebounced();
+            else if (typeof ctx.saveChat === 'function') ctx.saveChat();
+        }
     } catch { /* noop */ }
     saveSettingsDebounced();
 }
@@ -1419,9 +1432,10 @@ function readPresencePatterns() {
 
 // World-state + preceding-context grounding for the prompt builder. Sources, in
 // authority order: presence markers from the newest message that prints them
-// (walk-back window 6), Summaryception's per-character ledger state, and short
-// tails of the two preceding turns for pronoun/place resolution. Every source
-// degrades to nothing without error — grounding is fuel, never a dependency.
+// (walk-back 6: the target message plus up to 6 messages back, 7 scanned), and
+// Summaryception's per-character ledger state, and short tails of the two
+// preceding turns for pronoun/place resolution. Every source degrades to
+// nothing without error — grounding is fuel, never a dependency.
 function collectSceneGrounding(mesId) {
     const ctx = getContext();
     const chat = ctx.chat || [];
@@ -1891,6 +1905,10 @@ async function generateRunware(positive, negative, landscape, seed) {
 
         try { ws = new WebSocket('wss://ws-api.runware.ai/v1'); } catch (e) { return finish(reject, e); }
         ws.onerror = () => finish(reject, new Error('Runware WebSocket connection failed'));
+        // A silent server-side close must fail fast — without this the generation
+        // hangs until the 120s timeout for no reason. finish() is settle-guarded,
+        // so the close we trigger ourselves on success is a no-op here.
+        ws.onclose = () => finish(reject, new Error('Runware closed the connection before the image returned'));
         ws.onopen = () => ws.send(JSON.stringify([{ taskType: 'authentication', apiKey: key }]));
         ws.onmessage = (event) => {
             let msg;
@@ -2192,12 +2210,18 @@ async function illustrateMessage(mesId, { force = false } = {}) {
         if (force) toastr.warning('That message cannot be illustrated', 'SceneSnap');
         return;
     }
-    if (inFlight.has(mesId)) {
+    // Pin the run to its origin: the chat id and the message object identity. A chat
+    // switch mid-generation must never write the image into the wrong chat (checked
+    // again before attach). The in-flight guard is per chat AND message — after a
+    // chat switch, the same index in the new chat is a different generation.
+    const chatId0 = ctx.chatId ?? null;
+    const flightKey = `${chatId0 ?? 'chat'}:${mesId}`;
+    if (inFlight.has(flightKey)) {
         if (force) toastr.info('Already generating for this message', 'SceneSnap');
         return;
     }
 
-    inFlight.add(mesId);
+    inFlight.add(flightKey);
     setButtonBusy(mesId, true);
 
     try {
@@ -2282,17 +2306,41 @@ async function illustrateMessage(mesId, { force = false } = {}) {
             // One seed for the whole strip: same character rendering in every panel.
             // Panels render in PARALLEL (concurrency 2) — sequential was the slowdown.
             const runSeed = Math.floor(Math.random() * 2 ** 31);
+            // A panel that fails must not kill the strip: one retry, then the panel
+            // drops out and the survivors ship. Only a TOTAL failure errors — and it
+            // errors with the backend's own message, not a generic one. Panels that
+            // already succeeded are paid API calls; throwing them away was the bug.
+            const failedPanels = [];
+            let lastPanelError = null;
             panelImages = await mapLimit(panels, 2, async (p, i) => {
-                const result = await generateWithBackend(finals[i], negFull, panels.length > 1, seedForPanel(runSeed, (p.who || []).map(w => w.name), p.welded));
-                const fmt = result.format || panelFormat;
-                panelFormat = fmt;
-                let imageB64 = result.isUrl ? await urlToBase64(result.data) : result.data;
-                if (p.bubbles.length) {
-                    try { imageB64 = await overlayBubbles(imageB64, fmt, p.bubbles); }
-                    catch (e) { console.warn('[SceneSnap] bubble overlay failed, shipping the clean panel:', e); }
+                const produce = async () => {
+                    const result = await generateWithBackend(finals[i], negFull, panels.length > 1, seedForPanel(runSeed, (p.who || []).map(w => w.name), p.welded));
+                    const fmt = result.format || panelFormat;
+                    panelFormat = fmt;
+                    let imageB64 = result.isUrl ? await urlToBase64(result.data) : result.data;
+                    if (p.bubbles.length) {
+                        try { imageB64 = await overlayBubbles(imageB64, fmt, p.bubbles); }
+                        catch (e) { console.warn('[SceneSnap] bubble overlay failed, shipping the clean panel:', e); }
+                    }
+                    return imageB64;
+                };
+                try { return await produce(); }
+                catch (firstErr) {
+                    console.warn(`[SceneSnap] panel ${i + 1} failed — one retry:`, firstErr);
+                    try { return await produce(); }
+                    catch (secondErr) {
+                        console.warn(`[SceneSnap] panel ${i + 1} failed twice — dropped from the strip:`, secondErr);
+                        failedPanels.push(i + 1);
+                        lastPanelError = secondErr;
+                        return null;
+                    }
                 }
-                return imageB64;
             });
+            panelImages = panelImages.filter(Boolean);
+            if (!panelImages.length) throw (lastPanelError || new Error('Every panel failed to generate'));
+            if (failedPanels.length) {
+                try { toastr.warning(`Panel ${failedPanels.join(', ')} failed twice — shipping the ${panelImages.length} surviving panel(s).`, 'SceneSnap', { timeOut: 9000 }); } catch { /* noop */ }
+            }
         positive = finals.join('  \u25ba  ');
 
 
@@ -2307,6 +2355,13 @@ async function illustrateMessage(mesId, { force = false } = {}) {
         const ctx2 = getContext();
         const msg = ctx2.chat?.[mesId];
         if (!msg) throw new Error('Message no longer exists (chat changed?)');
+        // Origin-pin enforcement: if the user switched chats while the image was
+        // cooking, the message at this index belongs to ANOTHER chat — attaching
+        // here would write the image into the wrong chat and saveChat() would
+        // persist the corruption. Discard instead of corrupting; never the reverse.
+        if ((ctx2.chatId ?? null) !== chatId0 || ctx2.chat[mesId] !== message) {
+            throw new Error('The chat changed while the image was generating — the image was discarded rather than attached to the wrong chat. Press the button again to regenerate here.');
+        }
 
         const subFolder = String(ctx2.name2 || 'SceneSnap');
         const fileName = `snap_${mesId}_${Date.now()}`;
@@ -2335,7 +2390,7 @@ async function illustrateMessage(mesId, { force = false } = {}) {
         else lastDebug = { time: new Date().toLocaleTimeString(), engine: VERSION, backend: settings.backend, style: resolveStyle(), raw: '(builder did not run)', prompts: [], negative: effectiveNegative(), error: msg };
         notifyError(err);
     } finally {
-        inFlight.delete(mesId);
+        inFlight.delete(flightKey);
         setButtonBusy(mesId, false);
     }
 }
@@ -2460,6 +2515,10 @@ function mergeCastLines(existing, incoming) {
 
 const castBootstrapAttempted = new Set();
 const sheetWarned = new Set();
+// Re-entrancy guard for autoBuildCast: the CSS 'disabled' class never blocked
+// clicks, and two concurrent builds interleave mergeCastLines against the same
+// base — last write wins and the other run's characters are silently dropped.
+let castBuildRunning = false;
 
 // ------------------------------------------------------------------ cast auto-build
 
@@ -2483,6 +2542,10 @@ function collectCanonWikiAppearances() {
 }
 
 async function autoBuildCast({ silent = false, requiredNames = [] } = {}) {
+    if (castBuildRunning) {
+        if (!silent) toastr.info('Cast build already running', 'SceneSnap');
+        return false;
+    }
     const ctx = getContext();
     const memory = collectStoryMemory().slice(0, 14000);
     const excerpt = (ctx.chat || [])
@@ -2496,6 +2559,7 @@ async function autoBuildCast({ silent = false, requiredNames = [] } = {}) {
     }
 
     const $btn = $('#snapshot_cast_build');
+    castBuildRunning = true;
     $btn.addClass('disabled');
     try {
         const user = [
@@ -2531,6 +2595,7 @@ async function autoBuildCast({ silent = false, requiredNames = [] } = {}) {
         notifyError(err);
         return false;
     } finally {
+        castBuildRunning = false;
         $btn.removeClass('disabled');
     }
 }
