@@ -32,6 +32,7 @@ const FUNCS = [
     'stripScene', 'explainError', 'isStaleSession', 'stripLayoutMeta', 'appendAnchor', 'mineDressTags', 'normalizeCountTags', 'filterRankGarments', 'assembleIdentity', 'scrubState', 'seedForPanel', 'replaceNamesInSentence', 'capTagSafe', 'antiModernNegative', 'isPlaceholderTags', 'stripPlaceholderLines', 'getSize',
     'backgroundFigureTag', 'dedupeAgainstAnchor', 'neutralizeRoleUniforms', 'unifyStripLighting', 'applyUndress', 'hoistCrowdTokens', 'extractCrowdTokens', 'purgeModernRoles', 'panelLacksAnatomy', 'stripPersonalGarments', 'cleanWorldDress', 'countSceneBeats', 'dressForPanel', 'anatomyContinuity', 'scrubEchoedCounts', 'inferLyingFromPosition', 'mapLimit', 'explicitFramingGuard', 'extractSceneQuotes', 'attributeSpeaker', 'capBubbleText', 'anatomyFloor', 'openingBeatMissed',
     'pickPanelRefs', 'nanogptIsStructured', 'nanogptMaxRefs', 'structuredResolutionFor', 'buildNanogptStructuredBody', 'genderToken', 'extractNanogptImage',
+    'hashSeed',
 ];
 
 const prelude = `
@@ -1312,7 +1313,7 @@ Rukia lay under him with her chest heaving, flushed pink from her face to her br
         && src.includes('if (landscape && p.height > p.width)'));
     check('src: dialogue fills both voices by default', src.includes('Use TWO lines whenever the beat has two voices'));
     check('src: run seed feeds who-derived per-panel seeds through all three backends',
-        src.includes('const runSeed = Math.floor(Math.random() * 2 ** 31);')
+        src.includes('const runSeed = chatId0 != null')
         && src.includes('seedForPanel(runSeed, (p.who || []).map(w => w.name), p.welded)')
         && src.includes('seed: Number.isInteger(seed) ? seed : -1,')
         && src.includes('seed: Number.isInteger(seed) ? seed : undefined,')
@@ -1683,6 +1684,38 @@ Rukia lay under him with her chest heaving, flushed pink from her face to her br
     check('src: weld suppression is fed by pickPanelRefs shipped, natural style only',
         src.includes('pickPanelRefs(principals.map(w => w.name), refMap, null, null, refMeta.maxRefs).shipped')
         && src.includes("refNames: (style === 'natural' && refShipped && refShipped.length) ? new Set(refShipped) : null"));
+}
+
+// ---------------------------------------------------------------- attach target + chat seed (0.49.0)
+{
+    check('seed: deterministic — same chat id, same seed, every time',
+        S.hashSeed('chat-123#0') === S.hashSeed('chat-123#0'));
+    check('seed: different chats decorrelate', S.hashSeed('chat-123#0') !== S.hashSeed('chat-124#0'));
+    check('seed: a reroll advances the seed', S.hashSeed('chat-123#0') !== S.hashSeed('chat-123#1'));
+    check('seed: int31 backend-safe on hostile input',
+        [S.hashSeed(''), S.hashSeed(null), S.hashSeed('𝕬𝖇𝖈'.repeat(64))].every(n => Number.isInteger(n) && n >= 0 && n < 2 ** 31));
+    check('seed: threads seedForPanel unchanged — welded panels share the chat base',
+        S.seedForPanel(S.hashSeed('c#0'), ['A'], true) === S.hashSeed('c#0') % 2147483647);
+    check('src: the run seed derives from the CHAT; rolls advance it; random only without a chat id',
+        src.includes('hashSeed(`${chatId0}#${rolls}`)')
+        && src.includes('Number(message.extra?.scenesnap_rolls) || 0')
+        && !src.includes('const runSeed = Math.floor(Math.random()'));
+    check('src: the roll counter advances on SUCCESS only, on the illustrated message',
+        src.includes('message.extra.scenesnap_rolls = rolls + 1;')
+        && src.indexOf('message.extra.scenesnap_rolls = rolls + 1;') > src.indexOf('await saveBase64AsFile(base64'));
+    check('src: seed provenance is stamped (PROVENANCE FIRST)',
+        src.includes('chat-derived, roll ${rolls}'));
+    check('src: hidden attach posts a GHOST message — is_system, the exact flag /hide sets',
+        src.includes("if (settings.attachTarget === 'hidden')")
+        && src.includes('is_system: true,')
+        && src.indexOf('is_system: true,') > src.indexOf("attachTarget === 'hidden'"));
+    check('src: the ghost renders with the character face and carries ONLY the media',
+        src.includes('force_avatar: message.force_avatar,')
+        && src.includes('extra: { media: [mediaEntry], media_display: \'gallery\', media_index: 0, inline_image: true },'));
+    check('src: ghost mode appends and renders its own message, never mutating the AI reply media',
+        src.includes('ctx2.chat.push(ghost);') && src.includes('appendMediaToMessage(ghost, $ghost'));
+    check('src: inline attach stays the default — no behavior change unopted',
+        src.includes("attachTarget: 'same',"));
 }
 
 console.log(`\n${pass} passed, ${fail} failed`);

@@ -32,6 +32,8 @@ AI message rendered
 
 Generation runs after the message renders. It never delays text generation. The paintbrush icon on the message shows an hourglass while working; multiple images per message become a swipeable gallery.
 
+**Attach images to** (settings): *inline* puts the image on the illustrated message itself; *a new hidden message* posts it as its own ghosted message instead. Pick hidden if **Continue or prefill errors after an image lands on the AI's reply** — an image attached to the assistant's own message rides into the prompt as an image part of the assistant message, and backends refuse to continue from that. A ghost message (ST's own hide flag) renders in chat but is excluded from every prompt, so an image can never poison a Continue. The seed is also **chat-derived** now: the same chat renders with the same base look across every generation (branches inherit it), and regenerating a message advances a per-message roll counter so a reroll is still a reroll.
+
 ## Backends
 
 | Backend | Prompt style | Setup | Notes |
@@ -114,6 +116,12 @@ Stella: girl, long crimson hair, red eyes, large breasts, hair ribbon, school un
 - **Auto mode fired on an old message** — it only targets the newest AI message and suppresses itself for a moment after chat switches; if you see otherwise, report the console log.
 
 ## Changelog
+
+### 0.49.0 — Continue/prefill-safe attach mode; the seed is the chat's
+- **New: "Attach images to" setting.** Inline (default, unchanged) keeps the image on the illustrated message. **Hidden** posts each image as its own ghost message — `is_system`, the exact flag `/hide` sets — which renders in chat with the character's face but is excluded from every prompt ST builds. Root cause of the field error: media on the AI's own message is sent as an image part of the *assistant* message, and backends reject continuing/prefilling from an image. The ghost can never enter a prompt, so Continue can never break; deleting the ghost deletes nothing but the picture.
+- **Fixed: the seed was a per-run lottery.** `runSeed` was `Math.random()` on every generation — the same characters in the same chat re-rolled their look on every image for no reason. The base seed now derives deterministically from the **chat id** (FNV-1a): one chat, one world, one rendering; branches inherit the id and therefore the look; different chats decorrelate. Regenerating the *same* message advances a per-message roll counter (persisted, advances only on success), so rerolls still vary while a failed generation retries its own seed. Random remains only when no chat id exists. `seedForPanel` unchanged: welded panels share the chat base, unwelded who-sets keep their decorrelation backstop.
+- Seed provenance is stamped into the debug prompts (`SEED — ... chat-derived, roll N`).
+- Gate: 426 → 438 checks; seed determinism/reroll behavior-tested, seed source, ghost hide flag, and roll counter negative-tested.
 
 ### 0.48.0 — reference images: identity by image (NanoGPT, experimental, default-off)
 - **New: per-character reference images on the NanoGPT backend.** Natural-language models (Qwen/Flux-class) bind prose appearance weakly — faces drift between panels the way tag models never do. Each cast character can now carry a reference image (settings → NanoGPT → Reference images); it rides every panel that character appears in via NanoGPT's structured route, and that character's appearance prose is dropped from the prompt — text restating what the reference shows fights the reference and distorts likeness. Gender word + pose/expression/state still weld (an undress state beats the reference; counts survive).

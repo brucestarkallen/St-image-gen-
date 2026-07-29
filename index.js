@@ -12,7 +12,7 @@ import { getBase64Async, saveBase64AsFile } from '../../../utils.js';
 import { callGenericPopup, POPUP_TYPE } from '../../../popup.js';
 
 const MODULE = 'sceneSnap';
-const VERSION = '0.48.0';
+const VERSION = '0.49.0';
 
 const defaultSettings = Object.freeze({
     enabled: true,
@@ -26,6 +26,7 @@ const defaultSettings = Object.freeze({
     maxSceneChars: 6000,
     maxPanels: 1,
     dialogueBubbles: true,
+    attachTarget: 'same',    // same | hidden — hidden posts each image as its own ghost message (continue/prefill-safe)
     stripPatterns: '<details>[\\s\\S]*?</details>\n\\{[A-Z_]+\\}[\\s\\S]*?\\{/[A-Z_]+\\}\n<!--[\\s\\S]*?-->',
     forcedTags: 'masterpiece, best quality, absurdres, detailed background',
     negativePrompt: 'lowres, worst quality, bad quality, bad anatomy, bad hands, extra digits, jpeg artifacts, signature, username, logo, watermark, artist name',
@@ -970,6 +971,18 @@ function neutralizeRoleUniforms(tags, worldDress) {
     return String(tags || '').split(',').map(t => t.trim())
         .filter(t => t && !/\buniforms?\b/i.test(t))
         .join(', ');
+}
+
+// FNV-1a 32-bit, folded to a non-negative int31 — the deterministic base every backend
+// seed derives from. Same input, same seed, forever: the chat id is the world's identity.
+function hashSeed(str) {
+    let h = 0x811c9dc5;
+    const s = String(str || '');
+    for (let i = 0; i < s.length; i++) {
+        h ^= s.charCodeAt(i);
+        h = Math.imul(h, 0x01000193);
+    }
+    return h >>> 1;
 }
 
 function seedForPanel(runSeed, whoNames, identityWelded) {
@@ -2603,9 +2616,19 @@ async function illustrateMessage(mesId, { force = false } = {}) {
             panels.forEach((p, i) => p.bubbles.forEach(b => debugPrompts.push(`PANEL ${i + 1} BUBBLE — ${b.speaker || '?'}: "${b.text}"`)));
             if (refMap && refMeta) debugPrompts.push(`REFS — ${Object.keys(refMap).length} character reference(s) [${Object.keys(refMap).join(', ')}], budget ${refMeta.maxRefs}${settings.refChatAnchor ? ', chat anchor on' : ''}${settings.refRolling ? ', rolling on' : ''}`);
             console.log(`[SceneSnap] ${finals.length} panel(s) (${style}):`, finals);
-            // One seed for the whole strip: same character rendering in every panel.
-            // Panels render in PARALLEL (concurrency 2) — sequential was the slowdown.
-            const runSeed = Math.floor(Math.random() * 2 ** 31);
+            // THE SEED IS THE CHAT'S (0.49.0): one world, one rendering. A random seed per
+            // run re-rolled the whole chat's look on every image for no reason — the same
+            // people in the same place drew a fresh face-lottery every message. The base
+            // derives from the chat id (each chat is its own universe; branches inherit the
+            // id and therefore the look); regenerating the SAME message advances a
+            // per-message roll counter, so a reroll is still a reroll. Random only when
+            // there is no chat id to derive from. One seed still rules the whole strip;
+            // seedForPanel keeps decorrelating unwelded who-sets.
+            const rolls = Number(message.extra?.scenesnap_rolls) || 0;
+            const runSeed = chatId0 != null
+                ? hashSeed(`${chatId0}#${rolls}`)
+                : Math.floor(Math.random() * 2 ** 31);
+            debugPrompts.push(chatId0 != null ? `SEED — ${runSeed} (chat-derived, roll ${rolls})` : `SEED — ${runSeed} (random: no chat id)`);
             // Identity-by-image (0.48.0): per-panel reference assembly. The chat anchor is
             // CHAT-SCOPED state (chatMetadata, like the cast binding); the rolling reference
             // chains panels and therefore forces sequential generation — likeness continuity
@@ -2700,22 +2723,54 @@ async function illustrateMessage(mesId, { force = false } = {}) {
         const fileName = `snap_${mesId}_${Date.now()}`;
         const url = await saveBase64AsFile(base64, subFolder, fileName, outputFormat);
 
-        if (!msg.extra || typeof msg.extra !== 'object') msg.extra = {};
-        if (!Array.isArray(msg.extra.media)) msg.extra.media = [];
-        if (!msg.extra.media.length && !msg.extra.media_display) msg.extra.media_display = 'gallery';
-        msg.extra.inline_image = !(msg.extra.media.length && !msg.extra.inline_image);
-        msg.extra.media.push({
+        // The roll counter lives on the ILLUSTRATED message (both attach modes) and only
+        // advances on success — retrying a failure reuses the same seed (deterministic
+        // repair); regenerating a finished image is a real reroll.
+        if (!message.extra || typeof message.extra !== 'object') message.extra = {};
+        message.extra.scenesnap_rolls = rolls + 1;
+
+        const mediaEntry = {
             url,
             type: 'image',
             title: positive,
             negative,
             source: 'generated',
             scenesnap: true,
-        });
-        msg.extra.media_index = msg.extra.media.length - 1;
+        };
 
-        const $mes = $(`#chat .mes[mesid="${mesId}"]`);
-        if ($mes.length) { appendMediaToMessage(msg, $mes, 'keep'); $mes.addClass('scenesnap-media'); }
+        if (settings.attachTarget === 'hidden') {
+            // Continue/prefill safety (0.49.0): media attached to the AI's own message is
+            // sent to the model as an image part of the ASSISTANT message, and backends
+            // refuse to continue/prefill from an image — the field error. A ghost message
+            // (is_system: the exact flag /hide sets) renders in chat but is excluded from
+            // every prompt ST builds, so an image can never poison a continue. The ghost
+            // is disposable by design: deleting it deletes nothing but the picture.
+            const ghost = {
+                name: message.name || ctx2.name2 || 'SceneSnap',
+                is_user: false,
+                is_system: true,
+                send_date: Date.now(),
+                mes: '',
+                force_avatar: message.force_avatar,
+                original_avatar: message.original_avatar,
+                extra: { media: [mediaEntry], media_display: 'gallery', media_index: 0, inline_image: true },
+            };
+            ctx2.chat.push(ghost);
+            const ghostId = ctx2.chat.length - 1;
+            // Ancient getContext without addOneMessage: the ghost still persists via
+            // saveChat below and renders on the next chat load.
+            if (typeof ctx2.addOneMessage === 'function') ctx2.addOneMessage(ghost);
+            const $ghost = $(`#chat .mes[mesid="${ghostId}"]`);
+            if ($ghost.length) { appendMediaToMessage(ghost, $ghost, 'keep'); $ghost.addClass('scenesnap-media'); }
+        } else {
+            if (!Array.isArray(msg.extra.media)) msg.extra.media = [];
+            if (!msg.extra.media.length && !msg.extra.media_display) msg.extra.media_display = 'gallery';
+            msg.extra.inline_image = !(msg.extra.media.length && !msg.extra.inline_image);
+            msg.extra.media.push(mediaEntry);
+            msg.extra.media_index = msg.extra.media.length - 1;
+            const $mes = $(`#chat .mes[mesid="${mesId}"]`);
+            if ($mes.length) { appendMediaToMessage(msg, $mes, 'keep'); $mes.addClass('scenesnap-media'); }
+        }
         await ctx2.saveChat();
     } catch (err) {
         const msg = explainError(err?.message || err);
@@ -2951,6 +3006,13 @@ function settingsHtml() {
                 <label class="checkbox_label"><input id="snapshot_autocast" type="checkbox"><span>Auto-build cast when empty</span></label>
                 <small class="snapshot_hint">If the active cast sheet is empty, the first illustration in a chat builds it automatically from story memory before generating. Continues without a sheet if that fails.</small>
 
+                <label for="snapshot_attach">Attach images to</label>
+                <select id="snapshot_attach" class="text_pole">
+                    <option value="same">The illustrated message (inline)</option>
+                    <option value="hidden">A new hidden message (Continue/prefill-safe)</option>
+                </select>
+                <small class="snapshot_hint">Hidden mode posts each image as its own ghosted message (ST's hide flag) that is NEVER sent to the model — pick it if Continue or prefill errors once an image lands on the AI's reply. Inline keeps the image on the message itself.</small>
+
                 <label for="snapshot_backend">Image backend</label>
                 <select id="snapshot_backend" class="text_pole">
                     <option value="pollinations">Pollinations (free, natural-language)</option>
@@ -3159,6 +3221,7 @@ function syncUI() {
     $('#snapshot_backend').val(settings.backend);
     $('#snapshot_size').val(settings.sizePreset);
     $('#snapshot_style').val(settings.promptStyle);
+    $('#snapshot_attach').val(settings.attachTarget);
     $('#snapshot_panels').val(settings.maxPanels);
     $('#snapshot_bubbles').prop('checked', settings.dialogueBubbles);
     $('#snapshot_forced').val(settings.forcedTags);
@@ -3204,6 +3267,7 @@ function bindSettings() {
     $('#snapshot_backend').on('change', function () { settings.backend = this.value; toggleBackendBlocks(); saveSettingsDebounced(); });
     $('#snapshot_size').on('change', function () { settings.sizePreset = this.value; saveSettingsDebounced(); });
     $('#snapshot_style').on('change', function () { settings.promptStyle = this.value; saveSettingsDebounced(); });
+    $('#snapshot_attach').on('change', function () { settings.attachTarget = this.value; saveSettingsDebounced(); });
     $('#snapshot_panels').on('input', function () { settings.maxPanels = Math.min(6, Math.max(1, Number(this.value) || 1)); saveSettingsDebounced(); });
     $('#snapshot_bubbles').on('change', function () { settings.dialogueBubbles = this.checked; saveSettingsDebounced(); });
     $('#snapshot_profile').on('change', function () { settings.builderProfile = this.value; saveSettingsDebounced(); });
