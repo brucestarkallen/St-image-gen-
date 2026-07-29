@@ -37,24 +37,17 @@ Generation runs after the message renders. It never delays text generation. The 
 | Backend | Prompt style | Setup | Notes |
 |---|---|---|---|
 | **Runware** (recommended) | Danbooru tags | API key + model AIR | Runs any Civitai checkpoint (Illustrious/NoobAI family) at sub-cent cost, typically 1–3 s per image. Get the AIR from the model page sidebar on Civitai, e.g. `civitai:XXXXXX@XXXXXXX`. |
-| **NovelAI** | Danbooru tags | NovelAI key set in ST's API Connections | V4.5 Full is the strongest anime model available; Opus sub = effectively unlimited standard-size gens. Steps capped at 28 to stay in the free-generation band. |
+| **NovelAI** | Danbooru tags | NovelAI key set in ST's API Connections | V4.5 Full is the strongest anime model available; Opus sub = effectively unlimited standard-size gens. Steps default to 28 (the free-generation band) and can be raised to 50 on paid tiers. |
 | **Pollinations** | Natural language | None | Free, zero-config. Use it to test the pipeline before paying for anything. Quality/consistency below the other two. |
+| **NanoGPT** | Natural language | API key | One OpenAI-compatible key for Qwen-Image, Flux & 200+ models. Set Prompt style to Auto — Qwen reads paragraphs, not danbooru. |
+
+> API keys (Runware, NanoGPT) are stored in SillyTavern's extension settings on your server. They are included in settings exports and backups — treat those files as sensitive.
 
 Good starting checkpoints for Runware: any high-rated **Illustrious XL** or **NoobAI-XL** merge on Civitai. Community-recommended params are already the defaults (steps ~26, CFG 5, clip skip 2). Leave scheduler blank unless you know the model prefers `Euler a`.
 
-## NovelAI multi-character mode (the accuracy upgrade)
+## Multi-character accuracy (how identity is locked)
 
-This is what closes the gap between a hand-made NAI web-UI image and an automatic one. Instead of cramming every character into a single prompt (which causes trait-bleed — the wrong person gets the wrong hair/eyes), it sends **each named character in the scene as a separate NAI character panel**: a base prompt for the scene/crowd/composition, plus one appearance-only prompt per person, positioned across the frame. Exactly the structure that produces clean multi-person images in NovelAI's own UI.
-
-**Enable it:**
-1. Backend = NovelAI.
-2. Turn on **Multi-character mode**.
-3. Paste a **persistent token** (NovelAI → User Settings → Account → Get Persistent API Token — this is separate from the key SillyTavern uses).
-4. Have a **cast sheet** with the characters (auto-build fills it from story memory).
-
-When active, the builder emits a base scene prompt plus one panel per named character physically present in the final frame (max 4; extras fold into the crowd). Quality tags live only in the base; each panel is pure appearance + current action. It's single-frame only — comic sequence mode applies to the other backends. If the token or cast sheet is missing, it silently falls back to the normal single-prompt path.
-
-Check **Show last generation** to see the exact base prompt and per-character panels that were sent.
+Trait-bleed (the wrong person gets the wrong hair/eyes) is prevented structurally, not by prompt wording: the builder names **who** is in each frame, and SceneSnap welds each character's appearance block **verbatim from the cast sheet** onto that frame in code — one contiguous run per character, state welded onto its owner, counts computed by code. The builder is contractually barred from writing named characters' looks at all, so substitution, omission, and drift become mechanically impossible. (An earlier NovelAI direct-API multi-character mode was removed in 0.10.0: it never verified end-to-end on the field device. The code-welded identity regime above is its replacement and works on every backend.)
 
 ## Comic sequence mode
 
@@ -113,6 +106,17 @@ Stella: girl, long crimson hair, red eyes, large breasts, hair ribbon, school un
 - **Auto mode fired on an old message** — it only targets the newest AI message and suppresses itself for a moment after chat switches; if you see otherwise, report the console log.
 
 ## Changelog
+
+### 0.47.2 — origin-pinned attachment; resilient strips; same-origin downloads
+- **Fixed: an image could be saved into the WRONG chat.** Switching chats while a strip was generating attached the image to whatever message sat at that index in the new chat — and persisted it there. The run is now pinned to its origin chat and message object; on mismatch the image is discarded with a clear message instead of corrupting another chat.
+- **Fixed: per-chat cast selection could be forgotten.** The chat's cast binding was mutated into chat metadata but never saved to it, so a reload before the next chat save resurrected the wrong cast. It is now persisted immediately.
+- **Fixed: third-party image downloads now ride SillyTavern's same-origin proxy** (Runware / NanoGPT URL fallbacks), percent-encoded per the transport doctrine — a browser-level failure there can no longer be misreported as "SillyTavern's server didn't answer".
+- **Fixed: one failed panel no longer kills a strip.** Each panel gets one retry; a panel that still fails drops out and the surviving panels ship, with a warning naming the dropout. Only a total failure errors — with the backend's own message.
+- Runware: a silently closed socket now fails fast instead of hanging until the 120s timeout.
+- The "already generating" guard is now per chat AND message — no more false positives after a chat switch.
+- Auto-build cast has a real re-entrancy guard (the CSS class never blocked clicks; concurrent builds could drop each other's characters).
+- README corrections: removed the NovelAI multi-character section (feature removed in 0.10.0), NAI steps cap is 50 not 28, NanoGPT added to the backends table, and a note that API keys ride along in settings exports/backups.
+- Gate: 364 → 374 checks.
 
 ### 0.47.1 — seed before validate; repairs never drop people
 - **Fixed: the all-solo strip (absolute regression).** After a cast rebuild lost Jovan, the validator told the builder to drop him *before* the targeted seeder could re-add him — seeding ran AFTER validation. Now seeding runs first, so "not in the cast sheet" almost never fires.
