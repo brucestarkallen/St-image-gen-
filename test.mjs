@@ -32,7 +32,7 @@ const FUNCS = [
     'stripScene', 'explainError', 'isStaleSession', 'stripLayoutMeta', 'appendAnchor', 'mineDressTags', 'normalizeCountTags', 'filterRankGarments', 'assembleIdentity', 'scrubState', 'seedForPanel', 'replaceNamesInSentence', 'capTagSafe', 'antiModernNegative', 'isPlaceholderTags', 'stripPlaceholderLines', 'getSize',
     'backgroundFigureTag', 'dedupeAgainstAnchor', 'neutralizeRoleUniforms', 'unifyStripLighting', 'applyUndress', 'hoistCrowdTokens', 'extractCrowdTokens', 'purgeModernRoles', 'panelLacksAnatomy', 'stripPersonalGarments', 'cleanWorldDress', 'countSceneBeats', 'dressForPanel', 'anatomyContinuity', 'scrubEchoedCounts', 'inferLyingFromPosition', 'mapLimit', 'explicitFramingGuard', 'extractSceneQuotes', 'attributeSpeaker', 'capBubbleText', 'anatomyFloor', 'openingBeatMissed',
     'pickPanelRefs', 'nanogptIsStructured', 'nanogptMaxRefs', 'structuredResolutionFor', 'buildNanogptStructuredBody', 'genderToken', 'extractNanogptImage',
-    'hashSeed',
+    'hashSeed', 'deriveCastName',
 ];
 
 const prelude = `
@@ -1716,6 +1716,37 @@ Rukia lay under him with her chest heaving, flushed pink from her face to her br
         src.includes('ctx2.chat.push(ghost);') && src.includes('appendMediaToMessage(ghost, $ghost'));
     check('src: inline attach stays the default — no behavior change unopted',
         src.includes("attachTarget: 'same',"));
+}
+
+// ---------------------------------------------------------------- the cast is the chat's (0.50.0)
+{
+    const solo = { chatId: '2026-7-29@15h', characterId: 0, characters: [{ name: 'Kyoraku' }], name2: 'Kyoraku' };
+    check('cast: a solo chat derives card · chatId', S.deriveCastName(solo) === 'Kyoraku · 2026-7-29@15h');
+    check('cast: same card, DIFFERENT chats = different casts (the cross-chat leak is dead)',
+        S.deriveCastName({ ...solo, chatId: 'B' }) !== S.deriveCastName(solo));
+    check('cast: the same chat derives the same name every time (stable binding)',
+        S.deriveCastName(solo) === S.deriveCastName({ ...solo }));
+    check('cast: group chats derive from the group name',
+        S.deriveCastName({ chatId: '77', groupId: 5, groups: [{ id: 5, name: 'Gotei 13' }] }) === 'Gotei 13 · 77');
+    check('cast: card-less chats fall back to name2, then Chat',
+        S.deriveCastName({ chatId: 'x', name2: 'Renji' }) === 'Renji · x' && S.deriveCastName({ chatId: 'x' }) === 'Chat · x');
+    check('cast: no chat id = no derivation (legacy no-chat fallback only)',
+        S.deriveCastName({}) === null && S.deriveCastName(null) === null);
+    check('src: an UNBOUND chat derives its own cast BEFORE the global fallback can leak',
+        src.includes('const auto = deriveCastName(ctx);')
+        && src.indexOf('const auto = deriveCastName(ctx);') > src.indexOf('function getActiveCastName()')
+        && src.indexOf('const auto = deriveCastName(ctx);') < src.indexOf('const name = settings.activeCast;'));
+    check('src: ensureChatCast materializes the sheet slot AND persists the per-chat binding',
+        src.includes('function ensureChatCast()') && src.includes('md.scenesnap_cast !== name'));
+    check('src: illustration, seeding, sheet edits, and ref uploads all write through ensureChatCast',
+        src.includes('ensureChatCast();\n        if (settings.autoCast) {')
+        && src.includes('const cast = ensureChatCast();')
+        && src.includes('settings.casts[ensureChatCast()] = this.value;')
+        && src.includes('const castName = ensureChatCast();'));
+    check('src: deleting a cast UNBINDS the chat (it re-derives its own) instead of chaining it to Default',
+        src.includes('delete ctx.chatMetadata.scenesnap_cast;'));
+    check('src: reads stay side-effect-free — opening a chat never materializes an empty cast',
+        !src.includes('return String(settings.casts[ensureChatCast()]'));
 }
 
 console.log(`\n${pass} passed, ${fail} failed`);

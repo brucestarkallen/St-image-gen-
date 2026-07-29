@@ -12,7 +12,7 @@ import { getBase64Async, saveBase64AsFile } from '../../../utils.js';
 import { callGenericPopup, POPUP_TYPE } from '../../../popup.js';
 
 const MODULE = 'sceneSnap';
-const VERSION = '0.49.0';
+const VERSION = '0.50.0';
 
 const defaultSettings = Object.freeze({
     enabled: true,
@@ -288,18 +288,63 @@ function findLastAiMessageId() {
 
 // ------------------------------------------------------------------ casts
 
-// Casts are global; the SELECTION is per-chat (0.42.0, user requirement): each chat
-// remembers which cast it uses, restored on chat switch — no more re-picking per
-// chat, no more Story B rendered with Story A's faces. The sheet data stays global,
-// so two chats CAN share a world deliberately by picking the same cast.
+// THE CAST IS THE CHAT'S (0.50.0, replaces 0.42.0's global fallback). Sheets are
+// still stored globally BY NAME — binding several chats to one name shares a world
+// deliberately — but an UNBOUND chat now derives its OWN cast, `card · chatId`,
+// instead of inheriting whatever the global 'Default' has accumulated. The field
+// defect this kills: every chat's auto-seeded characters piled into the shared
+// Default cast, and a brand-new story opened wearing the previous story's faces.
+// A new chat starts EMPTY; auto-build seeds THIS chat's characters; the binding
+// persists in chatMetadata. The global activeCast/'Default' fallback survives only
+// for contexts with no chat open at all.
+
+// Pure derivation: the cast's identity is the card (or group) plus the chat id.
+function deriveCastName(ctx) {
+    if (!ctx || ctx.chatId == null) return null;
+    if (ctx.groupId != null) {
+        const g = (ctx.groups || []).find(x => String(x?.id) === String(ctx.groupId));
+        return `${String(g?.name || 'Group').trim()} · ${ctx.chatId}`;
+    }
+    const card = ctx.characters?.[ctx.characterId]?.name || ctx.name2 || 'Chat';
+    return `${String(card).trim()} · ${ctx.chatId}`;
+}
+
 function getActiveCastName() {
     try {
-        const n = getContext().chatMetadata?.scenesnap_cast;
-        if (n && Object.prototype.hasOwnProperty.call(settings.casts, n)) return n;
+        const ctx = getContext();
+        const md = ctx.chatMetadata;
+        if (md && typeof md === 'object') {
+            const n = ctx.chatMetadata?.scenesnap_cast;
+            if (n && Object.prototype.hasOwnProperty.call(settings.casts, n)) return n;
+            const auto = deriveCastName(ctx);
+            if (auto) return auto;
+        }
     } catch { /* noop */ }
     const name = settings.activeCast;
     if (name && Object.prototype.hasOwnProperty.call(settings.casts, name)) return name;
     return 'Default';
+}
+
+// Materialize the active cast's sheet slot and persist the per-chat binding. Every
+// WRITE path (illustration, seeding, sheet edits, ref uploads, clears) goes through
+// here; pure reads stay side-effect-free so merely opening a chat never spams the
+// cast list with empty entries.
+function ensureChatCast() {
+    const name = getActiveCastName();
+    if (!Object.prototype.hasOwnProperty.call(settings.casts, name)) {
+        settings.casts[name] = '';
+        saveSettingsDebounced();
+    }
+    try {
+        const ctx = getContext();
+        const md = ctx.chatMetadata;
+        if (md && typeof md === 'object' && md.scenesnap_cast !== name) {
+            md.scenesnap_cast = name;
+            if (typeof ctx.saveMetadataDebounced === 'function') ctx.saveMetadataDebounced();
+            else if (typeof ctx.saveChat === 'function') ctx.saveChat();
+        }
+    } catch { /* noop */ }
+    return name;
 }
 
 function setActiveCastName(name) {
@@ -2537,6 +2582,9 @@ async function illustrateMessage(mesId, { force = false } = {}) {
     setButtonBusy(mesId, true);
 
     try {
+        // THE CAST IS THE CHAT'S (0.50.0): materialize and persist this chat's own
+        // cast binding before anything reads or seeds it.
+        ensureChatCast();
         if (settings.autoCast) {
             // Every chat seeds its own NEW characters once — append-only: existing lines
             // are never touched (the builder skips them and mergeCastLines keeps them).
@@ -2969,7 +3017,7 @@ async function autoBuildCast({ silent = false, requiredNames = [] } = {}) {
             if (!silent) toastr.info('No new characters found', 'SceneSnap');
             return false;
         }
-        const cast = getActiveCastName();
+        const cast = ensureChatCast();
         settings.casts[cast] = mergeCastLines(stripPlaceholderLines(String(settings.casts[cast] || '')), cleaned);
         saveSettingsDebounced();
         $('#snapshot_cast_sheet').val(settings.casts[cast]);
@@ -3124,7 +3172,7 @@ function settingsHtml() {
 
                 <hr>
                 <label>Character cast (appearance sheets, one per line: <code>Name: tags</code>)</label>
-                <small class="snapshot_hint">Locked appearance tags per character = no more hair/eye/outfit drift between images. Casts are global; each chat remembers which cast is active — one cast per story world.</small>
+                <small class="snapshot_hint">Locked appearance tags per character = no more hair/eye/outfit drift between images. Each chat owns its cast automatically (named card · chat) and starts clean — characters never leak in from other stories. Sheets are stored by name, so binding several chats to one named cast shares a world deliberately.</small>
                 <div class="flex-container">
                     <select id="snapshot_cast_select" class="text_pole flex1"></select>
                     <div id="snapshot_cast_new" class="menu_button menu_button_icon fa-solid fa-plus" title="New cast"></div>
@@ -3163,7 +3211,9 @@ function refreshCastUI() {
     if (!$sel.length) return;
     const active = getActiveCastName();
     $sel.empty();
-    for (const name of Object.keys(settings.casts)) {
+    const names = Object.keys(settings.casts);
+    if (!names.includes(active)) names.unshift(active);
+    for (const name of names) {
         $sel.append($('<option>').val(name).text(name));
     }
     $sel.val(active);
@@ -3317,7 +3367,7 @@ function bindSettings() {
         reader.onload = async () => {
             try {
                 const normalized = await normalizeRefImage(String(reader.result));
-                const castName = getActiveCastName();
+                const castName = ensureChatCast();
                 if (!settings.castRefs || typeof settings.castRefs !== 'object') settings.castRefs = {};
                 if (!settings.castRefs[castName] || typeof settings.castRefs[castName] !== 'object') settings.castRefs[castName] = {};
                 settings.castRefs[castName][name] = normalized;
@@ -3350,7 +3400,7 @@ function bindSettings() {
         refreshRefsUI();
     });
     $('#snapshot_cast_sheet').on('input', function () {
-        settings.casts[getActiveCastName()] = this.value;
+        settings.casts[ensureChatCast()] = this.value;
         saveSettingsDebounced();
         refreshRefsUI();
     });
@@ -3367,13 +3417,23 @@ function bindSettings() {
         if (name === 'Default') { toastr.warning('The Default cast cannot be deleted', 'SceneSnap'); return; }
         if (!window.confirm(`Delete cast "${name}"?`)) return;
         delete settings.casts[name];
+        if (settings.activeCast === name) settings.activeCast = 'Default';
         saveSettingsDebounced();
-        setActiveCastName('Default');
+        // Unbind the chat rather than chaining it to the global Default — on refresh
+        // it re-derives its OWN cast, which is the whole point of per-chat casts.
+        try {
+            const ctx = getContext();
+            if (ctx.chatMetadata) {
+                delete ctx.chatMetadata.scenesnap_cast;
+                if (typeof ctx.saveMetadataDebounced === 'function') ctx.saveMetadataDebounced();
+                else if (typeof ctx.saveChat === 'function') ctx.saveChat();
+            }
+        } catch { /* noop */ }
         refreshCastUI();
     });
     $('#snapshot_cast_build').on('click', () => autoBuildCast({ silent: false }));
     $('#snapshot_cast_clear').on('click', () => {
-        const name = getActiveCastName();
+        const name = ensureChatCast();
         if (!window.confirm(`Clear cast "${name}"? It re-seeds from story memory on the next illustration.`)) return;
         settings.casts[name] = '';
         saveSettingsDebounced();

@@ -91,7 +91,7 @@ Stella: girl, long crimson hair, red eyes, large breasts, hair ribbon, school un
 
 - **Auto-build cast** reads long-term story memory first — Summaryception's canon notepad and layered summary snippets (personal forks included), plus the Author's Note — then falls back to recent chat for characters memory hasn't captured yet. Always review the result.
 - **Auto-bootstrap**: with "Auto-build cast when empty" on, the first illustration in a chat builds the sheet automatically from story memory before generating, and degrades gracefully (continues sheetless) if it fails.
-- Casts are global; each chat remembers which cast is active — so one cast per story world, shared across all its chats.
+- **Each chat owns its cast automatically** (named `card · chat`) and starts clean — a new story can never open wearing another story's characters. Sheets are stored by name, so deliberately binding several chats to one named cast (the dropdown) shares a world across them; the binding persists per chat.
 - Only characters *visible in the final frame* get pulled into a prompt.
 
 ## Settings that matter
@@ -116,6 +116,13 @@ Stella: girl, long crimson hair, red eyes, large breasts, hair ribbon, school un
 - **Auto mode fired on an old message** — it only targets the newest AI message and suppresses itself for a moment after chat switches; if you see otherwise, report the console log.
 
 ## Changelog
+
+### 0.50.0 — the cast is the chat's (kills cross-story character leakage)
+- **Fixed: new chats inherited old chats' characters.** Every chat's auto-seeded characters piled into the shared global `Default` cast, and an unbound chat fell back to it — so a brand-new story opened with the previous story's faces in its sheet, its builder context, and its world-dress mining. Root cause: `getActiveCastName()`'s global fallback. Now an unbound chat **derives its own cast** — `card · chatId` — automatically: it starts EMPTY, auto-build seeds *this* chat's characters, and the binding persists in chat metadata. Same card, different chat = different cast; the leak is structurally impossible.
+- Deliberate world-sharing still works and is the sharing mechanism: bind any chats to one named cast via the dropdown (persists per chat, as since 0.42.0). The dropdown lists the chat's derived cast even before it has content.
+- Reads are side-effect-free (opening a chat never creates empty casts); every write path — illustration, seeding, sheet edits, reference uploads, clears — materializes and binds through one function. Deleting a cast now **unbinds** its chats so they re-derive their own, instead of chaining them to `Default`.
+- **Migration note:** a chat that silently rode the global `Default` (never picked a cast) now starts clean; to restore its old sheet, pick `Default` in that chat's dropdown once — or let auto-build re-seed it from story memory.
+- Gate: 438 → 449 checks; the leak path, binding persistence, and per-chat uniqueness negative-tested.
 
 ### 0.49.0 — Continue/prefill-safe attach mode; the seed is the chat's
 - **New: "Attach images to" setting.** Inline (default, unchanged) keeps the image on the illustrated message. **Hidden** posts each image as its own ghost message — `is_system`, the exact flag `/hide` sets — which renders in chat with the character's face but is excluded from every prompt ST builds. Root cause of the field error: media on the AI's own message is sent as an image part of the *assistant* message, and backends reject continuing/prefilling from an image. The ghost can never enter a prompt, so Continue can never break; deleting the ghost deletes nothing but the picture.
